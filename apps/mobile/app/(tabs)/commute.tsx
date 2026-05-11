@@ -173,23 +173,6 @@ export default function CommuteScreen() {
     <View style={styles.screen}>
       <StatusBar barStyle="dark-content" backgroundColor="#F9F9FE" />
 
-      {/* ── Header ── */}
-      {/* <SafeAreaView style={styles.header}>
-        <View style={styles.headerInner}>
-          <View style={styles.headerLeft}>
-            <View style={styles.logoCircle}>
-              <Ionicons name="train" size={20} color="white" />
-            </View>
-            <Text style={styles.logoText}>CommuteFlow</Text>
-          </View>
-          <Ionicons
-            name="notifications-outline"
-            size={22}
-            color={theme.colors.primary}
-          />
-        </View>
-      </SafeAreaView> */}
-
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}

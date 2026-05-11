@@ -1,7 +1,7 @@
 import { Tabs } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { theme } from "@/styles/theme";
 // import { SafeAreaView } from "react-native-safe-area-context";
@@ -131,8 +131,8 @@ const styles = StyleSheet.create({
     borderBottomColor: theme.colors.neutral,
   },
   logoCircle: {
-    width: 40,
-    height: 40,
+    width: 30,
+    height: 30,
     borderRadius: 20,
     backgroundColor: "#0070EB",
     justifyContent: "center",
@@ -144,7 +144,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   appName: {
-    fontSize: 28,
+    fontSize: theme.fontSize.title,
     fontWeight: "800",
     color: theme.colors.primary,
   },
