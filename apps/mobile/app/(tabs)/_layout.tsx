@@ -1,33 +1,53 @@
-import { Tabs } from 'expo-router';
-import React from 'react';
+import { Tabs } from "expo-router";
+import Ionicons from "@expo/vector-icons/Ionicons";
+import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 
-import { HapticTab } from '@/components/haptic-tab';
-import { IconSymbol } from '@/components/ui/icon-symbol';
-import { Colors } from '@/constants/theme';
-import { useColorScheme } from '@/hooks/use-color-scheme';
-
-export default function TabLayout() {
-  const colorScheme = useColorScheme();
-
+export default function RootLayout() {
   return (
-    <Tabs
-      screenOptions={{
-        tabBarActiveTintColor: Colors[colorScheme ?? 'light'].tint,
-        headerShown: false,
-        tabBarButton: HapticTab,
-      }}>
+    <Tabs>
       <Tabs.Screen
-        name="index"
+        name="map"
         options={{
-          title: 'Home',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="house.fill" color={color} />,
+          title: "Map",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name="map-outline" size={size} color={color} />
+          ),
         }}
       />
       <Tabs.Screen
-        name="explore"
+        name="routes"
         options={{
-          title: 'Explore',
-          tabBarIcon: ({ color }) => <IconSymbol size={28} name="paperplane.fill" color={color} />,
+          title: "Routes",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name="bus-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="saved"
+        options={{
+          title: "Saved",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name="bookmark-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="report"
+        options={{
+          title: "Report",
+          tabBarIcon: ({ color, size, focused }) => (
+            <Ionicons name="warning-outline" size={size} color={color} />
+          ),
+        }}
+      />
+      <Tabs.Screen
+        name="commute"
+        options={{
+          title: "Commute",
+          tabBarIcon: ({ color, size, focused }) => (
+            <MaterialIcons name="route" size={size} color={color} />
+          ),
         }}
       />
     </Tabs>
