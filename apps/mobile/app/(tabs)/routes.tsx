@@ -167,36 +167,29 @@ export default function RouteScreen() {
   }, [origin?.lat, origin?.lng, destination?.placeId]);
 
   // ── Polylines ─────────────────────────────────────────────────────────────────
+  // The API does not return step-level polylines — only the route-level polyline
+  // is guaranteed. Each route is rendered as a single line; the selected route
+  // is thicker and uses the first transit line's color (or a palette fallback).
 
-  // Per-step polylines for selected route (colored by travel mode)
-  const stepPolylines = useMemo(() => {
-    if (!selectedRoute) return [];
-    return selectedRoute.legs.flatMap((leg) =>
-      leg.steps
-        .filter((s) => s.polyline?.encodedPolyline)
-        .map((step) => ({
-          coords: decodePolyline(step.polyline!.encodedPolyline),
-          color:
-            step.travelMode === "TRANSIT"
-              ? normalizeColor(step.transitDetails?.transitLine?.color)
-              : "#9E9E9E",
-          isDash: step.travelMode === "WALK",
-          width: step.travelMode === "WALK" ? 3 : 5,
-        })),
-    );
-  }, [selectedRoute]);
+  const routePolylines = useMemo(() => {
+    return routes.map((r, i) => {
+      const isSelected = r === selectedRoute;
+      // Use first transit step's color for the selected route if available
+      const transitStep = r.legs
+        .flatMap((l) => l.steps)
+        .find((s) => s.travelMode === "TRANSIT");
+      const lineColor = transitStep?.transitDetails?.transitLine?.color
+        ? normalizeColor(transitStep.transitDetails.transitLine.color)
+        : ROUTE_PALETTE[i % ROUTE_PALETTE.length];
 
-  // Full polylines for non-selected routes (muted)
-  const otherPolylines = useMemo(
-    () =>
-      routes
-        .filter((r) => r !== selectedRoute)
-        .map((r, i) => ({
-          coords: decodePolyline(r.polyline.encodedPolyline),
-          color: ROUTE_PALETTE[(i + 1) % ROUTE_PALETTE.length],
-        })),
-    [routes, selectedRoute],
-  );
+      return {
+        coords: decodePolyline(r.polyline.encodedPolyline),
+        color: isSelected ? lineColor : "#C1C6D7",
+        width: isSelected ? 5 : 3,
+        isDash: !isSelected,
+      };
+    });
+  }, [routes, selectedRoute]);
 
   // ── Filter ────────────────────────────────────────────────────────────────────
   const filteredRoutes = useMemo(() => {
@@ -328,25 +321,14 @@ export default function RouteScreen() {
           longitudeDelta: 0.1,
         }}
       >
-        {/* Unselected route polylines (muted/dashed) */}
-        {otherPolylines.map((p, i) => (
+        {/* All route polylines — selected is thick+colored, others are muted/dashed */}
+        {routePolylines.map((p, i) => (
           <Polyline
-            key={`other-${i}`}
+            key={`route-${i}`}
             coordinates={p.coords}
-            strokeColor="#C1C6D7"
-            strokeWidth={3}
-            lineDashPattern={[6, 4]}
-          />
-        ))}
-
-        {/* Selected route — per-step, colored by mode */}
-        {stepPolylines.map((sp, i) => (
-          <Polyline
-            key={`step-${i}`}
-            coordinates={sp.coords}
-            strokeColor={sp.color}
-            strokeWidth={sp.width}
-            lineDashPattern={sp.isDash ? [6, 4] : undefined}
+            strokeColor={p.color}
+            strokeWidth={p.width}
+            lineDashPattern={p.isDash ? [6, 4] : undefined}
           />
         ))}
 

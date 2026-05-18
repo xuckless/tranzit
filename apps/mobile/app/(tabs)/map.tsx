@@ -25,7 +25,7 @@ import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { theme } from "@/styles/theme";
 import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
-import type { PlaceResult } from "@/types/places";
+import type { PlaceDetails } from "@/types/places";
 import Svg, {
   Path,
   Circle,
@@ -177,7 +177,7 @@ export default function MapScreen() {
   // True while SearchSheet has an active query — hides Quick Access / Nearby Stops
   const [isSearchActive, setIsSearchActive] = useState(false);
   const [placeDetails, setPlaceDetails] = useState<{
-    place: PlaceResult;
+    place: PlaceDetails;
     isFetching: boolean;
   } | null>(null);
 
@@ -649,9 +649,25 @@ export default function MapScreen() {
                 {placeDetails.isFetching ? (
                   <ActivityIndicator size="small" color={theme.colors.primary} />
                 ) : (
-                  <Text style={styles.placeAddress} numberOfLines={1}>
-                    {placeDetails.place.formattedAddress || "Calgary, AB"}
-                  </Text>
+                  <>
+                    <Text style={styles.placeAddress} numberOfLines={1}>
+                      {placeDetails.place.formattedAddress || "Calgary, AB"}
+                    </Text>
+                    {placeDetails.place.rating != null && (
+                      <Text style={styles.placeRating}>
+                        {"★ "}
+                        {placeDetails.place.rating.toFixed(1)}
+                        {placeDetails.place.userRatingCount != null
+                          ? ` (${placeDetails.place.userRatingCount.toLocaleString()})`
+                          : ""}
+                        {placeDetails.place.regularOpeningHours?.openNow != null
+                          ? placeDetails.place.regularOpeningHours.openNow
+                            ? "  ·  Open"
+                            : "  ·  Closed"
+                          : ""}
+                      </Text>
+                    )}
+                  </>
                 )}
               </View>
             </View>
@@ -1082,6 +1098,11 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.caption,
     fontWeight: "500",
     color: theme.colors.text,
+  },
+  placeRating: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#775A00",
   },
   placeActions: {
     flexDirection: "row",

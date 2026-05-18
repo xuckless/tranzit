@@ -1,5 +1,6 @@
 import type {
   PlaceResult,
+  PlaceDetails,
   PlacesSearchResponse,
   RouteResponse,
   RouteRequest,
@@ -31,7 +32,7 @@ export const TranzitApiService = {
   async getPlaceDetails(
     placeId: string,
     signal?: AbortSignal,
-  ): Promise<PlaceResult> {
+  ): Promise<PlaceDetails> {
     const res = await fetch(`${BASE_URL}/details`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -39,7 +40,7 @@ export const TranzitApiService = {
       signal,
     });
     if (!res.ok) throw new Error(`Details failed: ${res.status}`);
-    return res.json() as Promise<PlaceResult>;
+    return res.json() as Promise<PlaceDetails>;
   },
 
   async getRoute(
