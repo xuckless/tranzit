@@ -11,10 +11,14 @@ import {
   Keyboard,
 } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
+import { StopMarker } from "@/components/stopViews";
+import { BusMarker } from "@/components/busViews";
 import type { SelectedDestination } from "@/types/places";
+import type { CalgaryTransitStop, VehiclePosition } from "@/types/database";
 import MapView, { Marker, Region } from "react-native-maps";
 import mapStyle from "@/assets/map-style.json";
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { supabase } from "@/lib/supabase";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
@@ -168,6 +172,70 @@ export default function MapScreen() {
 
   // True while SearchSheet has an active query — hides Quick Access / Nearby Stops
   const [isSearchActive, setIsSearchActive] = useState(false);
+
+  const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
+  const [vehicles, setVehicles] = useState<VehiclePosition[]>([]);
+
+  // Fetch static stop list once — positions never change between sessions.
+  useEffect(() => {
+    supabase
+      .from("calgary_transit_stops")
+      .select("*")
+      .ilike("status", "active")
+      .then(({ data }) => {
+        if (data) setTransitStops(data as CalgaryTransitStop[]);
+      });
+  }, []);
+
+  // Poll live vehicle positions every 30s.
+  useEffect(() => {
+    const fetchVehicles = () =>
+      supabase
+        .from("vehicle_positions")
+        .select("*")
+        .then(({ data }) => {
+          if (data) setVehicles(data as VehiclePosition[]);
+        });
+    fetchVehicles();
+    const id = setInterval(fetchVehicles, 30_000);
+    return () => clearInterval(id);
+  }, []);
+
+  // Recompute marker arrays only when source data changes — not on every render.
+  const stopMarkers = useMemo(
+    () =>
+      transitStops
+        .filter((s) => s.point != null && s.teleride_number != null)
+        .map((s) => (
+          <StopMarker
+            key={`stop-${s.teleride_number}`}
+            teleride_number={s.teleride_number!}
+            stop_name={s.stop_name ?? "Unknown Stop"}
+            point={s.point!}
+          />
+        )),
+    [transitStops]
+  );
+
+  const busMarkers = useMemo(
+    () =>
+      vehicles
+        .filter(
+          (v) => v.latitude != null && v.longitude != null && v.trip_id != null
+        )
+        .map((v) => (
+          <BusMarker
+            key={`bus-${v.vehicle_id}`}
+            vehicle_id={v.vehicle_id}
+            trip_id={v.trip_id!}
+            route_id={v.route_id ?? "—"}
+            latitude={v.latitude!}
+            longitude={v.longitude!}
+            bearing={v.bearing ?? 0}
+          />
+        )),
+    [vehicles]
+  );
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
@@ -436,6 +504,12 @@ export default function MapScreen() {
             pinColor={theme.colors.primary}
           />
         )}
+
+        {/* Transit stops — static, loaded once from calgary_transit_stops */}
+        {stopMarkers}
+
+        {/* Live buses — polled every 30s from vehicle_positions */}
+        {busMarkers}
       </MapView>
 
       {/* Re-center button */}
