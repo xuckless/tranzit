@@ -11,17 +11,8 @@ import {
   Keyboard,
 } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
-import {
-  RoutePickerSheet,
-  StepChips,
-  formatDuration,
-  normalizeColor,
-} from "@/components/routes/RoutePickerSheet";
-import type { SelectedDestination, Route } from "@/types/places";
-import MapView, { Marker, Polyline, Region } from "react-native-maps";
-import type { LatLng } from "react-native-maps";
-import polyline from "@mapbox/polyline";
-import { TranzitApiService } from "@/services/TranzitApiService";
+import type { SelectedDestination } from "@/types/places";
+import MapView, { Marker, Region } from "react-native-maps";
 import mapStyle from "@/assets/map-style.json";
 import { useState, useEffect, useRef, useCallback } from "react";
 import * as Location from "expo-location";
@@ -42,91 +33,30 @@ const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
 const SNAP_EXPANDED = SCREEN_HEIGHT * 0.62;
 const DELTA = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
 
-// ─── Types ────────────────────────────────────────────────────────────────────
+// Hardcoded — this is a deployed service URL, not a secret.
+// Do not move to env: EXPO_PUBLIC_ vars are bundled into the binary and
+// this value never changes between environments.
+const TRANZIT_BASE_URL =
+  "https://tranzit-route-service-000000000000.us-central1.run.app";
 
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+// ─── Add to Types ──────────────────────────────────────────────────────────────
+
+interface PressedPin {
+  coordinate: Coordinate;
+  placeId: string; // session-scoped only, never persist
+  address: string;
+  isResolving: boolean;
+}
+
+// Coordinate pair shared by the user marker and destination marker
 interface Coordinate {
   latitude: number;
   longitude: number;
 }
 
-interface PressedPin {
-  coordinate: Coordinate;
-  placeId: string;
-  address: string;
-  isResolving: boolean;
-}
-
-interface PolylineSegment {
-  key: string;
-  coordinates: LatLng[];
-  mode: "WALK" | "TRANSIT";
-  color: string;
-  strokeWidth: number;
-  lineDashPattern?: number[];
-}
-
-type RoutePhase =
-  | { status: "idle" }
-  | { status: "loading" }
-  | { status: "picking"; routes: Route[] }
-  | { status: "active"; route: Route; segments: PolylineSegment[] };
-
-// ─── Route helpers ────────────────────────────────────────────────────────────
-
-function buildPolylineSegments(route: Route): PolylineSegment[] {
-  const segments: PolylineSegment[] = [];
-
-  let stepIndex = 0;
-  for (const leg of route.legs) {
-    for (const step of leg.steps) {
-      const encoded = step.polyline?.encodedPolyline;
-      if (encoded) {
-        const coordinates = polyline
-          .decode(encoded)
-          .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
-
-        if (step.travelMode === "WALK") {
-          segments.push({
-            key: `walk-${stepIndex}`,
-            coordinates,
-            mode: "WALK",
-            color: "#9E9E9E",
-            strokeWidth: 3,
-            lineDashPattern: [2, 6],
-          });
-        } else {
-          const rawColor = step.transitDetails?.transitLine?.color;
-          segments.push({
-            key: `transit-${stepIndex}`,
-            coordinates,
-            mode: "TRANSIT",
-            color: normalizeColor(rawColor),
-            strokeWidth: 5,
-          });
-        }
-      }
-      stepIndex++;
-    }
-  }
-
-  // Fallback: no step-level polylines — render the whole route as one line
-  if (segments.length === 0) {
-    const coordinates = polyline
-      .decode(route.polyline.encodedPolyline)
-      .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
-    segments.push({
-      key: "route-fallback",
-      coordinates,
-      mode: "TRANSIT",
-      color: theme.colors.primary,
-      strokeWidth: 5,
-    });
-  }
-
-  return segments;
-}
-
-// ─── Data ─────────────────────────────────────────────────────────────────────
+// ─── Data ──────────────────────────────────────────────────────────────────────
 
 const QUICK_ACCESS = [
   { id: "home", label: "Home", icon: "home", color: theme.colors.primary },
@@ -176,7 +106,7 @@ const STOP_COLOR: Record<string, string> = {
   bus: "#E0A000",
 };
 
-// ─── Direction Marker ─────────────────────────────────────────────────────────
+// ─── Direction Marker ──────────────────────────────────────────────────────────
 
 function DirectionMarker({ heading }: { heading: number }) {
   const SIZE = 80,
@@ -218,85 +148,7 @@ function DirectionMarker({ heading }: { heading: number }) {
   );
 }
 
-// ─── Active Route Banner ──────────────────────────────────────────────────────
-
-function ActiveRouteBanner({
-  route,
-  onChangeRoute,
-  onClearRoute,
-}: {
-  route: Route;
-  onChangeRoute: () => void;
-  onClearRoute: () => void;
-}) {
-  const allSteps = route.legs.flatMap((l) => l.steps);
-
-  return (
-    <View style={activeBannerStyles.container}>
-      <View style={activeBannerStyles.left}>
-        <Text style={activeBannerStyles.duration}>
-          {formatDuration(route.duration)}
-        </Text>
-        <StepChips steps={allSteps} />
-      </View>
-      <View style={activeBannerStyles.actions}>
-        <TouchableOpacity
-          style={activeBannerStyles.changeBtn}
-          onPress={onChangeRoute}
-          activeOpacity={0.8}
-        >
-          <Text style={activeBannerStyles.changeBtnText}>Change</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          onPress={onClearRoute}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        >
-          <Ionicons name="close-circle" size={22} color={theme.colors.text} />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-const activeBannerStyles = StyleSheet.create({
-  container: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginHorizontal: theme.spacing.screen,
-    marginBottom: 12,
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: theme.colors.primary + "0D",
-    borderWidth: 1.5,
-    borderColor: theme.colors.primary + "30",
-  },
-  left: { flex: 1, gap: 6 },
-  duration: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: theme.colors.primary,
-  },
-  actions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flexShrink: 0,
-  },
-  changeBtn: {
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 10,
-  },
-  changeBtnText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "white",
-  },
-});
-
-// ─── Screen ───────────────────────────────────────────────────────────────────
+// ─── Screen ────────────────────────────────────────────────────────────────────
 
 export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
@@ -313,15 +165,14 @@ export default function MapScreen() {
   const [hasPermission, setHasPermission] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [isExpanded, setIsExpanded] = useState(false);
+
+  // True while SearchSheet has an active query — hides Quick Access / Nearby Stops
   const [isSearchActive, setIsSearchActive] = useState(false);
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
 
-  const [routePhase, setRoutePhase] = useState<RoutePhase>({ status: "idle" });
-  const routeAbortRef = useRef<AbortController | null>(null);
-
-  // ── Heading ───────────────────────────────────────────────────────────────────
+  // ── Heading ──────────────────────────────────────────────────────────────────
   const smoothHeading = (raw: number) => {
     let d = raw - headingRef.current;
     if (d > 180) d -= 360;
@@ -330,7 +181,7 @@ export default function MapScreen() {
     setHeading(headingRef.current);
   };
 
-  // ── Sheet snap ────────────────────────────────────────────────────────────────
+  // ── Sheet snap ───────────────────────────────────────────────────────────────
   const snapTo = useCallback(
     (target: number) => {
       lastSnap.current = target;
@@ -345,7 +196,7 @@ export default function MapScreen() {
     [sheetAnim],
   );
 
-  // ── Pan responder ─────────────────────────────────────────────────────────────
+  // ── Pan responder ────────────────────────────────────────────────────────────
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -365,98 +216,37 @@ export default function MapScreen() {
     }),
   ).current;
 
-  // ── Route fetching ────────────────────────────────────────────────────────────
-  const fetchRoute = useCallback(
-    async (placeId: string, origin: Coordinate) => {
-      routeAbortRef.current?.abort();
-      const controller = new AbortController();
-      routeAbortRef.current = controller;
-      setRoutePhase({ status: "loading" });
-      setPressedPin(null);
+  // ── SearchSheet callbacks ─────────────────────────────────────────────────────
 
-      try {
-        const response = await TranzitApiService.getRoute(
-          {
-            origin: { lat: origin.latitude, lng: origin.longitude },
-            destination_id: placeId,
-          },
-          controller.signal,
-        );
-
-        if (response.routes.length === 0) {
-          setRoutePhase({ status: "idle" });
-          return;
-        }
-
-        setRoutePhase({ status: "picking", routes: response.routes });
-        snapTo(SNAP_EXPANDED);
-      } catch (err: unknown) {
-        if ((err as Error).name === "AbortError") return;
-        setRoutePhase({ status: "idle" });
-      }
-    },
-    [snapTo],
-  );
-
-  // ── Route selection (Phase 1 → Phase 2) ──────────────────────────────────────
-  const handleSelectRoute = useCallback(
-    (route: Route) => {
-      const segments = buildPolylineSegments(route);
-      setRoutePhase({ status: "active", route, segments });
-      snapTo(SNAP_COLLAPSED);
-
-      const allCoords = segments.flatMap((s) => s.coordinates);
-      if (allCoords.length > 0) {
-        mapRef.current?.fitToCoordinates(allCoords, {
-          edgePadding: {
-            top: 80,
-            right: 40,
-            bottom: SNAP_COLLAPSED + 40,
-            left: 40,
-          },
-          animated: true,
-        });
-      }
-    },
-    [snapTo],
-  );
-
-  // ── Reset everything ──────────────────────────────────────────────────────────
-  const clearAll = useCallback(() => {
-    pressAbortRef.current?.abort();
-    routeAbortRef.current?.abort();
+  const handleDestinationSelected = useCallback((dest: SelectedDestination) => {
+    Keyboard.dismiss();
+    // Drop pin immediately from the coordinate already in the search response
+    setDestination(dest.coordinate);
+    // Dismiss any pressed pin — user has explicitly chosen a search result
     setPressedPin(null);
-    setDestination(null);
-    setRoutePhase({ status: "idle" });
+    pressAbortRef.current?.abort();
+
+    const destRegion: Region = { ...dest.coordinate, ...DELTA };
+    setRegion(destRegion);
+    mapRef.current?.animateToRegion(destRegion, 900);
+
+    // TODO: fire /route with dest.placeId once the route endpoint is ready.
+    // dest.placeId is the routing key — never use dest.displayText.
+    // e.g. dispatch(fetchRoute({ destinationPlaceId: dest.placeId }))
   }, []);
 
-  // ── SearchSheet callbacks ─────────────────────────────────────────────────────
-  const handleDestinationSelected = useCallback(
-    (dest: SelectedDestination) => {
-      Keyboard.dismiss();
-      setDestination(dest.coordinate);
-      pressAbortRef.current?.abort();
-      setPressedPin(null);
-
-      const destRegion: Region = { ...dest.coordinate, ...DELTA };
-      setRegion(destRegion);
-      mapRef.current?.animateToRegion(destRegion, 900);
-
-      if (userLocation) fetchRoute(dest.placeId, userLocation);
-    },
-    [userLocation, fetchRoute],
-  );
-
   const handleClear = useCallback(() => {
-    clearAll();
+    setDestination(null);
+    setPressedPin(null);
+    pressAbortRef.current?.abort();
     if (userLocation) {
       const userRegion: Region = { ...userLocation, ...DELTA };
       setRegion(userRegion);
       mapRef.current?.animateToRegion(userRegion, 600);
     }
-  }, [userLocation, clearAll]);
+  }, [userLocation]);
 
-  // ── Location ──────────────────────────────────────────────────────────────────
+  // ── Location ─────────────────────────────────────────────────────────────────
   const requestLocationPermission = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
@@ -490,20 +280,18 @@ export default function MapScreen() {
     }
   };
 
-  // ── Map press (dropped pin) ───────────────────────────────────────────────────
   const handleMapPress = useCallback(
     async (coord: Coordinate) => {
+      // Cancel any in-flight reverse geocode from a prior press
       pressAbortRef.current?.abort();
       const controller = new AbortController();
       pressAbortRef.current = controller;
 
+      // Dismiss keyboard and collapse any active search
       Keyboard.dismiss();
       setIsSearchActive(false);
 
-      // Clear any active route — user is starting a new destination flow
-      routeAbortRef.current?.abort();
-      setRoutePhase({ status: "idle" });
-
+      // 1. Drop pin + open sheet immediately — no network wait
       setDestination(coord);
       setPressedPin({
         coordinate: coord,
@@ -512,33 +300,48 @@ export default function MapScreen() {
         isResolving: true,
       });
 
+      // Snap sheet to collapsed so the pin card is visible
       snapTo(SNAP_COLLAPSED);
+
+      // 2. Smoothly center on the pressed point
       mapRef.current?.animateCamera(
         { center: coord, zoom: 15 },
         { duration: 500 },
       );
 
+      // 3. Reverse geocode via /search — use coordinates as the query string
       try {
         const query = `${coord.latitude.toFixed(5)},${coord.longitude.toFixed(5)}`;
-        const places = await TranzitApiService.searchPlaces(
-          query,
-          coord,
-          controller.signal,
+        const res = await fetch(
+          `${TRANZIT_BASE_URL}/search?q=${encodeURIComponent(query)}&lat=${coord.latitude}&lng=${coord.longitude}`,
+          { signal: controller.signal },
         );
-        const place = places[0];
-        if (place) {
-          setPressedPin({
-            coordinate: coord,
-            placeId: place.id,
-            address: place.displayName.text,
-            isResolving: false,
-          });
-          return;
+
+        if (res.ok) {
+          const json: {
+            places: Array<{
+              id: string;
+              displayName: { text: string };
+              location: { latitude: number; longitude: number };
+            }>;
+          } = await res.json();
+
+          const place = json.places?.[0];
+          if (place) {
+            setPressedPin({
+              coordinate: coord,
+              placeId: place.id, // session-scoped — cleared on dismiss
+              address: place.displayName.text,
+              isResolving: false,
+            });
+            return;
+          }
         }
       } catch (err: unknown) {
         if ((err as Error).name === "AbortError") return;
       }
 
+      // Fallback: raw coordinates if search returned nothing
       setPressedPin((prev) => (prev ? { ...prev, isResolving: false } : null));
     },
     [snapTo],
@@ -548,11 +351,8 @@ export default function MapScreen() {
     pressAbortRef.current?.abort();
     setPressedPin(null);
     setDestination(null);
-    setRoutePhase({ status: "idle" });
-    routeAbortRef.current?.abort();
   }, []);
 
-  // ── Location subscription ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!hasPermission) return;
     let posSub: Location.LocationSubscription;
@@ -565,6 +365,8 @@ export default function MapScreen() {
           timeInterval: 1000,
         },
         ({ coords }) => {
+          // Always update the user dot — never the camera region,
+          // which may be pointed at a destination.
           setUserLocation({
             latitude: coords.latitude,
             longitude: coords.longitude,
@@ -591,24 +393,11 @@ export default function MapScreen() {
     if (hasPermission) fetchCurrentLocation();
   }, [hasPermission]);
 
-  // ── Derived flags ─────────────────────────────────────────────────────────────
-  const isRouteActive = routePhase.status !== "idle";
-  const sheetHint =
-    routePhase.status === "loading"
-      ? "Finding routes…"
-      : routePhase.status === "picking"
-        ? "Choose a route"
-        : routePhase.status === "active"
-          ? "Route active"
-          : isExpanded
-            ? "Nearby Stops"
-            : "Explore";
-
-  // ─── Render ───────────────────────────────────────────────────────────────────
+  // ─── Render ──────────────────────────────────────────────────────────────────
 
   return (
     <View style={styles.container}>
-      {/* ── Map ── */}
+      {/* Map */}
       <MapView
         ref={mapRef}
         customMapStyle={mapStyle}
@@ -616,6 +405,7 @@ export default function MapScreen() {
         showsUserLocation={false}
         showsCompass={true}
         onPress={(e) => {
+          // Only fire if search isn't active (would close keyboard instead)
           if (!isSearchActive) handleMapPress(e.nativeEvent.coordinate);
         }}
         onLongPress={(e) => handleMapPress(e.nativeEvent.coordinate)}
@@ -625,7 +415,7 @@ export default function MapScreen() {
           ...DELTA,
         }}
       >
-        {/* User location dot */}
+        {/* User location dot — follows userLocation, not region */}
         {userLocation && (
           <Marker
             coordinate={userLocation}
@@ -637,7 +427,7 @@ export default function MapScreen() {
           </Marker>
         )}
 
-        {/* Destination pin */}
+        {/* Destination pin — appears immediately on suggestion select */}
         {destination && (
           <Marker
             coordinate={destination}
@@ -646,22 +436,9 @@ export default function MapScreen() {
             pinColor={theme.colors.primary}
           />
         )}
-
-        {/* Per-segment polylines (walk = dotted, transit = solid + line color) */}
-        {routePhase.status === "active" &&
-          routePhase.segments.map((seg) => (
-            <Polyline
-              key={seg.key}
-              coordinates={seg.coordinates}
-              strokeColor={seg.color}
-              strokeWidth={seg.strokeWidth}
-              lineDashPattern={seg.lineDashPattern}
-              zIndex={seg.mode === "TRANSIT" ? 2 : 1}
-            />
-          ))}
       </MapView>
 
-      {/* ── Re-center button ── */}
+      {/* Re-center button */}
       <TouchableOpacity
         style={styles.recenterButton}
         onPress={fetchCurrentLocation}
@@ -675,15 +452,7 @@ export default function MapScreen() {
         )}
       </TouchableOpacity>
 
-      {/* ── Route loading badge (above the sheet) ── */}
-      {routePhase.status === "loading" && (
-        <View style={styles.routeLoadingBadge}>
-          <ActivityIndicator size="small" color={theme.colors.primary} />
-          <Text style={styles.routeLoadingText}>Finding routes…</Text>
-        </View>
-      )}
-
-      {/* ── Error banner ── */}
+      {/* Error banner */}
       {errorMsg && (
         <View style={styles.errorBanner}>
           <Ionicons name="warning-outline" size={15} color="#BA1A1A" />
@@ -696,21 +465,29 @@ export default function MapScreen() {
         {/* Drag handle */}
         <View {...panResponder.panHandlers} style={styles.handleArea}>
           <View style={styles.handle} />
-          <Text style={styles.handleHint}>{sheetHint}</Text>
+          <Text style={styles.handleHint}>
+            {isExpanded ? "Nearby Stops" : "Explore"}
+          </Text>
         </View>
-
-        {/* ── Pressed pin card (idle only) ── */}
-        {pressedPin && !isSearchActive && routePhase.status === "idle" && (
+        {/* ── Pressed pin card ── */}
+        {pressedPin && !isSearchActive && (
           <View style={styles.pinCard}>
             <View style={styles.pinCardLeft}>
               <View style={styles.pinIconBox}>
-                <Ionicons name="location" size={18} color={theme.colors.primary} />
+                <Ionicons
+                  name="location"
+                  size={18}
+                  color={theme.colors.primary}
+                />
               </View>
               <View style={styles.pinTextBlock}>
                 <Text style={styles.pinLabel}>Dropped pin</Text>
                 {pressedPin.isResolving ? (
                   <View style={styles.pinResolveRow}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.primary}
+                    />
                     <Text style={styles.pinResolving}>Resolving address…</Text>
                   </View>
                 ) : (
@@ -726,8 +503,13 @@ export default function MapScreen() {
                 activeOpacity={0.85}
                 disabled={pressedPin.isResolving || !pressedPin.placeId}
                 onPress={() => {
-                  if (!pressedPin.placeId || !userLocation) return;
-                  fetchRoute(pressedPin.placeId, userLocation);
+                  if (!pressedPin.placeId) return;
+                  // TODO: navigate to RoutePreview, passing placeId + coordinate
+                  // navigation.navigate('RoutePreview', {
+                  //   destinationPlaceId: pressedPin.placeId,
+                  //   destinationCoordinate: pressedPin.coordinate,
+                  // });
+                  console.log("Route to:", pressedPin.placeId);
                 }}
               >
                 <Ionicons name="navigate" size={15} color="white" />
@@ -737,13 +519,16 @@ export default function MapScreen() {
                 onPress={dismissPressedPin}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+                <Ionicons
+                  name="close-circle"
+                  size={22}
+                  color={theme.colors.text}
+                />
               </TouchableOpacity>
             </View>
           </View>
         )}
-
-        {/* ── Search bar (always visible) ── */}
+        {/* ── Search sheet ── */}
         <SearchSheet
           userLocation={userLocation}
           onDestinationSelected={handleDestinationSelected}
@@ -754,30 +539,8 @@ export default function MapScreen() {
           onClear={handleClear}
         />
 
-        {/* ── Phase: route picker ── */}
-        {!isSearchActive && routePhase.status === "picking" && (
-          <RoutePickerSheet
-            routes={routePhase.routes}
-            onSelectRoute={handleSelectRoute}
-          />
-        )}
-
-        {/* ── Phase: active route banner ── */}
-        {!isSearchActive && routePhase.status === "active" && (
-          <ActiveRouteBanner
-            route={routePhase.route}
-            onChangeRoute={() => {
-              if (routePhase.status === "active") {
-                setRoutePhase({ status: "picking", routes: [routePhase.route] });
-                snapTo(SNAP_EXPANDED);
-              }
-            }}
-            onClearRoute={handleClear}
-          />
-        )}
-
-        {/* ── Quick access chips (idle, no active search or route) ── */}
-        {!isSearchActive && !isRouteActive && (
+        {/* ── Quick access chips (hidden while search is active) ── */}
+        {!isSearchActive && (
           <View style={styles.sectionWrap}>
             <Text style={styles.sectionLabel}>Quick Access</Text>
             <ScrollView
@@ -821,8 +584,8 @@ export default function MapScreen() {
           </View>
         )}
 
-        {/* ── Nearby stops (expanded, idle only) ── */}
-        {isExpanded && !isSearchActive && !isRouteActive && (
+        {/* ── Nearby stops (expanded only, no active search) ── */}
+        {isExpanded && !isSearchActive && (
           <View style={styles.nearbyWrap}>
             <View style={styles.nearbyHeader}>
               <View style={styles.nearbyTitleRow}>
@@ -875,10 +638,7 @@ export default function MapScreen() {
                     ]}
                   >
                     <Text
-                      style={[
-                        styles.etaText,
-                        { color: STOP_COLOR[stop.type] },
-                      ]}
+                      style={[styles.etaText, { color: STOP_COLOR[stop.type] }]}
                     >
                       {stop.eta}
                     </Text>
@@ -915,32 +675,6 @@ const styles = StyleSheet.create({
     shadowRadius: 8,
     elevation: 6,
   },
-
-  // ── Loading badge ──
-  routeLoadingBadge: {
-    position: "absolute",
-    top: 16,
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: "white",
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  routeLoadingText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: theme.colors.primary,
-  },
-
-  // ── Error banner ──
   errorBanner: {
     position: "absolute",
     top: 16,
@@ -1073,7 +807,6 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.caption,
     fontWeight: "700",
   },
-
   // ── Pressed pin card ──
   pinCard: {
     flexDirection: "row",
