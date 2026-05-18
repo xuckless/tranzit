@@ -1,94 +1,51 @@
+import React, {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+} from "react";
 import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
+  TextInput,
+  ActivityIndicator,
+  Keyboard,
 } from "react-native";
-import { theme } from "@/styles/theme";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
-import AntDesign from "@expo/vector-icons/AntDesign";
-import HorizontalView from "@/components/horizontalView";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-// import MaterialIcons from "@expo/vector-icons/MaterialIcons";
-import { useState } from "react";
+import AntDesign from "@expo/vector-icons/AntDesign";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import * as Location from "expo-location";
+import { theme } from "@/styles/theme";
+import { TranzitApiService } from "@/services/TranzitApiService";
+import { usePlacesSearch } from "@/hooks/usePlacesSearch";
+import { SearchResultsList } from "@/components/search/SearchResultsList";
+import {
+  RoutePickerSheet,
+  normalizeColor,
+} from "@/components/routes/RoutePickerSheet";
+import { decodePolyline } from "@/utils/decodePolyline";
+import { routeStore } from "@/lib/routeStore";
+import type { Route, SelectedDestination } from "@/types/places";
+import HorizontalView from "@/components/horizontalView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type FilterMode = "All" | "Bus" | "CTrain";
 
-interface RouteCardData {
-  id: string;
-  label: string;
-  labelBg: string;
-  labelTextColor: string;
-  borderColor: string;
-  isLive?: boolean;
-  frequency?: string;
-  duration: string;
-  stops: number;
-  arrival: string;
-  footerNote: string;
-  footerNoteBg: string;
-  footerNoteColor: string;
-  detailsColor: string;
-  durationColor: string;
-  isItalicNote?: boolean;
+interface RouteEndpoint {
+  placeId?: string;
+  lat: number;
+  lng: number;
 }
 
-// ─── Route Data ───────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 
-const ROUTES: RouteCardData[] = [
-  {
-    id: "m1",
-    label: "M1 Blue Line",
-    labelBg: theme.colors.primary,
-    labelTextColor: "#FFFFFF",
-    borderColor: theme.colors.primary,
-    frequency: "Every 4 min",
-    duration: "12 min",
-    stops: 3,
-    arrival: "14:42",
-    footerNote: "Community reported: 2 mins ago",
-    footerNoteBg: "rgba(0, 112, 235, 0.10)",
-    footerNoteColor: "#004493",
-    detailsColor: theme.colors.primary,
-    durationColor: theme.colors.primary,
-  },
-  {
-    id: "402",
-    label: "402 Rapid",
-    labelBg: theme.colors.secondary,
-    labelTextColor: theme.colors.selected,
-    borderColor: theme.colors.secondary,
-    isLive: true,
-    duration: "18 min",
-    stops: 8,
-    arrival: "14:48",
-    footerNote: '"Standing room only, bus is running hot."',
-    footerNoteBg: "rgba(254, 195, 0, 0.05)",
-    footerNoteColor: theme.colors.text,
-    detailsColor: "#775A00",
-    durationColor: "#1A1C1F",
-    isItalicNote: true,
-  },
-  {
-    id: "lr",
-    label: "LR-Green",
-    labelBg: "#D8E2FF",
-    labelTextColor: "#001A41",
-    borderColor: theme.colors.primary,
-    frequency: "Every 4 min",
-    duration: "22 min",
-    stops: 2,
-    arrival: "15:02",
-    footerNote: "Community reported: 2 mins ago",
-    footerNoteBg: "rgba(0, 112, 235, 0.10)",
-    footerNoteColor: "#004493",
-    detailsColor: theme.colors.primary,
-    durationColor: theme.colors.primary,
-  },
-];
+const ROUTE_PALETTE = ["#0058BC", "#FF5722", "#2E7D32", "#6A1B9A"];
 
 const FILTERS: { mode: FilterMode; icon: string }[] = [
   { mode: "All", icon: "list" },
@@ -96,171 +53,564 @@ const FILTERS: { mode: FilterMode; icon: string }[] = [
   { mode: "CTrain", icon: "subway" },
 ];
 
-// ─── Route Card ───────────────────────────────────────────────────────────────
-
-function RouteCard({ route }: { route: RouteCardData }) {
-  return (
-    <View style={[styles.routeCard, { borderLeftColor: route.borderColor }]}>
-      {/* Body */}
-      <View style={styles.routeCardBody}>
-        {/* Badge row */}
-        <View style={styles.routeCardBadgeRow}>
-          <View style={[styles.routeBadge, { backgroundColor: route.labelBg }]}>
-            <Text
-              style={[styles.routeBadgeText, { color: route.labelTextColor }]}
-            >
-              {route.label}
-            </Text>
-          </View>
-
-          {route.isLive ? (
-            <View style={styles.liveChip}>
-              <View style={styles.liveDot} />
-              <Text style={styles.liveText}>LIVE</Text>
-            </View>
-          ) : (
-            <View style={styles.frequencyRow}>
-              <Ionicons
-                name="time-outline"
-                size={14}
-                color={theme.colors.text}
-              />
-              <Text style={styles.frequencyText}>{route.frequency}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Duration + arrival */}
-        <View style={styles.routeCardMainRow}>
-          <Text style={[styles.routeDuration, { color: route.durationColor }]}>
-            {route.duration} · {route.stops} stops
-          </Text>
-          <View style={styles.arrivalBlock}>
-            <Text style={styles.arrivalTime}>{route.arrival}</Text>
-            <Text style={styles.arrivalLabel}>Arrival</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* Footer */}
-      <View
-        style={[
-          styles.routeCardFooter,
-          { backgroundColor: route.footerNoteBg },
-        ]}
-      >
-        <Text
-          style={[
-            styles.footerNote,
-            { color: route.footerNoteColor },
-            route.isItalicNote && { fontStyle: "italic" },
-          ]}
-          numberOfLines={1}
-        >
-          {route.footerNote}
-        </Text>
-        <TouchableOpacity style={styles.detailsButton} activeOpacity={0.7}>
-          <Text style={[styles.detailsText, { color: route.detailsColor }]}>
-            Details
-          </Text>
-          <Ionicons
-            name="chevron-forward"
-            size={14}
-            color={route.detailsColor}
-          />
-        </TouchableOpacity>
-      </View>
-    </View>
-  );
-}
-
-// ─── Walking Card ─────────────────────────────────────────────────────────────
-
-function WalkingCard() {
-  return (
-    <View style={styles.walkingCard}>
-      <View style={styles.walkingHeader}>
-        <FontAwesome5 name="walking" size={16} color={theme.colors.tertiary} />
-        <Text style={styles.walkingLabel}>Walking</Text>
-      </View>
-      <Text style={styles.walkingDuration}>28 min</Text>
-      <Text style={styles.walkingDistance}>2.1 km path</Text>
-    </View>
-  );
-}
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function RouteScreen() {
+  const router = useRouter();
+  const {
+    destinationId,
+    destinationLat,
+    destinationLng,
+    destinationName: destNameParam,
+  } = useLocalSearchParams<{
+    destinationId?: string;
+    destinationLat?: string;
+    destinationLng?: string;
+    destinationName?: string;
+  }>();
+
+  const mapRef = useRef<MapView>(null);
+  const originInputRef = useRef<TextInput>(null);
+  const destInputRef = useRef<TextInput>(null);
+  const routeAbortRef = useRef<AbortController | null>(null);
+
+  const [gpsLocation, setGpsLocation] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [origin, setOrigin] = useState<RouteEndpoint | null>(null);
+  const [destination, setDestination] = useState<RouteEndpoint | null>(null);
+  const [originLabel, setOriginLabel] = useState("Current Location");
+  const [destinationLabel, setDestinationLabel] = useState("");
+  const [focusedField, setFocusedField] = useState<
+    "origin" | "destination" | null
+  >(null);
+
+  const [routes, setRoutes] = useState<Route[]>([]);
+  const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+  const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("All");
 
+  const originSearch = usePlacesSearch(gpsLocation);
+  const destSearch = usePlacesSearch(gpsLocation);
+
+  // ── Location ─────────────────────────────────────────────────────────────────
+  useEffect(() => {
+    (async () => {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") return;
+      const { coords } = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+      const loc = { latitude: coords.latitude, longitude: coords.longitude };
+      setGpsLocation(loc);
+      setOrigin({ lat: coords.latitude, lng: coords.longitude });
+    })();
+  }, []);
+
+  // ── Init destination from navigation params ──────────────────────────────────
+  useEffect(() => {
+    if (!destinationId || !destinationLat || !destinationLng || !destNameParam)
+      return;
+    setDestination({
+      placeId: destinationId,
+      lat: parseFloat(destinationLat),
+      lng: parseFloat(destinationLng),
+    });
+    setDestinationLabel(destNameParam);
+  }, [destinationId, destinationLat, destinationLng, destNameParam]);
+
+  // ── Route fetch ───────────────────────────────────────────────────────────────
+  useEffect(() => {
+    if (!origin || !destination?.placeId) return;
+
+    routeAbortRef.current?.abort();
+    const ctrl = new AbortController();
+    routeAbortRef.current = ctrl;
+
+    setIsLoadingRoutes(true);
+    setRouteError(null);
+    setRoutes([]);
+    setSelectedRoute(null);
+
+    TranzitApiService.getRoute(
+      {
+        origin: { lat: origin.lat, lng: origin.lng },
+        destination_id: destination.placeId,
+      },
+      ctrl.signal,
+    )
+      .then((res) => {
+        setRoutes(res.routes);
+        setSelectedRoute(res.routes[0] ?? null);
+        setIsLoadingRoutes(false);
+
+        const fitCoords = [
+          { latitude: origin.lat, longitude: origin.lng },
+          { latitude: destination.lat, longitude: destination.lng },
+        ];
+        setTimeout(() => {
+          mapRef.current?.fitToCoordinates(fitCoords, {
+            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+            animated: true,
+          });
+        }, 400);
+      })
+      .catch((err: Error) => {
+        if (err.name === "AbortError") return;
+        setRouteError(err.message || "Failed to load routes");
+        setIsLoadingRoutes(false);
+      });
+
+    return () => ctrl.abort();
+  }, [origin?.lat, origin?.lng, destination?.placeId]);
+
+  // ── Polylines ─────────────────────────────────────────────────────────────────
+
+  // Per-step polylines for selected route (colored by travel mode)
+  const stepPolylines = useMemo(() => {
+    if (!selectedRoute) return [];
+    return selectedRoute.legs.flatMap((leg) =>
+      leg.steps
+        .filter((s) => s.polyline?.encodedPolyline)
+        .map((step) => ({
+          coords: decodePolyline(step.polyline!.encodedPolyline),
+          color:
+            step.travelMode === "TRANSIT"
+              ? normalizeColor(step.transitDetails?.transitLine?.color)
+              : "#9E9E9E",
+          isDash: step.travelMode === "WALK",
+          width: step.travelMode === "WALK" ? 3 : 5,
+        })),
+    );
+  }, [selectedRoute]);
+
+  // Full polylines for non-selected routes (muted)
+  const otherPolylines = useMemo(
+    () =>
+      routes
+        .filter((r) => r !== selectedRoute)
+        .map((r, i) => ({
+          coords: decodePolyline(r.polyline.encodedPolyline),
+          color: ROUTE_PALETTE[(i + 1) % ROUTE_PALETTE.length],
+        })),
+    [routes, selectedRoute],
+  );
+
+  // ── Filter ────────────────────────────────────────────────────────────────────
+  const filteredRoutes = useMemo(() => {
+    if (activeFilter === "All") return routes;
+    return routes.filter((route) => {
+      const transitSteps = route.legs
+        .flatMap((l) => l.steps)
+        .filter((s) => s.travelMode === "TRANSIT");
+      if (transitSteps.length === 0) return false;
+      return transitSteps.some((s) => {
+        const name = (s.transitDetails?.transitLine?.name ?? "").toLowerCase();
+        const ns = (
+          s.transitDetails?.transitLine?.nameShort ?? ""
+        ).toLowerCase();
+        if (activeFilter === "CTrain")
+          return (
+            name.includes("ctrain") ||
+            ns.includes("ctrain") ||
+            name.includes("lrt")
+          );
+        return (
+          !name.includes("ctrain") &&
+          !name.includes("lrt") &&
+          !ns.includes("ctrain")
+        );
+      });
+    });
+  }, [routes, activeFilter]);
+
+  // ── Search handlers ───────────────────────────────────────────────────────────
+  const handleOriginChange = useCallback(
+    (text: string) => {
+      setOriginLabel(text);
+      if (text.trim()) originSearch.search(text);
+      else originSearch.reset();
+    },
+    [originSearch],
+  );
+
+  const handleDestChange = useCallback(
+    (text: string) => {
+      setDestinationLabel(text);
+      if (text.trim()) destSearch.search(text);
+      else destSearch.reset();
+    },
+    [destSearch],
+  );
+
+  const handleSelectOrigin = useCallback(
+    (dest: SelectedDestination) => {
+      setOriginLabel(dest.displayText);
+      setOrigin({
+        placeId: dest.placeId,
+        lat: dest.coordinate.latitude,
+        lng: dest.coordinate.longitude,
+      });
+      setFocusedField(null);
+      originSearch.reset();
+      Keyboard.dismiss();
+    },
+    [originSearch],
+  );
+
+  const handleSelectDest = useCallback(
+    (dest: SelectedDestination) => {
+      setDestinationLabel(dest.displayText);
+      setDestination({
+        placeId: dest.placeId,
+        lat: dest.coordinate.latitude,
+        lng: dest.coordinate.longitude,
+      });
+      setFocusedField(null);
+      destSearch.reset();
+      Keyboard.dismiss();
+    },
+    [destSearch],
+  );
+
+  const dismissSearch = useCallback(() => {
+    setFocusedField(null);
+    originSearch.reset();
+    destSearch.reset();
+    Keyboard.dismiss();
+    if (!originLabel.trim()) setOriginLabel("Current Location");
+  }, [originSearch, destSearch, originLabel]);
+
+  const handleStart = useCallback(() => {
+    if (!selectedRoute || !destination || !origin) return;
+    routeStore.setSelectedRoute(selectedRoute);
+    routeStore.setDestination({
+      label: destinationLabel,
+      lat: destination.lat,
+      lng: destination.lng,
+    });
+    routeStore.setOrigin({
+      label: originLabel,
+      lat: origin.lat,
+      lng: origin.lng,
+    });
+    router.navigate("/(tabs)/commute" as never);
+  }, [
+    selectedRoute,
+    destination,
+    origin,
+    destinationLabel,
+    originLabel,
+    router,
+  ]);
+
+  // ── Active search state ───────────────────────────────────────────────────────
+  const activeSearch = focusedField === "origin" ? originSearch : destSearch;
+  const handleSelectActive =
+    focusedField === "origin" ? handleSelectOrigin : handleSelectDest;
+
+  // ─── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.screen}>
-      <ScrollView style={styles.container} showsVerticalScrollIndicator={false}>
-        {/* Location search panel */}
-        <View style={styles.locationControlPanel}>
-          <View style={[styles.searchBarIndicator, styles.searchBarActive]}>
-            <AntDesign name="aim" size={22} color={theme.colors.primary} />
-            <Text style={styles.searchBarText}>Current Location</Text>
+      {/* ── Map ── */}
+      <MapView
+        ref={mapRef}
+        provider={PROVIDER_GOOGLE}
+        style={styles.map}
+        showsCompass={false}
+        showsMyLocationButton={false}
+        initialRegion={{
+          latitude: 51.044,
+          longitude: -114.058,
+          latitudeDelta: 0.1,
+          longitudeDelta: 0.1,
+        }}
+      >
+        {/* Unselected route polylines (muted/dashed) */}
+        {otherPolylines.map((p, i) => (
+          <Polyline
+            key={`other-${i}`}
+            coordinates={p.coords}
+            strokeColor="#C1C6D7"
+            strokeWidth={3}
+            lineDashPattern={[6, 4]}
+          />
+        ))}
+
+        {/* Selected route — per-step, colored by mode */}
+        {stepPolylines.map((sp, i) => (
+          <Polyline
+            key={`step-${i}`}
+            coordinates={sp.coords}
+            strokeColor={sp.color}
+            strokeWidth={sp.width}
+            lineDashPattern={sp.isDash ? [6, 4] : undefined}
+          />
+        ))}
+
+        {/* Origin dot */}
+        {origin && (
+          <Marker
+            coordinate={{ latitude: origin.lat, longitude: origin.lng }}
+            anchor={{ x: 0.5, y: 0.5 }}
+            tracksViewChanges={false}
+          >
+            <View style={styles.originDot} />
+          </Marker>
+        )}
+
+        {/* Destination pin */}
+        {destination && (
+          <Marker
+            coordinate={{ latitude: destination.lat, longitude: destination.lng }}
+            anchor={{ x: 0.5, y: 1.0 }}
+            tracksViewChanges={false}
+            pinColor={theme.colors.primary}
+          />
+        )}
+      </MapView>
+
+      {/* ── Search panel ── */}
+      <View style={styles.searchPanel}>
+        <View style={styles.searchRows}>
+          {/* Origin input */}
+          <View style={styles.searchRow}>
+            <AntDesign
+              name="aim"
+              size={17}
+              color={theme.colors.primary}
+              style={styles.rowIcon}
+            />
+            <TextInput
+              ref={originInputRef}
+              style={styles.searchInput}
+              value={originLabel}
+              onChangeText={handleOriginChange}
+              onFocus={() => {
+                setFocusedField("origin");
+                if (originLabel === "Current Location") setOriginLabel("");
+              }}
+              onBlur={() => {
+                if (!originLabel.trim()) setOriginLabel("Current Location");
+              }}
+              placeholder="Origin"
+              placeholderTextColor={theme.colors.text}
+              returnKeyType="search"
+              blurOnSubmit={false}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {originLabel.length > 0 && originLabel !== "Current Location" && (
+              <TouchableOpacity
+                onPress={() => {
+                  setOriginLabel("Current Location");
+                  setOrigin(
+                    gpsLocation
+                      ? {
+                          lat: gpsLocation.latitude,
+                          lng: gpsLocation.longitude,
+                        }
+                      : null,
+                  );
+                  originSearch.reset();
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name="close-circle"
+                  size={16}
+                  color={theme.colors.text}
+                />
+              </TouchableOpacity>
+            )}
           </View>
-          <View style={styles.searchBarIndicator}>
+
+          <View style={styles.searchDivider} />
+
+          {/* Destination input */}
+          <View style={styles.searchRow}>
             <Ionicons
-              name="location-outline"
-              size={22}
+              name="location"
+              size={17}
+              color={theme.colors.tertiary}
+              style={styles.rowIcon}
+            />
+            <TextInput
+              ref={destInputRef}
+              style={styles.searchInput}
+              value={destinationLabel}
+              onChangeText={handleDestChange}
+              onFocus={() => setFocusedField("destination")}
+              placeholder="Where to?"
+              placeholderTextColor={theme.colors.text}
+              returnKeyType="search"
+              blurOnSubmit={false}
+              autoCorrect={false}
+              autoCapitalize="none"
+            />
+            {destinationLabel.length > 0 && (
+              <TouchableOpacity
+                onPress={() => {
+                  setDestinationLabel("");
+                  setDestination(null);
+                  destSearch.reset();
+                }}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              >
+                <Ionicons
+                  name="close-circle"
+                  size={16}
+                  color={theme.colors.text}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+
+        {focusedField && (
+          <TouchableOpacity
+            style={styles.cancelBtn}
+            onPress={dismissSearch}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.cancelText}>Cancel</Text>
+          </TouchableOpacity>
+        )}
+      </View>
+
+      {/* ── Content area ── */}
+      {focusedField ? (
+        // ── Search results ──
+        <View style={styles.searchResultsArea}>
+          {activeSearch.state.status === "loading" && (
+            <ActivityIndicator
+              style={{ marginTop: 24 }}
+              size="small"
               color={theme.colors.primary}
             />
-            <Text style={styles.searchBarText}>Central Station Plaza</Text>
-          </View>
+          )}
+          {activeSearch.state.status === "success" && (
+            <SearchResultsList
+              results={activeSearch.state.results}
+              onSelect={handleSelectActive}
+            />
+          )}
+          {activeSearch.state.status === "empty" && (
+            <Text style={styles.emptyText}>
+              No results for "{activeSearch.state.query}"
+            </Text>
+          )}
         </View>
+      ) : (
+        // ── Route results ──
+        <View style={styles.routeArea}>
+          {isLoadingRoutes && (
+            <View style={styles.centerState}>
+              <ActivityIndicator size="large" color={theme.colors.primary} />
+              <Text style={styles.stateText}>Finding routes…</Text>
+            </View>
+          )}
 
-        {/* Mode filter chips */}
-        <HorizontalView
-          style={{
-            marginLeft: theme.spacing.screen,
-            gap: theme.spacing.element,
-          }}
-        >
-          {FILTERS.map(({ mode, icon }) => {
-            const isActive = activeFilter === mode;
-            return (
-              <TouchableOpacity
-                key={mode}
-                style={[
-                  styles.modeFilterCard,
-                  isActive && styles.modeFilterCardActive,
-                ]}
-                onPress={() => setActiveFilter(mode)}
-                activeOpacity={0.8}
+          {!isLoadingRoutes && routeError && (
+            <View style={styles.centerState}>
+              <Ionicons
+                name="warning-outline"
+                size={36}
+                color={theme.colors.error}
+              />
+              <Text style={styles.stateText}>Could not find routes</Text>
+              <Text style={styles.stateSubText}>{routeError}</Text>
+            </View>
+          )}
+
+          {!isLoadingRoutes && !routeError && routes.length === 0 && (
+            <View style={styles.centerState}>
+              <Ionicons
+                name="navigate-outline"
+                size={36}
+                color={theme.colors.text}
+              />
+              <Text style={styles.stateText}>
+                {destination ? "No routes found" : "Set a destination to see routes"}
+              </Text>
+            </View>
+          )}
+
+          {!isLoadingRoutes && !routeError && routes.length > 0 && (
+            <>
+              {/* Filter chips */}
+              <HorizontalView
+                style={{
+                  paddingHorizontal: theme.spacing.screen,
+                  paddingVertical: theme.spacing.element,
+                  gap: theme.spacing.element,
+                }}
               >
-                <FontAwesome5
-                  name={icon as any}
-                  size={14}
-                  color={isActive ? theme.colors.selected : theme.colors.text}
-                />
-                <Text
-                  style={[
-                    styles.modeFilterText,
-                    isActive && styles.modeFilterTextActive,
-                  ]}
-                >
-                  {mode}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </HorizontalView>
+                {FILTERS.map(({ mode, icon }) => {
+                  const isActive = activeFilter === mode;
+                  return (
+                    <TouchableOpacity
+                      key={mode}
+                      style={[
+                        styles.modeChip,
+                        isActive && styles.modeChipActive,
+                      ]}
+                      onPress={() => setActiveFilter(mode)}
+                      activeOpacity={0.8}
+                    >
+                      <FontAwesome5
+                        name={icon as any}
+                        size={12}
+                        color={
+                          isActive ? theme.colors.selected : theme.colors.text
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.modeChipText,
+                          isActive && styles.modeChipTextActive,
+                        ]}
+                      >
+                        {mode}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </HorizontalView>
 
-        {/* Results */}
-        <View style={styles.routeResultPanel}>
-          <Text style={styles.title}>Recommended Routes</Text>
-
-          {ROUTES.map((route) => (
-            <RouteCard key={route.id} route={route} />
-          ))}
-
-          <WalkingCard />
+              {/* Route list using RoutePickerSheet */}
+              <View style={styles.routeListWrap}>
+                {filteredRoutes.length > 0 ? (
+                  <RoutePickerSheet
+                    routes={filteredRoutes}
+                    onSelectRoute={(r) => setSelectedRoute(r)}
+                  />
+                ) : (
+                  <Text style={[styles.emptyText, { marginTop: 16 }]}>
+                    No {activeFilter} routes available
+                  </Text>
+                )}
+              </View>
+            </>
+          )}
         </View>
-      </ScrollView>
+      )}
+
+      {/* ── Start Journey button ── */}
+      {selectedRoute && !focusedField && (
+        <View style={styles.startWrap}>
+          <TouchableOpacity
+            style={styles.startBtn}
+            onPress={handleStart}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="navigate" size={18} color="white" />
+            <Text style={styles.startBtnText}>Start Journey</Text>
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
@@ -272,244 +622,162 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: "#F9F9FE",
   },
-  container: {
-    flex: 1,
+
+  // ── Map ──
+  map: {
+    height: 220,
+  },
+  originDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: theme.colors.primary,
+    borderWidth: 3,
+    borderColor: "white",
   },
 
-  // ── Location panel ──
-  locationControlPanel: {
-    backgroundColor: theme.colors.background,
+  // ── Search panel ──
+  searchPanel: {
+    backgroundColor: "white",
+    marginHorizontal: theme.spacing.screen,
+    marginTop: -20,
     borderRadius: 20,
-    gap: theme.spacing.element,
-    margin: theme.spacing.screen,
-    paddingHorizontal: theme.spacing.screen,
-    paddingVertical: theme.spacing.screen,
-  },
-  searchBarIndicator: {
-    borderRadius: 50,
-    backgroundColor: theme.colors.muted,
+    paddingHorizontal: theme.spacing.card,
+    paddingVertical: theme.spacing.element + 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 6,
     flexDirection: "row",
     alignItems: "center",
-    gap: theme.spacing.element,
-    padding: theme.spacing.element + 4,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
+    gap: 8,
   },
-  searchBarActive: {
-    borderColor: theme.colors.primary,
-    borderWidth: 2,
+  searchRows: {
+    flex: 1,
+    gap: 2,
   },
-  searchBarText: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "500",
+  searchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  rowIcon: {
+    width: 22,
+    textAlign: "center",
+  },
+  searchInput: {
+    flex: 1,
+    fontSize: theme.fontSize.body,
+    fontWeight: "600",
     color: "#1A1C1F",
+  },
+  searchDivider: {
+    height: 1,
+    backgroundColor: theme.colors.muted,
+    marginLeft: 30,
+  },
+  cancelBtn: {
+    paddingLeft: 8,
+  },
+  cancelText: {
+    fontSize: theme.fontSize.body,
+    fontWeight: "600",
+    color: theme.colors.primary,
+  },
+
+  // ── Search results area ──
+  searchResultsArea: {
+    flex: 1,
+    paddingHorizontal: theme.spacing.screen,
+    paddingTop: theme.spacing.element,
+  },
+  emptyText: {
+    fontSize: theme.fontSize.body,
+    color: theme.colors.text,
+    textAlign: "center",
+    marginTop: 24,
+  },
+
+  // ── Route area ──
+  routeArea: {
+    flex: 1,
+    paddingTop: theme.spacing.element,
+  },
+  centerState: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+    paddingBottom: 40,
+  },
+  stateText: {
+    fontSize: theme.fontSize.subtitle,
+    fontWeight: "600",
+    color: "#1A1C1F",
+    textAlign: "center",
+  },
+  stateSubText: {
+    fontSize: theme.fontSize.caption,
+    color: theme.colors.text,
+    textAlign: "center",
+    maxWidth: 260,
   },
 
   // ── Filter chips ──
-  modeFilterCard: {
+  modeChip: {
     backgroundColor: theme.colors.background,
     borderRadius: 30,
     paddingHorizontal: theme.spacing.card,
-    paddingVertical: theme.spacing.card - 4,
+    paddingVertical: theme.spacing.element,
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
   },
-  modeFilterCardActive: {
+  modeChipActive: {
     backgroundColor: theme.colors.secondary,
   },
-  modeFilterText: {
+  modeChipText: {
     fontSize: theme.fontSize.body,
     fontWeight: "700",
     color: theme.colors.text,
   },
-  modeFilterTextActive: {
+  modeChipTextActive: {
     color: theme.colors.selected,
   },
 
-  // ── Section ──
-  routeResultPanel: {
-    margin: theme.spacing.screen,
-  },
-  title: {
-    fontSize: theme.fontSize.title,
-    fontWeight: "700",
-    marginBottom: theme.spacing.card,
-    color: "#1A1C1F",
-  },
-
-  // ── Route card ──
-  routeCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    borderLeftWidth: 6,
-    marginBottom: theme.spacing.card,
-    overflow: "hidden",
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
-  },
-  routeCardBody: {
-    padding: theme.spacing.card,
-    gap: theme.spacing.element,
-  },
-  routeCardBadgeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: theme.spacing.card,
-  },
-  routeBadge: {
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 6,
-  },
-  routeBadgeText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-  },
-  frequencyRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  frequencyText: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  liveChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  liveDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: theme.colors.primary,
-  },
-  liveText: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "700",
-    color: theme.colors.primary,
-    letterSpacing: 0.5,
-  },
-  routeCardMainRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-  },
-  routeDuration: {
-    fontSize: 22,
-    fontWeight: "800",
-  },
-  arrivalBlock: {
-    alignItems: "flex-end",
-  },
-  arrivalTime: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#1A1C1F",
-  },
-  arrivalLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  routeCardFooter: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    paddingHorizontal: theme.spacing.card,
-    paddingVertical: 10,
-  },
-  footerNote: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
+  // ── Route list ──
+  routeListWrap: {
     flex: 1,
-    marginRight: theme.spacing.element,
-  },
-  detailsButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 2,
-  },
-  detailsText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
+    paddingBottom: 80,
   },
 
-  // ── Walking card ──
-  walkingCard: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 20,
-    borderTopWidth: 6,
-    borderTopColor: theme.colors.tertiary,
-    padding: theme.spacing.card,
+  // ── Start button ──
+  startWrap: {
+    position: "absolute",
+    bottom: 16,
+    left: theme.spacing.screen,
+    right: theme.spacing.screen,
     shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.08,
-    shadowRadius: 20,
-    elevation: 4,
-    gap: 2,
-  },
-  walkingHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 4,
-  },
-  walkingLabel: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: theme.colors.tertiary,
-  },
-  walkingDuration: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: "#1A1C1F",
-  },
-  walkingDistance: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-
-  // ── Bottom nav ──
-  bottomNav: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    backgroundColor: theme.colors.muted,
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: theme.spacing.element + 2,
-    paddingBottom: theme.spacing.element + 2,
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.06,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
     shadowRadius: 12,
-    elevation: 12,
+    elevation: 8,
   },
-  navItem: {
+  startBtn: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: 18,
+    paddingVertical: 16,
+    flexDirection: "row",
+    justifyContent: "center",
     alignItems: "center",
-    paddingHorizontal: theme.spacing.element,
-    paddingVertical: 6,
-    borderRadius: 14,
-    gap: 2,
+    gap: 10,
   },
-  navItemActive: {
-    backgroundColor: theme.colors.secondary,
-  },
-  navLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  navLabelActive: {
-    color: theme.colors.selected,
+  startBtnText: {
+    fontSize: theme.fontSize.subtitle,
+    fontWeight: "800",
+    color: "white",
+    letterSpacing: 0.3,
   },
 });

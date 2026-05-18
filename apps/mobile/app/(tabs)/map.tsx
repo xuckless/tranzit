@@ -23,6 +23,9 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { theme } from "@/styles/theme";
+import { useRouter } from "expo-router";
+import { TranzitApiService } from "@/services/TranzitApiService";
+import type { PlaceResult } from "@/types/places";
 import Svg, {
   Path,
   Circle,
@@ -156,6 +159,7 @@ function DirectionMarker({ heading }: { heading: number }) {
 
 export default function MapScreen() {
   const mapRef = useRef<MapView>(null);
+  const router = useRouter();
   const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
   const lastSnap = useRef(SNAP_COLLAPSED);
   const headingRef = useRef(0);
@@ -172,6 +176,10 @@ export default function MapScreen() {
 
   // True while SearchSheet has an active query — hides Quick Access / Nearby Stops
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [placeDetails, setPlaceDetails] = useState<{
+    place: PlaceResult;
+    isFetching: boolean;
+  } | null>(null);
 
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
   const [vehicles, setVehicles] = useState<VehiclePosition[]>([]);
@@ -286,26 +294,43 @@ export default function MapScreen() {
 
   // ── SearchSheet callbacks ─────────────────────────────────────────────────────
 
-  const handleDestinationSelected = useCallback((dest: SelectedDestination) => {
-    Keyboard.dismiss();
-    // Drop pin immediately from the coordinate already in the search response
-    setDestination(dest.coordinate);
-    // Dismiss any pressed pin — user has explicitly chosen a search result
-    setPressedPin(null);
-    pressAbortRef.current?.abort();
+  const handleDestinationSelected = useCallback(
+    async (dest: SelectedDestination) => {
+      Keyboard.dismiss();
+      setDestination(dest.coordinate);
+      setPressedPin(null);
+      pressAbortRef.current?.abort();
 
-    const destRegion: Region = { ...dest.coordinate, ...DELTA };
-    setRegion(destRegion);
-    mapRef.current?.animateToRegion(destRegion, 900);
+      const destRegion: Region = { ...dest.coordinate, ...DELTA };
+      setRegion(destRegion);
+      mapRef.current?.animateToRegion(destRegion, 900);
 
-    // TODO: fire /route with dest.placeId once the route endpoint is ready.
-    // dest.placeId is the routing key — never use dest.displayText.
-    // e.g. dispatch(fetchRoute({ destinationPlaceId: dest.placeId }))
-  }, []);
+      // Show optimistic details card immediately with data from the search result
+      setPlaceDetails({
+        place: {
+          id: dest.placeId,
+          displayName: { text: dest.displayText },
+          formattedAddress: "",
+          location: dest.coordinate,
+        },
+        isFetching: true,
+      });
+
+      // Fetch full place details (address, etc.) in the background
+      try {
+        const full = await TranzitApiService.getPlaceDetails(dest.placeId);
+        setPlaceDetails({ place: full, isFetching: false });
+      } catch {
+        setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+      }
+    },
+    [],
+  );
 
   const handleClear = useCallback(() => {
     setDestination(null);
     setPressedPin(null);
+    setPlaceDetails(null);
     pressAbortRef.current?.abort();
     if (userLocation) {
       const userRegion: Region = { ...userLocation, ...DELTA };
@@ -358,6 +383,7 @@ export default function MapScreen() {
       // Dismiss keyboard and collapse any active search
       Keyboard.dismiss();
       setIsSearchActive(false);
+      setPlaceDetails(null);
 
       // 1. Drop pin + open sheet immediately — no network wait
       setDestination(coord);
@@ -582,12 +608,15 @@ export default function MapScreen() {
                 disabled={pressedPin.isResolving || !pressedPin.placeId}
                 onPress={() => {
                   if (!pressedPin.placeId) return;
-                  // TODO: navigate to RoutePreview, passing placeId + coordinate
-                  // navigation.navigate('RoutePreview', {
-                  //   destinationPlaceId: pressedPin.placeId,
-                  //   destinationCoordinate: pressedPin.coordinate,
-                  // });
-                  console.log("Route to:", pressedPin.placeId);
+                  router.navigate({
+                    pathname: "/(tabs)/routes",
+                    params: {
+                      destinationId: pressedPin.placeId,
+                      destinationLat: String(pressedPin.coordinate.latitude),
+                      destinationLng: String(pressedPin.coordinate.longitude),
+                      destinationName: pressedPin.address,
+                    },
+                  } as never);
                 }}
               >
                 <Ionicons name="navigate" size={15} color="white" />
@@ -606,6 +635,66 @@ export default function MapScreen() {
             </View>
           </View>
         )}
+        {/* ── Place details card (shown after selecting a search result) ── */}
+        {placeDetails && !isSearchActive && (
+          <View style={styles.placeCard}>
+            <View style={styles.placeCardLeft}>
+              <View style={styles.placeIconBox}>
+                <Ionicons name="location" size={18} color={theme.colors.primary} />
+              </View>
+              <View style={styles.placeTextBlock}>
+                <Text style={styles.placeName} numberOfLines={1}>
+                  {placeDetails.place.displayName.text}
+                </Text>
+                {placeDetails.isFetching ? (
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                ) : (
+                  <Text style={styles.placeAddress} numberOfLines={1}>
+                    {placeDetails.place.formattedAddress || "Calgary, AB"}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.placeActions}>
+              <TouchableOpacity
+                style={styles.placeDirectionsCta}
+                activeOpacity={0.85}
+                onPress={() => {
+                  router.navigate({
+                    pathname: "/(tabs)/routes",
+                    params: {
+                      destinationId: placeDetails.place.id,
+                      destinationLat: String(
+                        placeDetails.place.location.latitude,
+                      ),
+                      destinationLng: String(
+                        placeDetails.place.location.longitude,
+                      ),
+                      destinationName: placeDetails.place.displayName.text,
+                    },
+                  } as never);
+                }}
+              >
+                <Ionicons name="navigate" size={15} color="white" />
+                <Text style={styles.placeDirectionsText}>Directions</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => {
+                  setPlaceDetails(null);
+                  setDestination(null);
+                }}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
+                <Ionicons
+                  name="close-circle"
+                  size={22}
+                  color={theme.colors.text}
+                />
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         {/* ── Search sheet ── */}
         <SearchSheet
           userLocation={userLocation}
@@ -951,6 +1040,65 @@ const styles = StyleSheet.create({
     borderRadius: 10,
   },
   pinCtaText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "white",
+  },
+  // ── Place details card ──
+  placeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: theme.spacing.screen,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary + "08",
+    borderWidth: 1.5,
+    borderColor: theme.colors.primary + "30",
+  },
+  placeCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  placeIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: theme.colors.primary + "15",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  placeTextBlock: { flex: 1, gap: 2 },
+  placeName: {
+    fontSize: theme.fontSize.body,
+    fontWeight: "700",
+    color: "#1A1C1F",
+  },
+  placeAddress: {
+    fontSize: theme.fontSize.caption,
+    fontWeight: "500",
+    color: theme.colors.text,
+  },
+  placeActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
+  },
+  placeDirectionsCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  placeDirectionsText: {
     fontSize: 13,
     fontWeight: "700",
     color: "white",
