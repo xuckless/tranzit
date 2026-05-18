@@ -4,14 +4,13 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
-  Image,
 } from "react-native";
 import { theme } from "@/styles/theme";
 import { Ionicons } from "@expo/vector-icons";
 import AntDesign from "@expo/vector-icons/AntDesign";
 import HorizontalView from "@/components/horizontalView";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-import MaterialIcons from "@expo/vector-icons/MaterialIcons";
+// import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { useState } from "react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -96,14 +95,6 @@ const FILTERS: { mode: FilterMode; icon: string }[] = [
   { mode: "Bus", icon: "bus" },
   { mode: "CTrain", icon: "subway" },
 ];
-
-// const NAV_ITEMS: { label: string; icon: string; active?: boolean }[] = [
-//   { label: "Map", icon: "map-outline" },
-//   { label: "Routes", icon: "navigate-outline", active: true },
-//   { label: "Saved", icon: "bookmark-outline" },
-//   { label: "Report", icon: "flag-outline" },
-//   { label: "Commute", icon: "time-outline" },
-// ];
 
 // ─── Route Card ───────────────────────────────────────────────────────────────
 

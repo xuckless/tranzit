@@ -7,7 +7,7 @@ export default function ReportScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.textWrapper}>
-        <Text style={styles.title}>What's happening?</Text>
+        <Text style={styles.title}>What is happening?</Text>
         <Text style={styles.text}>
           Your real-time report helps 1,240 commuters on this line.
         </Text>

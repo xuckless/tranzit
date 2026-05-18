@@ -4,12 +4,14 @@ import {
   StyleSheet,
   TouchableOpacity,
   ActivityIndicator,
-  TextInput,
   ScrollView,
   Dimensions,
   PanResponder,
   Animated,
+  Keyboard,
 } from "react-native";
+import { SearchSheet } from "@/components/search/SearchSheet";
+import type { SelectedDestination } from "@/types/places";
 import MapView, { Marker, Region } from "react-native-maps";
 import mapStyle from "@/assets/map-style.json";
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -27,11 +29,32 @@ import Svg, {
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
-// Sheet snap heights (distance from bottom of screen)
 const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
 const SNAP_EXPANDED = SCREEN_HEIGHT * 0.62;
-
 const DELTA = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
+
+// Hardcoded — this is a deployed service URL, not a secret.
+// Do not move to env: EXPO_PUBLIC_ vars are bundled into the binary and
+// this value never changes between environments.
+const TRANZIT_BASE_URL =
+  "https://tranzit-route-service-000000000000.us-central1.run.app";
+
+// ─── Types ─────────────────────────────────────────────────────────────────────
+
+// ─── Add to Types ──────────────────────────────────────────────────────────────
+
+interface PressedPin {
+  coordinate: Coordinate;
+  placeId: string; // session-scoped only, never persist
+  address: string;
+  isResolving: boolean;
+}
+
+// Coordinate pair shared by the user marker and destination marker
+interface Coordinate {
+  latitude: number;
+  longitude: number;
+}
 
 // ─── Data ──────────────────────────────────────────────────────────────────────
 
@@ -133,15 +156,23 @@ export default function MapScreen() {
   const lastSnap = useRef(SNAP_COLLAPSED);
   const headingRef = useRef(0);
 
+  const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
   const [region, setRegion] = useState<Region | null>(null);
+  const [destination, setDestination] = useState<Coordinate | null>(null);
+
   const [heading, setHeading] = useState(0);
   const [loadingLocation, setLoadingLocation] = useState(false);
   const [hasPermission, setHasPermission] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [searchQuery, setSearchQuery] = useState("");
   const [isExpanded, setIsExpanded] = useState(false);
 
-  // ── Heading ─────────────────────────────────────────────────────────────
+  // True while SearchSheet has an active query — hides Quick Access / Nearby Stops
+  const [isSearchActive, setIsSearchActive] = useState(false);
+
+  const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
+  const pressAbortRef = useRef<AbortController | null>(null);
+
+  // ── Heading ──────────────────────────────────────────────────────────────────
   const smoothHeading = (raw: number) => {
     let d = raw - headingRef.current;
     if (d > 180) d -= 360;
@@ -150,7 +181,7 @@ export default function MapScreen() {
     setHeading(headingRef.current);
   };
 
-  // ── Sheet snapping ───────────────────────────────────────────────────────
+  // ── Sheet snap ───────────────────────────────────────────────────────────────
   const snapTo = useCallback(
     (target: number) => {
       lastSnap.current = target;
@@ -165,7 +196,7 @@ export default function MapScreen() {
     [sheetAnim],
   );
 
-  // ── Pan responder (attached only to handle) ──────────────────────────────
+  // ── Pan responder ────────────────────────────────────────────────────────────
   const panResponder = useRef(
     PanResponder.create({
       onStartShouldSetPanResponder: () => true,
@@ -185,7 +216,37 @@ export default function MapScreen() {
     }),
   ).current;
 
-  // ── Location ────────────────────────────────────────────────────────────
+  // ── SearchSheet callbacks ─────────────────────────────────────────────────────
+
+  const handleDestinationSelected = useCallback((dest: SelectedDestination) => {
+    Keyboard.dismiss();
+    // Drop pin immediately from the coordinate already in the search response
+    setDestination(dest.coordinate);
+    // Dismiss any pressed pin — user has explicitly chosen a search result
+    setPressedPin(null);
+    pressAbortRef.current?.abort();
+
+    const destRegion: Region = { ...dest.coordinate, ...DELTA };
+    setRegion(destRegion);
+    mapRef.current?.animateToRegion(destRegion, 900);
+
+    // TODO: fire /route with dest.placeId once the route endpoint is ready.
+    // dest.placeId is the routing key — never use dest.displayText.
+    // e.g. dispatch(fetchRoute({ destinationPlaceId: dest.placeId }))
+  }, []);
+
+  const handleClear = useCallback(() => {
+    setDestination(null);
+    setPressedPin(null);
+    pressAbortRef.current?.abort();
+    if (userLocation) {
+      const userRegion: Region = { ...userLocation, ...DELTA };
+      setRegion(userRegion);
+      mapRef.current?.animateToRegion(userRegion, 600);
+    }
+  }, [userLocation]);
+
+  // ── Location ─────────────────────────────────────────────────────────────────
   const requestLocationPermission = async () => {
     const { status } = await Location.requestForegroundPermissionsAsync();
     if (status !== "granted") {
@@ -202,11 +263,12 @@ export default function MapScreen() {
       const { coords } = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.BestForNavigation,
       });
-      const newRegion: Region = {
+      const coord: Coordinate = {
         latitude: coords.latitude,
         longitude: coords.longitude,
-        ...DELTA,
       };
+      setUserLocation(coord);
+      const newRegion: Region = { ...coord, ...DELTA };
       setRegion(newRegion);
       if (coords.heading != null && coords.heading >= 0)
         smoothHeading(coords.heading);
@@ -217,6 +279,79 @@ export default function MapScreen() {
       setLoadingLocation(false);
     }
   };
+
+  const handleMapPress = useCallback(
+    async (coord: Coordinate) => {
+      // Cancel any in-flight reverse geocode from a prior press
+      pressAbortRef.current?.abort();
+      const controller = new AbortController();
+      pressAbortRef.current = controller;
+
+      // Dismiss keyboard and collapse any active search
+      Keyboard.dismiss();
+      setIsSearchActive(false);
+
+      // 1. Drop pin + open sheet immediately — no network wait
+      setDestination(coord);
+      setPressedPin({
+        coordinate: coord,
+        placeId: "",
+        address: `${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`,
+        isResolving: true,
+      });
+
+      // Snap sheet to collapsed so the pin card is visible
+      snapTo(SNAP_COLLAPSED);
+
+      // 2. Smoothly center on the pressed point
+      mapRef.current?.animateCamera(
+        { center: coord, zoom: 15 },
+        { duration: 500 },
+      );
+
+      // 3. Reverse geocode via /search — use coordinates as the query string
+      try {
+        const query = `${coord.latitude.toFixed(5)},${coord.longitude.toFixed(5)}`;
+        const res = await fetch(
+          `${TRANZIT_BASE_URL}/search?q=${encodeURIComponent(query)}&lat=${coord.latitude}&lng=${coord.longitude}`,
+          { signal: controller.signal },
+        );
+
+        if (res.ok) {
+          const json: {
+            places: Array<{
+              id: string;
+              displayName: { text: string };
+              location: { latitude: number; longitude: number };
+            }>;
+          } = await res.json();
+
+          const place = json.places?.[0];
+          if (place) {
+            setPressedPin({
+              coordinate: coord,
+              placeId: place.id, // session-scoped — cleared on dismiss
+              address: place.displayName.text,
+              isResolving: false,
+            });
+            return;
+          }
+        }
+      } catch (err: unknown) {
+        if ((err as Error).name === "AbortError") return;
+      }
+
+      // Fallback: raw coordinates if search returned nothing
+      setPressedPin((prev) => (prev ? { ...prev, isResolving: false } : null));
+    },
+    [snapTo],
+  );
+
+  const dismissPressedPin = useCallback(() => {
+    pressAbortRef.current?.abort();
+    setPressedPin(null);
+    setDestination(null);
+  }, []);
 
   useEffect(() => {
     if (!hasPermission) return;
@@ -230,11 +365,12 @@ export default function MapScreen() {
           timeInterval: 1000,
         },
         ({ coords }) => {
-          setRegion((p) => ({
-            ...(p ?? DELTA),
+          // Always update the user dot — never the camera region,
+          // which may be pointed at a destination.
+          setUserLocation({
             latitude: coords.latitude,
             longitude: coords.longitude,
-          }));
+          });
           if (coords.heading != null && coords.heading >= 0)
             smoothHeading(coords.heading);
         },
@@ -257,27 +393,32 @@ export default function MapScreen() {
     if (hasPermission) fetchCurrentLocation();
   }, [hasPermission]);
 
+  // ─── Render ──────────────────────────────────────────────────────────────────
+
   return (
     <View style={styles.container}>
-      {/* ── Map (fills space above sheet) ── */}
+      {/* Map */}
       <MapView
         ref={mapRef}
         customMapStyle={mapStyle}
         style={styles.map}
         showsUserLocation={false}
         showsCompass={true}
+        onPress={(e) => {
+          // Only fire if search isn't active (would close keyboard instead)
+          if (!isSearchActive) handleMapPress(e.nativeEvent.coordinate);
+        }}
+        onLongPress={(e) => handleMapPress(e.nativeEvent.coordinate)}
         initialRegion={{
           latitude: 51.070664,
           longitude: -114.059263,
           ...DELTA,
         }}
       >
-        {region && (
+        {/* User location dot — follows userLocation, not region */}
+        {userLocation && (
           <Marker
-            coordinate={{
-              latitude: region.latitude,
-              longitude: region.longitude,
-            }}
+            coordinate={userLocation}
             anchor={{ x: 0.5, y: 0.5 }}
             flat
             tracksViewChanges={false}
@@ -285,9 +426,19 @@ export default function MapScreen() {
             <DirectionMarker heading={heading} />
           </Marker>
         )}
+
+        {/* Destination pin — appears immediately on suggestion select */}
+        {destination && (
+          <Marker
+            coordinate={destination}
+            anchor={{ x: 0.5, y: 1.0 }}
+            tracksViewChanges={false}
+            pinColor={theme.colors.primary}
+          />
+        )}
       </MapView>
 
-      {/* ── Re-center (floats above sheet) ── */}
+      {/* Re-center button */}
       <TouchableOpacity
         style={styles.recenterButton}
         onPress={fetchCurrentLocation}
@@ -301,7 +452,7 @@ export default function MapScreen() {
         )}
       </TouchableOpacity>
 
-      {/* ── Error banner ── */}
+      {/* Error banner */}
       {errorMsg && (
         <View style={styles.errorBanner}>
           <Ionicons name="warning-outline" size={15} color="#BA1A1A" />
@@ -309,100 +460,132 @@ export default function MapScreen() {
         </View>
       )}
 
-      {/* ════════════════════════════════════════
-          BOTTOM SHEET
-      ════════════════════════════════════════ */}
+      {/* ════════ BOTTOM SHEET ════════ */}
       <Animated.View style={[styles.sheet, { height: sheetAnim }]}>
-        {/* Drag handle — only this area triggers the pan */}
+        {/* Drag handle */}
         <View {...panResponder.panHandlers} style={styles.handleArea}>
           <View style={styles.handle} />
-          {/* Mini label that hints at drag */}
           <Text style={styles.handleHint}>
             {isExpanded ? "Nearby Stops" : "Explore"}
           </Text>
         </View>
-
-        {/* ── Search row ── */}
-        <View style={styles.searchRow}>
-          <View style={styles.searchBar}>
-            <Ionicons name="search" size={18} color={theme.colors.text} />
-            <TextInput
-              style={styles.searchInput}
-              placeholder="Where do you want to go?"
-              placeholderTextColor="#9EA4B0"
-              value={searchQuery}
-              onChangeText={setSearchQuery}
-              onFocus={() => snapTo(SNAP_EXPANDED)}
-              returnKeyType="search"
-            />
-            {searchQuery.length > 0 && (
-              <TouchableOpacity onPress={() => setSearchQuery("")}>
+        {/* ── Pressed pin card ── */}
+        {pressedPin && !isSearchActive && (
+          <View style={styles.pinCard}>
+            <View style={styles.pinCardLeft}>
+              <View style={styles.pinIconBox}>
+                <Ionicons
+                  name="location"
+                  size={18}
+                  color={theme.colors.primary}
+                />
+              </View>
+              <View style={styles.pinTextBlock}>
+                <Text style={styles.pinLabel}>Dropped pin</Text>
+                {pressedPin.isResolving ? (
+                  <View style={styles.pinResolveRow}>
+                    <ActivityIndicator
+                      size="small"
+                      color={theme.colors.primary}
+                    />
+                    <Text style={styles.pinResolving}>Resolving address…</Text>
+                  </View>
+                ) : (
+                  <Text style={styles.pinAddress} numberOfLines={2}>
+                    {pressedPin.address}
+                  </Text>
+                )}
+              </View>
+            </View>
+            <View style={styles.pinActions}>
+              <TouchableOpacity
+                style={styles.pinCta}
+                activeOpacity={0.85}
+                disabled={pressedPin.isResolving || !pressedPin.placeId}
+                onPress={() => {
+                  if (!pressedPin.placeId) return;
+                  // TODO: navigate to RoutePreview, passing placeId + coordinate
+                  // navigation.navigate('RoutePreview', {
+                  //   destinationPlaceId: pressedPin.placeId,
+                  //   destinationCoordinate: pressedPin.coordinate,
+                  // });
+                  console.log("Route to:", pressedPin.placeId);
+                }}
+              >
+                <Ionicons name="navigate" size={15} color="white" />
+                <Text style={styles.pinCtaText}>Go</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={dismissPressedPin}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+              >
                 <Ionicons
                   name="close-circle"
-                  size={18}
+                  size={22}
                   color={theme.colors.text}
                 />
               </TouchableOpacity>
-            )}
+            </View>
           </View>
-          <TouchableOpacity
-            style={styles.filterBtn}
-            activeOpacity={0.8}
-            onPress={() => snapTo(isExpanded ? SNAP_COLLAPSED : SNAP_EXPANDED)}
-          >
-            <Ionicons
-              name={isExpanded ? "chevron-down" : "options-outline"}
-              size={20}
-              color={theme.colors.primary}
-            />
-          </TouchableOpacity>
-        </View>
+        )}
+        {/* ── Search sheet ── */}
+        <SearchSheet
+          userLocation={userLocation}
+          onDestinationSelected={handleDestinationSelected}
+          onSearchActiveChange={(active) => {
+            setIsSearchActive(active);
+            if (active) snapTo(SNAP_EXPANDED);
+          }}
+          onClear={handleClear}
+        />
 
-        {/* ── Quick access chips ── */}
-        <View style={styles.sectionWrap}>
-          <Text style={styles.sectionLabel}>Quick Access</Text>
-          <ScrollView
-            horizontal
-            showsHorizontalScrollIndicator={false}
-            contentContainerStyle={styles.quickRow}
-          >
-            {QUICK_ACCESS.map((item) => (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.quickChip}
-                activeOpacity={0.8}
-              >
+        {/* ── Quick access chips (hidden while search is active) ── */}
+        {!isSearchActive && (
+          <View style={styles.sectionWrap}>
+            <Text style={styles.sectionLabel}>Quick Access</Text>
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.quickRow}
+            >
+              {QUICK_ACCESS.map((item) => (
+                <TouchableOpacity
+                  key={item.id}
+                  style={styles.quickChip}
+                  activeOpacity={0.8}
+                >
+                  <View
+                    style={[
+                      styles.quickIconBox,
+                      { backgroundColor: item.color + "18" },
+                    ]}
+                  >
+                    <FontAwesome5
+                      name={item.icon as any}
+                      size={14}
+                      color={item.color}
+                    />
+                  </View>
+                  <Text style={styles.quickLabel}>{item.label}</Text>
+                </TouchableOpacity>
+              ))}
+              <TouchableOpacity style={styles.quickChip} activeOpacity={0.8}>
                 <View
                   style={[
                     styles.quickIconBox,
-                    { backgroundColor: item.color + "18" },
+                    { backgroundColor: theme.colors.muted },
                   ]}
                 >
-                  <FontAwesome5
-                    name={item.icon as any}
-                    size={14}
-                    color={item.color}
-                  />
+                  <Ionicons name="add" size={16} color={theme.colors.text} />
                 </View>
-                <Text style={styles.quickLabel}>{item.label}</Text>
+                <Text style={styles.quickLabel}>Add</Text>
               </TouchableOpacity>
-            ))}
-            <TouchableOpacity style={styles.quickChip} activeOpacity={0.8}>
-              <View
-                style={[
-                  styles.quickIconBox,
-                  { backgroundColor: theme.colors.muted },
-                ]}
-              >
-                <Ionicons name="add" size={16} color={theme.colors.text} />
-              </View>
-              <Text style={styles.quickLabel}>Add</Text>
-            </TouchableOpacity>
-          </ScrollView>
-        </View>
+            </ScrollView>
+          </View>
+        )}
 
-        {/* ── Nearby stops (only when expanded) ── */}
-        {isExpanded && (
+        {/* ── Nearby stops (expanded only, no active search) ── */}
+        {isExpanded && !isSearchActive && (
           <View style={styles.nearbyWrap}>
             <View style={styles.nearbyHeader}>
               <View style={styles.nearbyTitleRow}>
@@ -470,16 +653,12 @@ export default function MapScreen() {
   );
 }
 
-// ─── Styles ────────────────────────────────────────────────────────────────────
+// ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: theme.colors.neutral },
+  map: { ...StyleSheet.absoluteFillObject },
 
-  map: {
-    ...StyleSheet.absoluteFillObject, // full screen; sheet overlays it
-  },
-
-  // ── Floating buttons ──
   recenterButton: {
     position: "absolute",
     bottom: SNAP_COLLAPSED + 16,
@@ -512,7 +691,7 @@ const styles = StyleSheet.create({
   },
   errorText: { fontSize: 13, fontWeight: "600", color: "#BA1A1A" },
 
-  // ── Bottom sheet ──
+  // ── Sheet ──
   sheet: {
     position: "absolute",
     bottom: 0,
@@ -527,12 +706,7 @@ const styles = StyleSheet.create({
     shadowRadius: 20,
     elevation: 24,
   },
-
-  handleArea: {
-    alignItems: "center",
-    paddingTop: 10,
-    paddingBottom: 6,
-  },
+  handleArea: { alignItems: "center", paddingTop: 10, paddingBottom: 6 },
   handle: {
     width: 38,
     height: 4,
@@ -548,48 +722,8 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
 
-  // ── Search ──
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: theme.spacing.screen,
-    marginBottom: 14,
-  },
-  searchBar: {
-    flex: 1,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: theme.colors.muted,
-    borderRadius: 14,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: theme.fontSize.body,
-    color: "#1A1C1F",
-    padding: 0,
-  },
-  filterBtn: {
-    width: 46,
-    height: 46,
-    borderRadius: 14,
-    backgroundColor: theme.colors.muted,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-  },
-
   // ── Quick access ──
-  sectionWrap: {
-    paddingHorizontal: theme.spacing.screen,
-    marginBottom: 4,
-  },
+  sectionWrap: { paddingHorizontal: theme.spacing.screen, marginBottom: 4 },
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",
@@ -672,5 +806,75 @@ const styles = StyleSheet.create({
   etaText: {
     fontSize: theme.fontSize.caption,
     fontWeight: "700",
+  },
+  // ── Pressed pin card ──
+  pinCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginHorizontal: theme.spacing.screen,
+    marginBottom: 12,
+    padding: 12,
+    borderRadius: 16,
+    backgroundColor: theme.colors.muted,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+  },
+  pinCardLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  pinIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    backgroundColor: theme.colors.primary + "15",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  pinTextBlock: { flex: 1, gap: 2 },
+  pinLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: theme.colors.text,
+    textTransform: "uppercase",
+    letterSpacing: 0.6,
+  },
+  pinResolveRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  pinResolving: {
+    fontSize: theme.fontSize.caption,
+    color: theme.colors.text,
+  },
+  pinAddress: {
+    fontSize: theme.fontSize.body,
+    fontWeight: "600",
+    color: "#1A1C1F",
+  },
+  pinActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flexShrink: 0,
+  },
+  pinCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: theme.colors.primary,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 10,
+  },
+  pinCtaText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: "white",
   },
 });
