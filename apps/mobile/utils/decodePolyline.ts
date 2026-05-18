@@ -4,5 +4,5 @@ import type { LatLng } from "react-native-maps";
 export function decodePolyline(encoded: string): LatLng[] {
   return polyline
     .decode(encoded)
-    .map(([lat, lng]) => ({ latitude: lat, longitude: lng }));
+    .map(([lat, lng]: [number, number]) => ({ latitude: lat, longitude: lng }));
 }

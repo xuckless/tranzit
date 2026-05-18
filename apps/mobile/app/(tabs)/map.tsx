@@ -473,10 +473,14 @@ export default function MapScreen() {
         showsUserLocation={false}
         showsCompass={true}
         onPress={(e) => {
-          // Only fire if search isn't active (would close keyboard instead)
-          if (!isSearchActive) handleMapPress(e.nativeEvent.coordinate);
+          // coordinate is undefined when the tap landed on a Marker — skip those
+          const coord = e.nativeEvent.coordinate;
+          if (!isSearchActive && coord) handleMapPress(coord);
         }}
-        onLongPress={(e) => handleMapPress(e.nativeEvent.coordinate)}
+        onLongPress={(e) => {
+          const coord = e.nativeEvent.coordinate;
+          if (coord) handleMapPress(coord);
+        }}
         initialRegion={{
           latitude: 51.070664,
           longitude: -114.059263,

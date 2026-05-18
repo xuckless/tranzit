@@ -13,13 +13,14 @@ import { theme } from "@/styles/theme";
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-// CLAUDE.md specifies: POINT(lat lng) — first value is latitude, second longitude.
+// DB stores coordinates as standard WKT: POINT(longitude latitude).
+// Example from prod: POINT(-113.9695742 51.0780607) → lng=-113.96, lat=51.07
 function parseWKTPoint(
   wkt: string
 ): { latitude: number; longitude: number } | null {
   const m = wkt.match(/POINT\s*\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/i);
   if (!m) return null;
-  return { latitude: parseFloat(m[1]), longitude: parseFloat(m[2]) };
+  return { longitude: parseFloat(m[1]), latitude: parseFloat(m[2]) };
 }
 
 function fmtEpoch(epoch: number): string {

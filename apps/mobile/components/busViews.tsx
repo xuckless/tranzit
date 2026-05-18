@@ -1,11 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, memo } from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  ScrollView,
-  ActivityIndicator,
-} from "react-native";
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
+import Svg, { Circle as SvgCircle, Path, Text as SvgText } from "react-native-svg";
 import { Marker, Callout } from "react-native-maps";
 import { supabase } from "@/lib/supabase";
 import type {
@@ -58,17 +53,23 @@ function BusMarkerComponent({
   const [loading, setLoading] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
 
-  // Briefly enable view tracking on mount so the native layer captures the badge,
-  // then freeze. Bearing changes are handled by Marker's rotation prop natively
-  // and do not require tracksViewChanges to be true.
+  // tracksViewChanges must be true whenever the SVG content changes (bearing or
+  // initial mount), then frozen to prevent continuous re-renders while panning.
   const [tracksViewChanges, setTracksViewChanges] = useState(true);
-  const mountedRef = useRef(false);
+  const prevBearingRef = useRef(bearing);
+
   useEffect(() => {
-    if (mountedRef.current) return;
-    mountedRef.current = true;
     const t = setTimeout(() => setTracksViewChanges(false), 500);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    if (prevBearingRef.current === bearing) return;
+    prevBearingRef.current = bearing;
+    setTracksViewChanges(true);
+    const t = setTimeout(() => setTracksViewChanges(false), 150);
+    return () => clearTimeout(t);
+  }, [bearing]);
 
   const fetchTripDetails = useCallback(async () => {
     setLoading(true);
@@ -134,25 +135,37 @@ function BusMarkerComponent({
   }, [hasFetched, fetchTripDetails]);
 
   return (
-    // rotation prop rotates the entire marker (badge + arrow tip) natively —
-    // no JS re-render required, so tracksViewChanges stays false after mount.
     <Marker
       coordinate={{ latitude, longitude }}
-      anchor={{ x: 0.5, y: 0.7 }}
-      rotation={bearing}
+      anchor={{ x: 0.5, y: 0.5 }}
       tracksViewChanges={tracksViewChanges}
       onPress={fetchTripDetails}
     >
-      {/* Badge — upward arrow rotates with the Marker to show travel direction */}
-      <View style={s.markerWrap}>
-        <View style={s.badge}>
-          <Text style={s.badgeText} numberOfLines={1}>
-            {route_id}
-          </Text>
-        </View>
-        {/* Triangle arrow tip pointing up (north at bearing=0) */}
-        <View style={s.arrowTip} />
-      </View>
+      {/*
+        Arrow rotates inside the SVG via transform so the route label stays
+        upright regardless of bearing. Circle is 36×36 to fit both elements.
+      */}
+      <Svg width={36} height={36} viewBox="0 0 36 36">
+        <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
+        {/* Arrow tip — rotated around the circle centre by bearing degrees */}
+        <Path
+          d="M18 4 L13 15 L18 12 L23 15 Z"
+          fill="white"
+          opacity={0.9}
+          transform={`rotate(${bearing}, 18, 18)`}
+        />
+        {/* Route number — always upright */}
+        <SvgText
+          x="18"
+          y="26"
+          textAnchor="middle"
+          fill="white"
+          fontSize="9"
+          fontWeight="bold"
+        >
+          {route_id}
+        </SvgText>
+      </Svg>
 
       <Callout tooltip>
         <View style={s.callout}>
@@ -216,45 +229,7 @@ export const BusMarker = memo(BusMarkerComponent);
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const BADGE_W = 44;
-
 const s = StyleSheet.create({
-  markerWrap: {
-    alignItems: "center",
-  },
-  badge: {
-    width: BADGE_W,
-    paddingVertical: 5,
-    backgroundColor: theme.colors.primary,
-    borderRadius: 8,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
-    elevation: 4,
-  },
-  badgeText: {
-    fontSize: 12,
-    fontWeight: "800",
-    color: "white",
-    letterSpacing: 0.3,
-  },
-  // Upward-pointing triangle; Marker rotation={bearing} rotates this too
-  arrowTip: {
-    width: 0,
-    height: 0,
-    borderLeftWidth: 6,
-    borderRightWidth: 6,
-    borderBottomWidth: 9,
-    borderStyle: "solid",
-    borderLeftColor: "transparent",
-    borderRightColor: "transparent",
-    borderBottomColor: theme.colors.primary,
-    transform: [{ rotate: "180deg" }], // points downward to "pin" the marker
-    marginTop: -1,
-  },
-
   // Callout
   callout: {
     width: 270,
