@@ -11,10 +11,10 @@ import { supabase } from "@/lib/supabase";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
 import { theme } from "@/styles/theme";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// DB stores coordinates as standard WKT: POINT(longitude latitude).
-// Example from prod: POINT(-113.9695742 51.0780607) → lng=-113.96, lat=51.07
+// PostGIS WKT: POINT(longitude latitude) — confirmed by prod sample
+// POINT(-113.9695742 51.0780607) → lng=-113.96, lat=51.07
 function parseWKTPoint(
   wkt: string
 ): { latitude: number; longitude: number } | null {
@@ -52,7 +52,7 @@ interface UpcomingBus {
 export interface StopMarkerProps {
   teleride_number: number;
   stop_name: string;
-  point: string; // WKT: POINT(lat lng)
+  point: string; // WKT: POINT(lng lat)
 }
 
 // ─── Component ────────────────────────────────────────────────────────────────
@@ -68,28 +68,24 @@ function StopMarkerComponent({
   const [loading, setLoading] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
 
-  // Briefly enable view tracking on mount so the native layer captures the initial
-  // render, then freeze to prevent continuous re-renders while panning the map.
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
-  useEffect(() => {
-    const t = setTimeout(() => setTracksViewChanges(false), 500);
-    return () => clearTimeout(t);
-  }, []);
-
+  // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchUpcoming = useCallback(async () => {
     setLoading(true);
-    const now = Math.floor(Date.now() / 1000);
+
+    // 5-minute lookback so buses already arriving at the stop aren't excluded
+    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
 
     const { data: rawStus } = await supabase
       .from("stop_time_updates")
       .select("*")
       .eq("stop_id", String(teleride_number))
-      .gt("arrival_time", now)
-      .order("arrival_time")
+      .gte("arrival_time", fiveMinAgo)
+      .order("arrival_time", { ascending: true })
       .limit(5);
     const stus = rawStus as StopTimeUpdate[] | null;
 
     if (!stus?.length) {
+      setUpcoming([]);
       setLoading(false);
       setHasFetched(true);
       return;
@@ -122,7 +118,7 @@ function StopMarkerComponent({
     setHasFetched(true);
   }, [teleride_number]);
 
-  // Poll every 30s after the callout is first opened (hasFetched acts as the gate).
+  // 30s refresh — starts after the first press opens the callout
   useEffect(() => {
     if (!hasFetched) return;
     const id = setInterval(fetchUpcoming, 30_000);
@@ -135,7 +131,10 @@ function StopMarkerComponent({
     <Marker
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracksViewChanges}
+      // Permanent false — the dot never changes visually. Setting this to true
+      // (even briefly) re-creates the native marker view and dismisses any open
+      // callout, which is the root cause of the auto-close bug.
+      tracksViewChanges={false}
       onPress={fetchUpcoming}
     >
       <View style={s.dot} />
@@ -147,7 +146,7 @@ function StopMarkerComponent({
           </Text>
           <Text style={s.calloutSub}>Stop #{teleride_number}</Text>
 
-          {loading && !hasFetched ? (
+          {loading ? (
             <ActivityIndicator
               size="small"
               color={theme.colors.primary}
@@ -165,7 +164,7 @@ function StopMarkerComponent({
               {upcoming.map((bus) => {
                 const delay = fmtDelay(bus.arrival_delay);
                 return (
-                  <View key={bus.trip_id} style={s.busRow}>
+                  <View key={`${bus.trip_id}-${bus.arrival_time}`} style={s.busRow}>
                     <View style={s.routeBadge}>
                       <Text style={s.routeLabel}>Bus {bus.route_id}</Text>
                     </View>
@@ -199,8 +198,6 @@ const s = StyleSheet.create({
     borderWidth: 2,
     borderColor: "white",
   },
-
-  // Callout container
   callout: {
     width: 260,
     padding: 12,
@@ -232,10 +229,8 @@ const s = StyleSheet.create({
     textAlign: "center",
     paddingVertical: 8,
   },
-
-  // Bus rows inside the callout
   scroll: {
-    maxHeight: 180,
+    maxHeight: 200,
   },
   busRow: {
     flexDirection: "row",

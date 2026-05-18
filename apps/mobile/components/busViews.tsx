@@ -10,7 +10,7 @@ import type {
 } from "@/types/database";
 import { theme } from "@/styles/theme";
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 function fmtEpoch(epoch: number): string {
   return new Date(epoch * 1000).toLocaleTimeString([], {
@@ -53,17 +53,16 @@ function BusMarkerComponent({
   const [loading, setLoading] = useState(false);
   const [hasFetched, setHasFetched] = useState(false);
 
-  // tracksViewChanges must be true whenever the SVG content changes (bearing or
-  // initial mount), then frozen to prevent continuous re-renders while panning.
-  const [tracksViewChanges, setTracksViewChanges] = useState(true);
+  // tracksViewChanges starts false. Setting it to true (even briefly) re-creates
+  // the native marker view and dismisses any open callout. We only flip it to
+  // update the SVG bearing arrow, and only when the callout is NOT open.
+  const [tracksViewChanges, setTracksViewChanges] = useState(false);
   const prevBearingRef = useRef(bearing);
+  const calloutOpenRef = useRef(false);
 
   useEffect(() => {
-    const t = setTimeout(() => setTracksViewChanges(false), 500);
-    return () => clearTimeout(t);
-  }, []);
-
-  useEffect(() => {
+    // Skip update if callout is showing — avoids dismissing it
+    if (calloutOpenRef.current) return;
     if (prevBearingRef.current === bearing) return;
     prevBearingRef.current = bearing;
     setTracksViewChanges(true);
@@ -71,6 +70,7 @@ function BusMarkerComponent({
     return () => clearTimeout(t);
   }, [bearing]);
 
+  // ── Fetch ─────────────────────────────────────────────────────────────────
   const fetchTripDetails = useCallback(async () => {
     setLoading(true);
     const now = Math.floor(Date.now() / 1000);
@@ -99,7 +99,7 @@ function BusMarkerComponent({
       return;
     }
 
-    // stop_id (TEXT) maps to calgary_transit_stops.teleride_number (INTEGER)
+    // stop_id TEXT → calgary_transit_stops.teleride_number INTEGER
     const numericIds = stopTimes
       .map((s) => parseInt(s.stop_id ?? "", 10))
       .filter((n) => !isNaN(n));
@@ -127,7 +127,8 @@ function BusMarkerComponent({
     setHasFetched(true);
   }, [trip_id, route_id]);
 
-  // Poll trip details every 30s after the callout is first opened.
+  // 30s real-time refresh — starts after first press, keeps running while
+  // component is mounted so the callout always shows fresh schedule data.
   useEffect(() => {
     if (!hasFetched) return;
     const id = setInterval(fetchTripDetails, 30_000);
@@ -139,22 +140,34 @@ function BusMarkerComponent({
       coordinate={{ latitude, longitude }}
       anchor={{ x: 0.5, y: 0.5 }}
       tracksViewChanges={tracksViewChanges}
-      onPress={fetchTripDetails}
+      onPress={() => {
+        calloutOpenRef.current = true;
+        fetchTripDetails();
+      }}
+      onDeselect={() => {
+        calloutOpenRef.current = false;
+      }}
     >
       {/*
-        Arrow rotates inside the SVG via transform so the route label stays
-        upright regardless of bearing. Circle is 36×36 to fit both elements.
+        Arrow rotated inside SVG so the route label stays upright.
+        tracksViewChanges is briefly enabled only when bearing changes AND
+        the callout is closed — this is what keeps the callout stable.
       */}
       <Svg width={36} height={36} viewBox="0 0 36 36">
-        <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
-        {/* Arrow tip — rotated around the circle centre by bearing degrees */}
+        <SvgCircle
+          cx="18"
+          cy="18"
+          r="16"
+          fill="#0058BC"
+          stroke="white"
+          strokeWidth="2"
+        />
         <Path
           d="M18 4 L13 15 L18 12 L23 15 Z"
           fill="white"
           opacity={0.9}
           transform={`rotate(${bearing}, 18, 18)`}
         />
-        {/* Route number — always upright */}
         <SvgText
           x="18"
           y="26"
@@ -176,7 +189,7 @@ function BusMarkerComponent({
             </Text>
           ) : null}
 
-          {loading && !hasFetched ? (
+          {loading ? (
             <ActivityIndicator
               size="small"
               color={theme.colors.primary}
@@ -197,7 +210,10 @@ function BusMarkerComponent({
                   style={[s.stopRow, stop.passed && s.stopRowPassed]}
                 >
                   <View
-                    style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]}
+                    style={[
+                      s.sequenceDot,
+                      stop.passed && s.sequenceDotPassed,
+                    ]}
                   />
                   <View style={s.stopInfo}>
                     <Text
@@ -230,7 +246,6 @@ export const BusMarker = memo(BusMarkerComponent);
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  // Callout
   callout: {
     width: 270,
     padding: 13,
@@ -262,8 +277,6 @@ const s = StyleSheet.create({
     textAlign: "center",
     paddingVertical: 8,
   },
-
-  // Stop sequence list
   scroll: {
     maxHeight: 200,
     marginTop: 4,
