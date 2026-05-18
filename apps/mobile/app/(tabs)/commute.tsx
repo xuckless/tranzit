@@ -19,7 +19,6 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import * as Location from "expo-location";
 import { theme } from "@/styles/theme";
-import { supabase } from "@/lib/supabase";
 import { routeStore } from "@/lib/routeStore";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
@@ -59,14 +58,6 @@ function haversineMeters(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
-function parseWKT(
-  point: string,
-): { latitude: number; longitude: number } | null {
-  const m = point.match(/POINT\(([^ ]+) ([^ ]+)\)/);
-  if (!m) return null;
-  return { latitude: parseFloat(m[2]), longitude: parseFloat(m[1]) };
-}
-
 function buildStops(
   route: Route,
   originLabel: string,
@@ -97,6 +88,8 @@ function buildStops(
         name: td.stopDetails.departureStop.name,
         time: td.localizedValues?.departureTime?.time?.text,
         status: "upcoming",
+        coordinate:
+          td.stopDetails.departureStop.location?.latLng ?? undefined,
         mode: "TRANSIT",
         transitName: lineName,
         transitColor: lineColor,
@@ -108,6 +101,8 @@ function buildStops(
         name: td.stopDetails.arrivalStop.name,
         time: td.localizedValues?.arrivalTime?.time?.text,
         status: "upcoming",
+        coordinate:
+          td.stopDetails.arrivalStop.location?.latLng ?? undefined,
         mode: "TRANSIT",
         transitName: lineName,
         transitColor: lineColor,
@@ -239,9 +234,6 @@ export default function CommuteScreen() {
 
   const [rawStops, setRawStops] = useState<CommuteStop[]>([]);
   const [currentStopIndex, setCurrentStopIndex] = useState(1); // start at first transit stop
-  const [stopCoords, setStopCoords] = useState<
-    Record<string, { latitude: number; longitude: number }>
-  >({});
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -275,42 +267,6 @@ export default function CommuteScreen() {
     setRawStops(buildStops(route, originLabel, destLabel));
     setCurrentStopIndex(1);
   }, [route, originInfo?.label, destinationInfo?.label]);
-
-  // ── Look up stop coordinates from Supabase ───────────────────────────────────
-  useEffect(() => {
-    if (rawStops.length === 0) return;
-
-    const transitStops = rawStops.filter((s) => s.mode === "TRANSIT");
-    if (transitStops.length === 0) return;
-
-    const lookup = async () => {
-      const results: Record<string, { latitude: number; longitude: number }> =
-        {};
-
-      await Promise.all(
-        transitStops.map(async (stop) => {
-          const keyword = stop.name.split(" ")[0];
-          const { data } = await supabase
-            .from("calgary_transit_stops")
-            .select("stop_name, point")
-            .ilike("stop_name", `%${keyword}%`)
-            .limit(1);
-
-          const row = data?.[0] as
-            | { stop_name: string | null; point: string | null }
-            | undefined;
-          if (row?.point) {
-            const coord = parseWKT(row.point);
-            if (coord) results[stop.name] = coord;
-          }
-        }),
-      );
-
-      setStopCoords(results);
-    };
-
-    lookup();
-  }, [rawStops]);
 
   // ── GPS subscription ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -352,22 +308,19 @@ export default function CommuteScreen() {
     if (nextIdx >= rawStops.length - 1) return; // don't auto-advance past destination
 
     const nextStop = rawStops[nextIdx];
-    if (!nextStop) return;
-
-    const coord = stopCoords[nextStop.name];
-    if (!coord) return;
+    if (!nextStop?.coordinate) return;
 
     const dist = haversineMeters(
       userLocation.latitude,
       userLocation.longitude,
-      coord.latitude,
-      coord.longitude,
+      nextStop.coordinate.latitude,
+      nextStop.coordinate.longitude,
     );
 
     if (dist < 50) {
       setCurrentStopIndex(nextIdx);
     }
-  }, [userLocation, rawStops, currentStopIndex, stopCoords]);
+  }, [userLocation, rawStops, currentStopIndex]);
 
   // ── Fit map to route ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -389,27 +342,55 @@ export default function CommuteScreen() {
     [rawStops, currentStopIndex],
   );
 
-  const stepPolylines = useMemo(() => {
+  const routePolylines = useMemo(() => {
     if (!route) return [];
-    const allSteps = route.legs.flatMap((l) => l.steps);
-    return allSteps
-      .filter((s) => s.polyline?.encodedPolyline)
-      .map((step, i) => {
-        const completedThreshold =
-          (currentStopIndex / Math.max(1, stops.length - 1)) * allSteps.length;
-        const isCompleted = i < completedThreshold;
-        return {
-          coords: decodePolyline(step.polyline!.encodedPolyline),
-          color: isCompleted
-            ? theme.colors.primary
-            : step.travelMode === "TRANSIT"
-              ? normalizeColor(step.transitDetails?.transitLine?.color)
-              : "#9E9E9E",
-          strokeWidth: isCompleted ? 5 : step.travelMode === "WALK" ? 3 : 4,
-          isDash: !isCompleted && step.travelMode === "WALK",
-        };
+    const allCoords = decodePolyline(route.polyline.encodedPolyline);
+    if (allCoords.length === 0) return [];
+
+    const currentStop = stops[currentStopIndex];
+    let splitIdx = 0;
+
+    if (currentStop?.coordinate) {
+      let minDist = Infinity;
+      allCoords.forEach((c, i) => {
+        const d = haversineMeters(
+          currentStop.coordinate!.latitude,
+          currentStop.coordinate!.longitude,
+          c.latitude,
+          c.longitude,
+        );
+        if (d < minDist) {
+          minDist = d;
+          splitIdx = i;
+        }
       });
-  }, [route, currentStopIndex, stops.length]);
+    }
+
+    const transitStep = route.legs
+      .flatMap((l) => l.steps)
+      .find((s) => s.travelMode === "TRANSIT");
+    const lineColor = normalizeColor(
+      transitStep?.transitDetails?.transitLine?.color,
+    );
+
+    const completed = allCoords.slice(0, splitIdx + 1);
+    const remaining = allCoords.slice(splitIdx);
+
+    const result: {
+      coords: { latitude: number; longitude: number }[];
+      color: string;
+      strokeWidth: number;
+      isDash: boolean;
+    }[] = [];
+
+    if (completed.length > 1) {
+      result.push({ coords: completed, color: theme.colors.primary, strokeWidth: 5, isDash: false });
+    }
+    if (remaining.length > 1) {
+      result.push({ coords: remaining, color: lineColor, strokeWidth: 5, isDash: false });
+    }
+    return result;
+  }, [route, currentStopIndex, stops]);
 
   const etaMinutes = useMemo(() => {
     if (!route) return null;
@@ -515,10 +496,10 @@ export default function CommuteScreen() {
             showsCompass={false}
             showsMyLocationButton={false}
           >
-            {/* Route polylines — colored by mode, completed segments in blue */}
-            {stepPolylines.map((sp, i) => (
+            {/* Route polylines — completed in blue, remaining in line color */}
+            {routePolylines.map((sp, i) => (
               <Polyline
-                key={`sp-${i}`}
+                key={`rp-${i}`}
                 coordinates={sp.coords}
                 strokeColor={sp.color}
                 strokeWidth={sp.strokeWidth}
@@ -526,9 +507,9 @@ export default function CommuteScreen() {
               />
             ))}
 
-            {/* Stop markers derived from stopCoords */}
+            {/* Stop markers from route API coordinates */}
             {stops.map((stop) => {
-              const coord = stopCoords[stop.name];
+              const coord = stop.coordinate;
               if (!coord) return null;
               return (
                 <Marker
