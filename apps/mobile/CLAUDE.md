@@ -274,3 +274,40 @@ const { data } = await supabase
 - **Never** expose or commit the Supabase Service Role key in the RN environment. The anon key + RLS is the correct security boundary here.
 - `expo-secure-store` has a **2 KB value size limit** per key on iOS. Supabase session tokens can approach this. If auth errors surface on iOS, split the session object across multiple keys in the `SecureStoreAdapter`.
 - Place IDs from the `/search` endpoint must not be persisted to `SecureStore` or `AsyncStorage` long-term — session state only (see Places Search API constraints above).
+
+---
+
+## Map Marker Components & Map Screen (completed)
+
+### `components/stopViews.tsx` — `StopMarker`
+
+| Concern | Implementation |
+|---|---|
+| Coordinate parsing | WKT `POINT(lng lat)` parsed via regex, wrapped in `useMemo` — only re-runs when the `point` prop changes. **PostGIS standard: first token is longitude (negative = west), second is latitude** — e.g. `POINT(-113.9695742 51.0780607)`. Previous assumption (lat first) was wrong and has been corrected. |
+| Marker icon | 10 px blue circle with white border — minimal render cost |
+| `tracksViewChanges` | Permanently `false` — stops never move, no initial flip needed |
+| Data fetch | Lazy — fires on first `onPress` and on every subsequent tap; queries `stop_time_updates` filtered by `stop_id = teleride_number` and a 5-minute lookback window, then cross-joins route names from `trip_updates`. Results shown in a scrollable list capped at 200 px. |
+| Polling | 30 s `setInterval`, gated by `hasFetched` so it only starts after the first tap |
+| Callout | Route badge · formatted arrival time · "On Time" / "+N min late" delay label |
+
+### `components/busViews.tsx` — `BusMarker`
+
+| Concern | Implementation |
+|---|---|
+| Bearing | `rotation={bearing}` on `<Marker>` — handled natively, zero JS re-render needed |
+| `tracksViewChanges` | `true` for 500 ms, then frozen; rotation updates don't require it |
+| Marker icon | Single 30×30 SVG — `#0058BC` filled circle (r=13, white stroke) with a north-pointing chevron arrow (`M15 7 L10 20 L15 16 L20 20`). `rotation={bearing}` on `<Marker>` rotates the whole SVG natively so the arrow always points in the direction of travel. Replaced the previous View badge/arrow-tip assembly; removed dead `markerWrap`, `badge`, `badgeText`, and `arrowTip` styles. |
+| Data fetch | Lazy on press — `Promise.all` for `stop_time_updates` (full trip) and `calgary_transit_routes` (long name / destination). Bearing updates are guarded by `calloutOpenRef` so the callout stays open during live position refreshes. |
+| Stop names | Second query joins `calgary_transit_stops` on `teleride_number = parseInt(stop_id)` |
+| Passed stops | `arrival_time < now` → dimmed row + "Passed" pill |
+| Polling | 30 s, same `hasFetched` gate |
+
+### `app/(tabs)/map.tsx` additions
+
+- `transitStops` — fetched once on mount, filtered `ilike('status', 'active')`. `onPress` is null-guarded on every `<Marker>` to prevent the crash when tapping without a handler.
+- `vehicles` — fetched on mount then polled every 30 s via `setInterval`, running continuously after first press.
+- Both arrays are wrapped in `useMemo` so the JSX list is only reconstructed when source data actually changes — map panning does not trigger list rebuilds.
+
+### `utils/decodePolyline.ts`
+
+- Added `[number, number]` type annotation to the `.map()` destructure. `polyline.decode()` returns `number[][]`; TypeScript could not narrow the tuple without the explicit annotation.
