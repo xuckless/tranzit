@@ -206,8 +206,8 @@ export default function MapScreen() {
         (stops as CalgaryTransitStop[]).filter(
           (s) =>
             s.teleride_number != null &&
-            scheduled.has(String(s.teleride_number))
-        )
+            scheduled.has(String(s.teleride_number)),
+        ),
       );
     });
   }, []);
@@ -239,7 +239,7 @@ export default function MapScreen() {
             point={s.point!}
           />
         )),
-    [transitStops]
+    [transitStops],
   );
 
   const busMarkers = useMemo(
@@ -251,7 +251,7 @@ export default function MapScreen() {
             v.longitude != null &&
             v.trip_id != null &&
             v.route_id != null &&
-            v.route_id !== ""
+            v.route_id !== "",
         )
         .map((v) => (
           <BusMarker
@@ -264,7 +264,7 @@ export default function MapScreen() {
             bearing={v.bearing ?? 0}
           />
         )),
-    [vehicles]
+    [vehicles],
   );
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
@@ -343,7 +343,9 @@ export default function MapScreen() {
         const full = await TranzitApiService.getPlaceDetails(dest.placeId);
         setPlaceDetails({ place: full, isFetching: false });
       } catch {
-        setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+        setPlaceDetails((prev) =>
+          prev ? { ...prev, isFetching: false } : null,
+        );
       }
     },
     [],
@@ -662,14 +664,21 @@ export default function MapScreen() {
           <View style={styles.placeCard}>
             <View style={styles.placeCardLeft}>
               <View style={styles.placeIconBox}>
-                <Ionicons name="location" size={18} color={theme.colors.primary} />
+                <Ionicons
+                  name="location"
+                  size={18}
+                  color={theme.colors.primary}
+                />
               </View>
               <View style={styles.placeTextBlock}>
                 <Text style={styles.placeName} numberOfLines={1}>
                   {placeDetails.place.displayName.text}
                 </Text>
                 {placeDetails.isFetching ? (
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
+                  <ActivityIndicator
+                    size="small"
+                    color={theme.colors.primary}
+                  />
                 ) : (
                   <>
                     <Text style={styles.placeAddress} numberOfLines={1}>

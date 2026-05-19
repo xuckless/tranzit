@@ -413,7 +413,6 @@ export default function RouteScreen() {
     router,
   ]);
 
-
   // ─── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.screen}>
@@ -456,7 +455,10 @@ export default function RouteScreen() {
         {/* Destination pin */}
         {destination && (
           <Marker
-            coordinate={{ latitude: destination.lat, longitude: destination.lng }}
+            coordinate={{
+              latitude: destination.lat,
+              longitude: destination.lng,
+            }}
             anchor={{ x: 0.5, y: 1.0 }}
             tracksViewChanges={false}
             pinColor={theme.colors.primary}
@@ -608,7 +610,12 @@ export default function RouteScreen() {
       {/* ── Content area ── */}
       {focusedField === "destination" ? (
         // ── Destination: instant /search + delayed /autocomplete/json merged ──
-        <View style={[styles.searchResultsArea, { paddingHorizontal: theme.spacing.screen }]}>
+        <View
+          style={[
+            styles.searchResultsArea,
+            { paddingHorizontal: theme.spacing.screen },
+          ]}
+        >
           {destinationSearch.status === "loading" && (
             <ActivityIndicator
               style={{ marginTop: 24 }}
@@ -628,7 +635,12 @@ export default function RouteScreen() {
         </View>
       ) : focusedField === "origin" ? (
         // ── Origin: same dual-source search as destination ──
-        <View style={[styles.searchResultsArea, { paddingHorizontal: theme.spacing.screen }]}>
+        <View
+          style={[
+            styles.searchResultsArea,
+            { paddingHorizontal: theme.spacing.screen },
+          ]}
+        >
           {originSearch.status === "loading" && (
             <ActivityIndicator
               style={{ marginTop: 24 }}
@@ -676,7 +688,9 @@ export default function RouteScreen() {
                 color={theme.colors.text}
               />
               <Text style={styles.stateText}>
-                {destination ? "No routes found" : "Set a destination to see routes"}
+                {destination
+                  ? "No routes found"
+                  : "Set a destination to see routes"}
               </Text>
             </View>
           )}
@@ -686,8 +700,9 @@ export default function RouteScreen() {
               {/* Filter chips */}
               <HorizontalView
                 style={{
+                  backgroundColor: "black",
                   paddingHorizontal: theme.spacing.screen,
-                  paddingVertical: theme.spacing.element,
+                  paddingVertical: 6,
                   gap: theme.spacing.element,
                 }}
               >
@@ -946,4 +961,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
-
