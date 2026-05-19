@@ -11,7 +11,7 @@ import {
   Keyboard,
 } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
-import { StopMarker } from "@/components/stopViews";
+import { StopMarker, parseWKTPoint } from "@/components/stopViews";
 import { BusMarker } from "@/components/busViews";
 import type { SelectedDestination } from "@/types/places";
 import type { CalgaryTransitStop, VehiclePosition } from "@/types/database";
@@ -183,9 +183,12 @@ export default function MapScreen() {
 
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
   const [vehicles, setVehicles] = useState<VehiclePosition[]>([]);
+  // Tracked after first pan/animate — null means map hasn't settled yet (safe: no markers)
+  const [mapRegion, setMapRegion] = useState<Region | null>(null);
 
   // Fetch active stops that currently have scheduled arrivals.
-  // The schedule check runs in parallel to avoid two sequential round-trips.
+  // A stop renders if it is active AND has at least one stop_time_update where
+  // schedule_relationship != NO_DATA and the bus is upcoming or already at the stop.
   useEffect(() => {
     const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
     Promise.all([
@@ -196,7 +199,9 @@ export default function MapScreen() {
       supabase
         .from("stop_time_updates")
         .select("stop_id")
-        .gte("arrival_time", fiveMinAgo)
+        .neq("schedule_relationship", "NO_DATA")
+        // upcoming arrivals OR bus currently at stop (arrival=-1, departure is still a valid future ts)
+        .or(`arrival_time.gte.${fiveMinAgo},and(arrival_time.eq.-1,departure_time.gt.0)`)
         .limit(5000),
     ]).then(([{ data: stops }, { data: rawStus }]) => {
       if (!stops) return;
@@ -206,8 +211,8 @@ export default function MapScreen() {
         (stops as CalgaryTransitStop[]).filter(
           (s) =>
             s.teleride_number != null &&
-            scheduled.has(String(s.teleride_number)),
-        ),
+            scheduled.has(String(s.teleride_number))
+        )
       );
     });
   }, []);
@@ -226,21 +231,37 @@ export default function MapScreen() {
     return () => clearInterval(id);
   }, []);
 
-  // Recompute marker arrays only when source data changes — not on every render.
-  const stopMarkers = useMemo(
-    () =>
-      transitStops
-        .filter((s) => s.point != null && s.teleride_number != null)
-        .map((s) => (
-          <StopMarker
-            key={`stop-${s.teleride_number}`}
-            teleride_number={s.teleride_number!}
-            stop_name={s.stop_name ?? "Unknown Stop"}
-            point={s.point!}
-          />
-        )),
-    [transitStops],
-  );
+  // Only render stop markers once the map has settled (mapRegion != null) and
+  // only within the visible viewport. This prevents two crash vectors:
+  //   1. Bulk-inserting hundreds of markers at once into AIRMap (Fabric interop crash)
+  //   2. A StopMarker returning null (bad WKT) causing AIRMap to insert a nil native view
+  const stopMarkers = useMemo(() => {
+    if (!mapRegion || mapRegion.latitudeDelta > 0.04) return [];
+
+    // 50% padding so stops don't flicker on small pans
+    const latPad = mapRegion.latitudeDelta * 0.75;
+    const lngPad = mapRegion.longitudeDelta * 0.75;
+
+    return transitStops
+      .filter((s) => {
+        if (!s.point || !s.teleride_number) return false;
+        // Pre-validate WKT — StopMarker returning null inside MapView crashes AIRMap
+        const coord = parseWKTPoint(s.point);
+        if (!coord) return false;
+        return (
+          Math.abs(coord.latitude - mapRegion.latitude) < latPad &&
+          Math.abs(coord.longitude - mapRegion.longitude) < lngPad
+        );
+      })
+      .map((s) => (
+        <StopMarker
+          key={`stop-${s.teleride_number}`}
+          teleride_number={s.teleride_number!}
+          stop_name={s.stop_name ?? "Unknown Stop"}
+          point={s.point!}
+        />
+      ));
+  }, [transitStops, mapRegion]);
 
   const busMarkers = useMemo(
     () =>
@@ -251,7 +272,7 @@ export default function MapScreen() {
             v.longitude != null &&
             v.trip_id != null &&
             v.route_id != null &&
-            v.route_id !== "",
+            v.route_id !== ""
         )
         .map((v) => (
           <BusMarker
@@ -264,7 +285,7 @@ export default function MapScreen() {
             bearing={v.bearing ?? 0}
           />
         )),
-    [vehicles],
+    [vehicles]
   );
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
@@ -343,9 +364,7 @@ export default function MapScreen() {
         const full = await TranzitApiService.getPlaceDetails(dest.placeId);
         setPlaceDetails({ place: full, isFetching: false });
       } catch {
-        setPlaceDetails((prev) =>
-          prev ? { ...prev, isFetching: false } : null,
-        );
+        setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
       }
     },
     [],
@@ -399,17 +418,15 @@ export default function MapScreen() {
 
   const handleMapPress = useCallback(
     async (coord: Coordinate) => {
-      // Cancel any in-flight reverse geocode from a prior press
       pressAbortRef.current?.abort();
       const controller = new AbortController();
       pressAbortRef.current = controller;
 
-      // Dismiss keyboard and collapse any active search
       Keyboard.dismiss();
       setIsSearchActive(false);
       setPlaceDetails(null);
 
-      // 1. Drop pin + open sheet immediately — no network wait
+      // Drop pin + open sheet immediately
       setDestination(coord);
       setPressedPin({
         coordinate: coord,
@@ -417,17 +434,10 @@ export default function MapScreen() {
         address: `${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`,
         isResolving: true,
       });
-
-      // Snap sheet to collapsed so the pin card is visible
       snapTo(SNAP_COLLAPSED);
+      mapRef.current?.animateCamera({ center: coord, zoom: 15 }, { duration: 500 });
 
-      // 2. Smoothly center on the pressed point
-      mapRef.current?.animateCamera(
-        { center: coord, zoom: 15 },
-        { duration: 500 },
-      );
-
-      // 3. Reverse geocode via /search — use coordinates as the query string
+      // Search for a business at this coordinate
       try {
         const query = `${coord.latitude.toFixed(5)},${coord.longitude.toFixed(5)}`;
         const res = await fetch(
@@ -446,12 +456,26 @@ export default function MapScreen() {
 
           const place = json.places?.[0];
           if (place) {
-            setPressedPin({
-              coordinate: coord,
-              placeId: place.id, // session-scoped — cleared on dismiss
-              address: place.displayName.text,
-              isResolving: false,
+            // Business found — switch to the full place card via /details
+            setPressedPin(null);
+            setPlaceDetails({
+              place: {
+                id: place.id,
+                displayName: { text: place.displayName.text },
+                formattedAddress: "",
+                location: place.location,
+              },
+              isFetching: true,
             });
+            try {
+              const full = await TranzitApiService.getPlaceDetails(place.id, controller.signal);
+              if (!controller.signal.aborted) {
+                setPlaceDetails({ place: full, isFetching: false });
+              }
+            } catch (detailsErr: unknown) {
+              if ((detailsErr as Error).name === "AbortError") return;
+              setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+            }
             return;
           }
         }
@@ -459,8 +483,48 @@ export default function MapScreen() {
         if ((err as Error).name === "AbortError") return;
       }
 
-      // Fallback: raw coordinates if search returned nothing
+      // No business found — show raw coordinate pin
       setPressedPin((prev) => (prev ? { ...prev, isResolving: false } : null));
+    },
+    [snapTo],
+  );
+
+  // ── POI tap (native Google Maps business markers) ─────────────────────────────
+  const handlePoiPress = useCallback(
+    async (e: { nativeEvent: { placeId: string; name: string; coordinate: Coordinate } }) => {
+      const { placeId, name, coordinate } = e.nativeEvent;
+
+      pressAbortRef.current?.abort();
+      const controller = new AbortController();
+      pressAbortRef.current = controller;
+
+      Keyboard.dismiss();
+      setIsSearchActive(false);
+      setPressedPin(null);
+      setDestination(coordinate);
+      snapTo(SNAP_COLLAPSED);
+      mapRef.current?.animateCamera({ center: coordinate, zoom: 15 }, { duration: 500 });
+
+      // Optimistic card while /details loads
+      setPlaceDetails({
+        place: {
+          id: placeId,
+          displayName: { text: name },
+          formattedAddress: "",
+          location: coordinate,
+        },
+        isFetching: true,
+      });
+
+      try {
+        const full = await TranzitApiService.getPlaceDetails(placeId, controller.signal);
+        if (!controller.signal.aborted) {
+          setPlaceDetails({ place: full, isFetching: false });
+        }
+      } catch (err: unknown) {
+        if ((err as Error).name === "AbortError") return;
+        setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+      }
     },
     [snapTo],
   );
@@ -522,15 +586,23 @@ export default function MapScreen() {
         style={styles.map}
         showsUserLocation={false}
         showsCompass={true}
+        onRegionChangeComplete={(region) => setMapRegion(region)}
         onPress={(e) => {
-          // coordinate is undefined when the tap landed on a Marker — skip those
           const coord = e.nativeEvent.coordinate;
-          if (!isSearchActive && coord) handleMapPress(coord);
+          if (!coord || isSearchActive) return;
+          // Dismiss any active pin or place card on empty-space tap
+          if (pressedPin || placeDetails) {
+            pressAbortRef.current?.abort();
+            setPressedPin(null);
+            setPlaceDetails(null);
+            setDestination(null);
+          }
         }}
         onLongPress={(e) => {
           const coord = e.nativeEvent.coordinate;
           if (coord) handleMapPress(coord);
         }}
+        onPoiClick={handlePoiPress}
         initialRegion={{
           latitude: 51.070664,
           longitude: -114.059263,
@@ -664,21 +736,14 @@ export default function MapScreen() {
           <View style={styles.placeCard}>
             <View style={styles.placeCardLeft}>
               <View style={styles.placeIconBox}>
-                <Ionicons
-                  name="location"
-                  size={18}
-                  color={theme.colors.primary}
-                />
+                <Ionicons name="location" size={18} color={theme.colors.primary} />
               </View>
               <View style={styles.placeTextBlock}>
                 <Text style={styles.placeName} numberOfLines={1}>
                   {placeDetails.place.displayName.text}
                 </Text>
                 {placeDetails.isFetching ? (
-                  <ActivityIndicator
-                    size="small"
-                    color={theme.colors.primary}
-                  />
+                  <ActivityIndicator size="small" color={theme.colors.primary} />
                 ) : (
                   <>
                     <Text style={styles.placeAddress} numberOfLines={1}>

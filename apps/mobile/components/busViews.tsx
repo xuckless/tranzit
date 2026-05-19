@@ -51,7 +51,8 @@ function BusMarkerComponent({
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
   const [loading, setLoading] = useState(false);
-  const [hasFetched, setHasFetched] = useState(false);
+
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   // tracksViewChanges starts false. Setting it to true (even briefly) re-creates
   // the native marker view and dismisses any open callout. We only flip it to
@@ -95,7 +96,6 @@ function BusMarkerComponent({
 
     if (!stopTimes?.length) {
       setLoading(false);
-      setHasFetched(true);
       return;
     }
 
@@ -124,16 +124,12 @@ function BusMarkerComponent({
       }))
     );
     setLoading(false);
-    setHasFetched(true);
   }, [trip_id, route_id]);
 
-  // 30s real-time refresh — starts after first press, keeps running while
-  // component is mounted so the callout always shows fresh schedule data.
-  useEffect(() => {
-    if (!hasFetched) return;
-    const id = setInterval(fetchTripDetails, 30_000);
-    return () => clearInterval(id);
-  }, [hasFetched, fetchTripDetails]);
+  // Clean up polling on unmount
+  useEffect(() => () => {
+    if (pollingRef.current !== null) clearInterval(pollingRef.current);
+  }, []);
 
   return (
     <Marker
@@ -143,9 +139,16 @@ function BusMarkerComponent({
       onPress={() => {
         calloutOpenRef.current = true;
         fetchTripDetails();
+        if (pollingRef.current === null) {
+          pollingRef.current = setInterval(fetchTripDetails, 30_000);
+        }
       }}
       onDeselect={() => {
         calloutOpenRef.current = false;
+        if (pollingRef.current !== null) {
+          clearInterval(pollingRef.current);
+          pollingRef.current = null;
+        }
       }}
     >
       {/*

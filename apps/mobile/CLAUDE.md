@@ -264,9 +264,9 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=...
 import { supabase } from '@/lib/supabase';
 
 const { data } = await supabase
-    .from('vehicle_positions')
-    .select('vehicle_id, latitude, longitude, bearing, speed')
-    .eq('route_id', '3');
+  .from('vehicle_positions')
+  .select('vehicle_id, latitude, longitude, bearing, speed')
+  .eq('route_id', '3');
 // data is typed as Pick<VehiclePosition, 'vehicle_id' | 'latitude' | 'longitude' | 'bearing' | 'speed'>[] | null
 ```
 
@@ -311,3 +311,37 @@ const { data } = await supabase
 ### `utils/decodePolyline.ts`
 
 - Added `[number, number]` type annotation to the `.map()` destructure. `polyline.decode()` returns `number[][]`; TypeScript could not narrow the tuple without the explicit annotation.
+
+---
+
+## Route Store & Journey Flow (completed)
+
+### `lib/routeStore.ts`
+
+- Added `_routes: Route[]` with `setRoutes` / `getRoutes` accessors — routes are now persisted in the store so the Routes page can restore them on remount without a network call.
+- `StoredLocation` gained an optional `placeId?: string` field so origin/destination round-trips without losing the Place ID required to re-query the route service.
+- Added `clearJourney()` — clears only `_selectedRoute`; deliberately leaves `_routes`, `_origin`, and `_destination` intact for restoration. Use this when ending an active journey.
+- Kept `clear()` for full resets (e.g. logout, hard reset flows).
+
+### `components/routes/RoutePickerSheet.tsx`
+
+- `RoutePickerSheet` now accepts a `selectedRoute?: Route | null` prop.
+- `RouteCard` receives `isSelected: boolean` (reference equality against `selectedRoute`).
+- `cardFeatured` replaced by `cardSelected` — blue border + light-blue background tint applied only to the tapped card; "Fastest" badge still renders at index 0 regardless of selection state.
+- Duration text colour switches to primary-blue on the selected card instead of being hardcoded to index 0.
+
+### `app/(tabs)/routes.tsx`
+
+- Imported `useFocusEffect`.
+- Added a restoration focus effect: when `routes.length === 0` on focus, reads from `routeStore` and repopulates local state (labels, endpoints, routes array, selected route) — handles component remount edge cases without a redundant network call.
+- `handleFindRoutes` writes to the store (routes, selected route, origin + destination with `placeId`) after a successful fetch.
+- `handleStart` includes `placeId` in its store writes.
+- `RoutePickerSheet` receives the `selectedRoute={selectedRoute}` prop.
+
+### `app/(tabs)/commute.tsx`
+
+- Imported `useRouter`.
+- `useFocusEffect` now unconditionally calls `setRoute(storedRoute)` — when `clearJourney()` has already run, this sets `route` to `null` and the empty state renders correctly without stale data.
+- Added `handleExit`: calls `routeStore.clearJourney()` then navigates to the Routes tab.
+- Added a fixed "End Journey" bottom bar (always visible, below the `ScrollView`) with a red destructive button wired to `handleExit`.
+- `ScrollView` `paddingBottom` increased to 100 px so the last content item clears the exit bar.

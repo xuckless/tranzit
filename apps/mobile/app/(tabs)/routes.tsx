@@ -323,6 +323,10 @@ export default function RouteScreen() {
       originSearch.reset();
       Keyboard.dismiss();
       setOriginLabel(suggestion.mainText);
+      // New origin invalidates any previously fetched routes
+      setRoutes([]);
+      setSelectedRoute(null);
+      setRouteError(null);
       if (suggestion.location) {
         setOrigin({
           placeId: suggestion.placeId,
@@ -365,6 +369,10 @@ export default function RouteScreen() {
       destinationSearch.reset();
       Keyboard.dismiss();
       setDestinationLabel(suggestion.mainText);
+      // New destination invalidates any previously fetched routes
+      setRoutes([]);
+      setSelectedRoute(null);
+      setRouteError(null);
       if (suggestion.location) {
         setDestination({
           placeId: suggestion.placeId,
@@ -519,6 +527,10 @@ export default function RouteScreen() {
                       : null,
                   );
                   originSearch.reset();
+                  // Origin reset invalidates fetched routes
+                  setRoutes([]);
+                  setSelectedRoute(null);
+                  setRouteError(null);
                 }}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >

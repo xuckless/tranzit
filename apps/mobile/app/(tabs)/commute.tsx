@@ -400,12 +400,14 @@ export default function CommuteScreen() {
     if (tripIds.length === 0) return;
 
     const now = Math.floor(Date.now() / 1000);
+    const fifteenMinAgo = now - 900;
 
     supabase
       .from("stop_time_updates")
       .select("stop_id")
       .in("trip_id", tripIds)
-      .gte("arrival_time", now)
+      .neq("schedule_relationship", "NO_DATA")
+      .or(`arrival_time.gte.${fifteenMinAgo},arrival_time.eq.-1`)
       .limit(500)
       .then(async ({ data: rawStus }) => {
         const stus = rawStus as Array<{ stop_id: string | null }> | null;

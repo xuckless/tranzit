@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo, memo } from "react";
+import React, { useState, useCallback, useEffect, useMemo, useRef, memo } from "react";
 import {
   View,
   Text,
@@ -13,10 +13,8 @@ import { theme } from "@/styles/theme";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-// PostGIS WKT: POINT(longitude latitude) — confirmed by prod sample
-// POINT(-113.9695742 51.0780607) → lng=-113.96, lat=51.07
-function parseWKTPoint(
-  wkt: string
+export function parseWKTPoint(
+  wkt: string,
 ): { latitude: number; longitude: number } | null {
   const m = wkt.match(/POINT\s*\(\s*([-\d.]+)[,\s]+([-\d.]+)\s*\)/i);
   if (!m) return null;
@@ -30,23 +28,29 @@ function fmtEpoch(epoch: number): string {
   });
 }
 
-function fmtDelay(seconds: number | null): { label: string; late: boolean } {
+function fmtDelay(seconds: number | null): { label: string; color: string } {
   if (seconds === null || Math.abs(seconds) < 60)
-    return { label: "On Time", late: false };
+    return { label: "On Time", color: "#2E7D32" };
   const mins = Math.round(seconds / 60);
   return {
-    label: mins > 0 ? `+${mins} min late` : `${Math.abs(mins)} min early`,
-    late: mins > 0,
+    label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
+    color: mins > 0 ? theme.colors.error : "#1565C0",
   };
 }
 
+// Excludes null, undefined, and the -1 "already happened" sentinel
+const isValidEpoch = (t: number | null | undefined): t is number =>
+  t != null && t > 0;
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface UpcomingBus {
-  trip_id: string;
+interface BusEntry {
+  key: string;
   route_id: string;
-  arrival_time: number;
+  arrival_time: number | null;
+  departure_time: number | null;
   arrival_delay: number | null;
+  departure_delay: number | null;
 }
 
 export interface StopMarkerProps {
@@ -55,7 +59,82 @@ export interface StopMarkerProps {
   point: string; // WKT: POINT(lng lat)
 }
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── BusRow ───────────────────────────────────────────────────────────────────
+
+function BusRow({ bus, dimmed }: { bus: BusEntry; dimmed: boolean }) {
+  const now = Math.floor(Date.now() / 1000);
+
+  // ── Arrival line ──
+  let arrLine: string;
+  if (isValidEpoch(bus.arrival_time)) {
+    arrLine = `Arrives ${fmtEpoch(bus.arrival_time)}`;
+  } else {
+    // arrival_time = -1 → bus has arrived
+    if (isValidEpoch(bus.departure_time)) {
+      arrLine = `Arrived · Departs ${fmtEpoch(bus.departure_time)}`;
+    } else {
+      arrLine = "Arrived";
+    }
+  }
+
+  // ── Departure line (only shown when not already encoded in arrLine) ──
+  let depLine: string | null = null;
+  if (isValidEpoch(bus.arrival_time)) {
+    // upcoming arrival — show departure separately
+    if (isValidEpoch(bus.departure_time)) {
+      depLine = `Departs ${fmtEpoch(bus.departure_time)}`;
+    } else if (bus.departure_time === -1) {
+      depLine = "Departed";
+    }
+  } else if (bus.arrival_time === -1 && bus.departure_time === -1) {
+    depLine = "Departed";
+  }
+  // If arrLine already contains "Departs …" we skip the separate dep line
+
+  // ── Delay: use departure_delay when bus has arrived, arrival_delay otherwise ──
+  const relevantDelay =
+    bus.arrival_time === -1 ? bus.departure_delay : bus.arrival_delay;
+  const delay = fmtDelay(relevantDelay);
+
+  // ── Past: "Departed" departure was within 15 min (valid past epoch) ──
+  const isDeparted =
+    isValidEpoch(bus.departure_time) && bus.departure_time < now;
+
+  return (
+    <View style={[s.busRow, dimmed && s.busRowDimmed]}>
+      <View style={[s.routeBadge, dimmed && s.routeBadgeDimmed]}>
+        <Text style={[s.routeLabel, dimmed && s.routeLabelDimmed]} numberOfLines={1}>
+          {bus.route_id}
+        </Text>
+      </View>
+
+      <View style={s.timeBlock}>
+        <Text style={[s.timePrimary, dimmed && s.timeDimmed]} numberOfLines={1}>
+          {arrLine}
+        </Text>
+        {depLine != null && (
+          <Text style={[s.timeSecondary, dimmed && s.timeDimmed]} numberOfLines={1}>
+            {depLine}
+          </Text>
+        )}
+      </View>
+
+      {!dimmed && !isDeparted && (
+        <Text style={[s.delayLabel, { color: delay.color }]} numberOfLines={1}>
+          {delay.label}
+        </Text>
+      )}
+
+      {(dimmed || isDeparted) && (
+        <View style={s.pastPill}>
+          <Text style={s.pastPillText}>Past</Text>
+        </View>
+      )}
+    </View>
+  );
+}
+
+// ─── StopMarker ───────────────────────────────────────────────────────────────
 
 function StopMarkerComponent({
   teleride_number,
@@ -64,78 +143,137 @@ function StopMarkerComponent({
 }: StopMarkerProps) {
   const coordinate = useMemo(() => parseWKTPoint(point), [point]);
 
-  const [upcoming, setUpcoming] = useState<UpcomingBus[]>([]);
+  const [upcoming, setUpcoming] = useState<BusEntry[]>([]);
+  const [past, setPast] = useState<BusEntry[]>([]);
   const [loading, setLoading] = useState(false);
-  const [hasFetched, setHasFetched] = useState(false);
 
-  // ── Fetch ─────────────────────────────────────────────────────────────────
+  const calloutOpenRef = useRef(false);
+  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const stopPolling = useCallback(() => {
+    if (pollingRef.current !== null) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, []);
+
   const fetchUpcoming = useCallback(async () => {
     setLoading(true);
 
-    // 5-minute lookback so buses already arriving at the stop aren't excluded
-    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
+    const now = Math.floor(Date.now() / 1000);
+    const fifteenMinAgo = now - 900;
+    const fiveMinAgo = now - 300;
 
     const { data: rawStus } = await supabase
       .from("stop_time_updates")
       .select("*")
       .eq("stop_id", String(teleride_number))
-      .gte("arrival_time", fiveMinAgo)
-      .order("arrival_time", { ascending: true })
-      .limit(5);
+      .neq("schedule_relationship", "NO_DATA")
+      .limit(50);
+
     const stus = rawStus as StopTimeUpdate[] | null;
 
     if (!stus?.length) {
       setUpcoming([]);
+      setPast([]);
       setLoading(false);
-      setHasFetched(true);
       return;
     }
 
+    // Join trip_updates to resolve route_id (bus number)
     const { data: rawTrips } = await supabase
       .from("trip_updates")
-      .select("*")
+      .select("trip_id, route_id")
       .in(
         "trip_id",
-        stus.map((s) => s.trip_id)
+        stus.map((s) => s.trip_id),
       );
-    const trips = rawTrips as TripUpdate[] | null;
+    const trips = rawTrips as Pick<TripUpdate, "trip_id" | "route_id">[] | null;
+    const routeMap = new Map(trips?.map((t) => [t.trip_id, t.route_id]) ?? []);
 
-    const routeMap = new Map(
-      trips?.map((t) => [t.trip_id, t.route_id]) ?? []
-    );
+    const upcomingEntries: BusEntry[] = [];
+    const pastEntries: BusEntry[] = [];
 
-    setUpcoming(
-      stus
-        .filter((s) => s.arrival_time != null)
-        .map((s) => ({
-          trip_id: s.trip_id,
-          route_id: routeMap.get(s.trip_id) ?? "—",
-          arrival_time: s.arrival_time as number,
-          arrival_delay: s.arrival_delay,
-        }))
-    );
+    for (const s of stus) {
+      const arr = s.arrival_time;
+      const dep = s.departure_time;
+
+      const entry: BusEntry = {
+        key: `${s.trip_id}-${s.stop_sequence}`,
+        route_id: routeMap.get(s.trip_id) ?? "—",
+        arrival_time: arr,
+        departure_time: dep,
+        arrival_delay: s.arrival_delay,
+        departure_delay: s.departure_delay,
+      };
+
+      if (isValidEpoch(arr) && arr > fiveMinAgo) {
+        // Upcoming: bus not yet arrived, within 5-min lookback
+        upcomingEntries.push(entry);
+      } else if (arr === -1) {
+        if (isValidEpoch(dep) && dep >= now) {
+          // At stop: arrived, departure still in future
+          upcomingEntries.push(entry);
+        } else if (isValidEpoch(dep) && dep >= fifteenMinAgo) {
+          // Recently departed (valid epoch, within 15 min)
+          pastEntries.push(entry);
+        } else if (dep === -1) {
+          // Fully past: arrival=-1, departure=-1
+          pastEntries.push(entry);
+        }
+      }
+    }
+
+    // Sort upcoming ascending by soonest relevant time
+    upcomingEntries.sort((a, b) => {
+      const tA = isValidEpoch(a.arrival_time)
+        ? a.arrival_time
+        : isValidEpoch(a.departure_time)
+          ? a.departure_time
+          : Infinity;
+      const tB = isValidEpoch(b.arrival_time)
+        ? b.arrival_time
+        : isValidEpoch(b.departure_time)
+          ? b.departure_time
+          : Infinity;
+      return tA - tB;
+    });
+
+    // Sort past descending (most recently departed first), cap at 5
+    pastEntries.sort((a, b) => {
+      const tA = isValidEpoch(a.departure_time) ? a.departure_time : 0;
+      const tB = isValidEpoch(b.departure_time) ? b.departure_time : 0;
+      return tB - tA;
+    });
+
+    setUpcoming(upcomingEntries);
+    setPast(pastEntries.slice(0, 5));
     setLoading(false);
-    setHasFetched(true);
   }, [teleride_number]);
 
-  // 30s refresh — starts after the first press opens the callout
-  useEffect(() => {
-    if (!hasFetched) return;
-    const id = setInterval(fetchUpcoming, 30_000);
-    return () => clearInterval(id);
-  }, [hasFetched, fetchUpcoming]);
+  // Clean up interval on unmount
+  useEffect(() => () => stopPolling(), [stopPolling]);
 
   if (!coordinate) return null;
+
+  const isEmpty = !loading && upcoming.length === 0 && past.length === 0;
 
   return (
     <Marker
       coordinate={coordinate}
       anchor={{ x: 0.5, y: 0.5 }}
-      // Permanent false — the dot never changes visually. Setting this to true
-      // (even briefly) re-creates the native marker view and dismisses any open
-      // callout, which is the root cause of the auto-close bug.
       tracksViewChanges={false}
-      onPress={fetchUpcoming}
+      onPress={() => {
+        calloutOpenRef.current = true;
+        fetchUpcoming();
+        if (pollingRef.current === null) {
+          pollingRef.current = setInterval(fetchUpcoming, 30_000);
+        }
+      }}
+      onDeselect={() => {
+        calloutOpenRef.current = false;
+        stopPolling();
+      }}
     >
       <View style={s.dot} />
 
@@ -152,8 +290,8 @@ function StopMarkerComponent({
               color={theme.colors.primary}
               style={s.loader}
             />
-          ) : upcoming.length === 0 ? (
-            <Text style={s.empty}>No upcoming buses</Text>
+          ) : isEmpty ? (
+            <Text style={s.empty}>No service data</Text>
           ) : (
             <ScrollView
               style={s.scroll}
@@ -161,22 +299,24 @@ function StopMarkerComponent({
               showsVerticalScrollIndicator={false}
               onStartShouldSetResponder={() => true}
             >
-              {upcoming.map((bus) => {
-                const delay = fmtDelay(bus.arrival_delay);
-                return (
-                  <View key={`${bus.trip_id}-${bus.arrival_time}`} style={s.busRow}>
-                    <View style={s.routeBadge}>
-                      <Text style={s.routeLabel}>Bus {bus.route_id}</Text>
-                    </View>
-                    <Text style={s.arrivalTime}>
-                      {fmtEpoch(bus.arrival_time)}
-                    </Text>
-                    <Text style={[s.delayLabel, delay.late && s.late]}>
-                      {delay.label}
-                    </Text>
-                  </View>
-                );
-              })}
+              {upcoming.length > 0 && (
+                <>
+                  <Text style={s.sectionLabel}>Upcoming</Text>
+                  {upcoming.map((bus) => (
+                    <BusRow key={bus.key} bus={bus} dimmed={false} />
+                  ))}
+                </>
+              )}
+
+              {past.length > 0 && (
+                <>
+                  {upcoming.length > 0 && <View style={s.sectionDivider} />}
+                  <Text style={s.sectionLabel}>Past</Text>
+                  {past.map((bus) => (
+                    <BusRow key={bus.key} bus={bus} dimmed />
+                  ))}
+                </>
+              )}
             </ScrollView>
           )}
         </View>
@@ -198,11 +338,13 @@ const s = StyleSheet.create({
     borderWidth: 2,
     borderColor: "white",
   },
+
+  // ── Callout shell ──
   callout: {
-    width: 260,
+    width: 282,
     padding: 12,
     backgroundColor: "white",
-    borderRadius: 12,
+    borderRadius: 14,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
@@ -218,53 +360,94 @@ const s = StyleSheet.create({
   calloutSub: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
-    marginBottom: 10,
+    marginBottom: 8,
   },
-  loader: {
-    marginVertical: 12,
-  },
+  loader: { marginVertical: 12 },
   empty: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
     textAlign: "center",
     paddingVertical: 8,
   },
-  scroll: {
-    maxHeight: 200,
+  scroll: { maxHeight: 220 },
+
+  // ── Section labels ──
+  sectionLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: theme.colors.text,
+    textTransform: "uppercase",
+    letterSpacing: 0.8,
+    marginBottom: 4,
+    marginTop: 2,
   },
+  sectionDivider: {
+    height: 1,
+    backgroundColor: theme.colors.muted,
+    marginVertical: 8,
+  },
+
+  // ── Bus row ──
   busRow: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
-    paddingVertical: 7,
+    gap: 7,
+    paddingVertical: 6,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },
+  busRowDimmed: { opacity: 0.55 },
+
   routeBadge: {
     backgroundColor: theme.colors.primary,
-    paddingHorizontal: 7,
+    paddingHorizontal: 6,
     paddingVertical: 3,
     borderRadius: 6,
-    minWidth: 60,
+    minWidth: 46,
     alignItems: "center",
+    flexShrink: 0,
   },
+  routeBadgeDimmed: { backgroundColor: theme.colors.text },
   routeLabel: {
     fontSize: 11,
     fontWeight: "700",
     color: "white",
   },
-  arrivalTime: {
+  routeLabelDimmed: { color: "white" },
+
+  timeBlock: {
     flex: 1,
-    fontSize: theme.fontSize.caption,
+    gap: 1,
+  },
+  timePrimary: {
+    fontSize: 11,
     fontWeight: "600",
     color: "#1A1C1F",
   },
-  delayLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#2E7D32",
+  timeSecondary: {
+    fontSize: 10,
+    fontWeight: "500",
+    color: theme.colors.text,
   },
-  late: {
-    color: theme.colors.error,
+  timeDimmed: { color: theme.colors.text },
+
+  delayLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    flexShrink: 0,
+    textAlign: "right",
+  },
+
+  pastPill: {
+    backgroundColor: theme.colors.muted,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+    flexShrink: 0,
+  },
+  pastPillText: {
+    fontSize: 10,
+    fontWeight: "600",
+    color: theme.colors.text,
   },
 });
