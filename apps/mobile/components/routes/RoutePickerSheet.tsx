@@ -129,10 +129,12 @@ const chipStyles = StyleSheet.create({
 function RouteCard({
   route,
   index,
+  isSelected,
   onSelect,
 }: {
   route: Route;
   index: number;
+  isSelected: boolean;
   onSelect: () => void;
 }) {
   const allSteps = route.legs.flatMap((l) => l.steps);
@@ -140,7 +142,7 @@ function RouteCard({
 
   return (
     <TouchableOpacity
-      style={[styles.card, isFastest && styles.cardFeatured]}
+      style={[styles.card, isSelected && styles.cardSelected]}
       onPress={onSelect}
       activeOpacity={0.85}
     >
@@ -152,7 +154,7 @@ function RouteCard({
 
       <View style={styles.cardHeader}>
         <Text
-          style={[styles.duration, isFastest && { color: theme.colors.primary }]}
+          style={[styles.duration, isSelected && { color: theme.colors.primary }]}
         >
           {formatDuration(route.duration)}
         </Text>
@@ -170,10 +172,11 @@ function RouteCard({
 
 interface Props {
   routes: Route[];
+  selectedRoute?: Route | null;
   onSelectRoute: (route: Route) => void;
 }
 
-export function RoutePickerSheet({ routes, onSelectRoute }: Props) {
+export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -193,6 +196,7 @@ export function RoutePickerSheet({ routes, onSelectRoute }: Props) {
             key={i}
             route={route}
             index={i}
+            isSelected={route === selectedRoute}
             onSelect={() => onSelectRoute(route)}
           />
         ))}
@@ -238,12 +242,14 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: theme.colors.border,
   },
-  cardFeatured: {
+  cardSelected: {
     borderColor: theme.colors.primary,
+    borderWidth: 2,
     shadowColor: theme.colors.primary,
-    shadowOpacity: 0.12,
+    shadowOpacity: 0.15,
     shadowRadius: 12,
     elevation: 4,
+    backgroundColor: "#F5F8FF",
   },
   fastestBadge: {
     alignSelf: "flex-start",

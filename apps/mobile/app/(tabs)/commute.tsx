@@ -21,6 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
+import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { theme } from "@/styles/theme";
 import { routeStore } from "@/lib/routeStore";
@@ -232,6 +233,7 @@ function StopItem({ stop }: { stop: CommuteStop }) {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function CommuteScreen() {
+  const router = useRouter();
   const [crowdAnswer, setCrowdAnswer] = useState<CrowdAnswer>(null);
   const mapRef = useRef<MapView>(null);
 
@@ -266,8 +268,9 @@ export default function CommuteScreen() {
       const storedDest = routeStore.getDestination();
       const storedOrigin = routeStore.getOrigin();
 
+      // Always set — null here means clearJourney was called, showing empty state
+      setRoute(storedRoute);
       if (storedRoute) {
-        setRoute(storedRoute);
         setCurrentStopIndex(1);
         setCrowdAnswer(null);
       }
@@ -573,6 +576,12 @@ export default function CommuteScreen() {
 
   const trackDoneHeight = Math.max(0, currentStopIndex * 50);
 
+  // ── Exit journey ─────────────────────────────────────────────────────────────
+  const handleExit = useCallback(() => {
+    routeStore.clearJourney();
+    router.navigate("/(tabs)/routes" as never);
+  }, [router]);
+
   // ── Empty state ───────────────────────────────────────────────────────────────
   if (!route) {
     return (
@@ -593,7 +602,7 @@ export default function CommuteScreen() {
       <ScrollView
         style={styles.container}
         showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 24 }}
+        contentContainerStyle={{ paddingBottom: 100 }}
       >
         {/* ── Live Map ── */}
         <View style={styles.mapContainer}>
@@ -895,6 +904,18 @@ export default function CommuteScreen() {
           </View>
         </View>
       </ScrollView>
+
+      {/* ── End Journey bar ── */}
+      <View style={styles.exitBar}>
+        <TouchableOpacity
+          style={styles.exitBtn}
+          onPress={handleExit}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="stop-circle-outline" size={20} color="white" />
+          <Text style={styles.exitBtnText}>End Journey</Text>
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -1277,6 +1298,35 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.subtitle,
     fontWeight: "700",
     color: theme.colors.selected,
+  },
+
+  // ── Exit bar ──
+  exitBar: {
+    backgroundColor: "#F9F9FE",
+    paddingHorizontal: theme.spacing.screen,
+    paddingTop: 12,
+    paddingBottom: 16,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E2E7",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 8,
+  },
+  exitBtn: {
+    backgroundColor: "#BA1A1A",
+    borderRadius: 16,
+    paddingVertical: 16,
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 10,
+  },
+  exitBtnText: {
+    fontSize: theme.fontSize.subtitle,
+    fontWeight: "700",
+    color: "white",
   },
 
   // ── Stats ──

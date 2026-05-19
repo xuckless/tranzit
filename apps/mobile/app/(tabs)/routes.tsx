@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import AntDesign from "@expo/vector-icons/AntDesign";
 import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
 import * as Location from "expo-location";
 import { theme } from "@/styles/theme";
 import { TranzitApiService } from "@/services/TranzitApiService";
@@ -109,6 +110,34 @@ export default function RouteScreen() {
     })();
   }, []);
 
+  // ── Restore cached routes when local state is empty (e.g. after exit from commute) ──
+  useFocusEffect(
+    useCallback(() => {
+      if (routes.length > 0) return;
+      const cached = routeStore.getRoutes();
+      if (cached.length === 0) return;
+
+      setRoutes(cached);
+      const cachedSelected = routeStore.getSelectedRoute() ?? cached[0] ?? null;
+      setSelectedRoute(cachedSelected);
+
+      const cachedDest = routeStore.getDestination();
+      const cachedOrigin = routeStore.getOrigin();
+      if (cachedDest) {
+        setDestinationLabel(cachedDest.label);
+        setDestination({
+          lat: cachedDest.lat,
+          lng: cachedDest.lng,
+          placeId: cachedDest.placeId,
+        });
+      }
+      if (cachedOrigin) {
+        setOriginLabel(cachedOrigin.label || "Current Location");
+        setOrigin({ lat: cachedOrigin.lat, lng: cachedOrigin.lng, placeId: cachedOrigin.placeId });
+      }
+    }, [routes.length]),
+  );
+
   // ── Init destination from navigation params ──────────────────────────────────
   useEffect(() => {
     if (!destinationId || !destinationLat || !destinationLng || !destNameParam)
@@ -163,8 +192,25 @@ export default function RouteScreen() {
       .then((res) => {
         const fetchedRoutes = res.routes ?? [];
         setRoutes(fetchedRoutes);
-        setSelectedRoute(fetchedRoutes[0] ?? null);
+        const firstRoute = fetchedRoutes[0] ?? null;
+        setSelectedRoute(firstRoute);
         setIsLoadingRoutes(false);
+
+        // Cache for restoration after commute exit
+        routeStore.setRoutes(fetchedRoutes);
+        routeStore.setSelectedRoute(firstRoute);
+        routeStore.setOrigin({
+          label: originLabel,
+          lat: effectiveOrigin.lat,
+          lng: effectiveOrigin.lng,
+          placeId: origin?.placeId,
+        });
+        routeStore.setDestination({
+          label: destinationLabel,
+          lat: destination.lat,
+          lng: destination.lng,
+          placeId: destination.placeId,
+        });
 
         if (fetchedRoutes.length > 0) {
           const fitCoords = [
@@ -349,11 +395,13 @@ export default function RouteScreen() {
       label: destinationLabel,
       lat: destination.lat,
       lng: destination.lng,
+      placeId: destination.placeId,
     });
     routeStore.setOrigin({
       label: originLabel,
       lat: origin.lat,
       lng: origin.lng,
+      placeId: origin.placeId,
     });
     router.navigate("/(tabs)/commute" as never);
   }, [
@@ -680,6 +728,7 @@ export default function RouteScreen() {
                 {filteredRoutes.length > 0 ? (
                   <RoutePickerSheet
                     routes={filteredRoutes}
+                    selectedRoute={selectedRoute}
                     onSelectRoute={(r) => setSelectedRoute(r)}
                   />
                 ) : (

@@ -66,7 +66,7 @@ GET https://tranzit-route-service-000000000000.us-central1.run.app/search?q=Calg
 
 ---
 
-Response JSON Schema
+## 2. Response JSON Schema
 
 The API returns a `200 OK` with an array of matching places. Because we are using a restricted `FieldMask` to save costs, the response only includes the exact fields required for routing and UI display.
 
@@ -84,96 +84,6 @@ If no locations match the query, it returns `404 Not Found`.
       "location": {
         "latitude": "float",
         "longitude": "float"
-      }
-    }
-  ]
-}
-
-```
-
-### 2. Get Place Details
-
-Retrieve exact formatting and location details for a specific `place_id`.
-
-**HTTP Request**
-`POST /details`
-
-**Headers**
-
-* `Content-Type: application/json`
-
-**JSON Body Parameters**
-
-* `place_id` (string, required): The Google Place ID retrieved from `/search`.
-
-**Example Request**
-
-```bash
-curl -X POST "http://localhost:3100/details" \
-     -H "Content-Type: application/json" \
-     -d '{"place_id": "ChIJJzJsi_1vcVMRgZd7NwckWfE"}'
-
-```
-
-**Example Response**
-
-```json
-{
-  "id": "ChIJJzJsi_1vcVMRgZd7NwckWfE",
-  "formattedAddress": "101 9 Ave SW, Calgary, AB T2P 1J9, Canada",
-  "displayName": { "text": "Calgary Tower" },
-  "location": { "latitude": 51.044308, "longitude": -114.063091 }
-}
-
-```
-
----
-
-### 3. Calculate Transit Route
-
-Calculate the best (fastest) 2 transit routes from a user's current coordinates to a destination `place_id`.
-
-**HTTP Request**
-`POST /route`
-
-**Headers**
-
-* `Content-Type: application/json`
-
-**JSON Body Parameters**
-
-* `origin` (object, required): Must contain `lat` and `lng` floats.
-* `destination_id` (string, required): The target Google Place ID.
-
-**Example Request**
-
-```bash
-curl -X POST "http://localhost:3100/route" \
-     -H "Content-Type: application/json" \
-     -d '{
-           "origin": { "lat": 51.0447, "lng": -114.0719 },
-           "destination_id": "ChIJJzJsi_1vcVMRgZd7NwckWfE"
-         }'
-
-```
-
-**Example Response**
-
-```json
-{
-  "routes": [
-    {
-      "distanceMeters": 967,
-      "duration": "397s",
-      "legs": [
-        {
-          "steps": [
-             // Contains WALK and TRANSIT instructions, transit lines, and real-time arrival details
-          ]
-        }
-      ],
-      "polyline": {
-        "encodedPolyline": "itpvHjtfwTE|GQ?OATwSVa[OJgBI?U?TfCFCJBUH}M"
       }
     }
   ]
@@ -354,9 +264,9 @@ EXPO_PUBLIC_SUPABASE_ANON_KEY=...
 import { supabase } from '@/lib/supabase';
 
 const { data } = await supabase
-  .from('vehicle_positions')
-  .select('vehicle_id, latitude, longitude, bearing, speed')
-  .eq('route_id', '3');
+    .from('vehicle_positions')
+    .select('vehicle_id, latitude, longitude, bearing, speed')
+    .eq('route_id', '3');
 // data is typed as Pick<VehiclePosition, 'vehicle_id' | 'latitude' | 'longitude' | 'bearing' | 'speed'>[] | null
 ```
 
