@@ -184,15 +184,32 @@ export default function MapScreen() {
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
   const [vehicles, setVehicles] = useState<VehiclePosition[]>([]);
 
-  // Fetch static stop list once — positions never change between sessions.
+  // Fetch active stops that currently have scheduled arrivals.
+  // The schedule check runs in parallel to avoid two sequential round-trips.
   useEffect(() => {
-    supabase
-      .from("calgary_transit_stops")
-      .select("*")
-      .ilike("status", "active")
-      .then(({ data }) => {
-        if (data) setTransitStops(data as CalgaryTransitStop[]);
-      });
+    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
+    Promise.all([
+      supabase
+        .from("calgary_transit_stops")
+        .select("*")
+        .ilike("status", "active"),
+      supabase
+        .from("stop_time_updates")
+        .select("stop_id")
+        .gte("arrival_time", fiveMinAgo)
+        .limit(5000),
+    ]).then(([{ data: stops }, { data: rawStus }]) => {
+      if (!stops) return;
+      const stus = rawStus as Array<{ stop_id: string | null }> | null;
+      const scheduled = new Set(stus?.map((s) => s.stop_id) ?? []);
+      setTransitStops(
+        (stops as CalgaryTransitStop[]).filter(
+          (s) =>
+            s.teleride_number != null &&
+            scheduled.has(String(s.teleride_number))
+        )
+      );
+    });
   }, []);
 
   // Poll live vehicle positions every 30s.
@@ -229,14 +246,19 @@ export default function MapScreen() {
     () =>
       vehicles
         .filter(
-          (v) => v.latitude != null && v.longitude != null && v.trip_id != null
+          (v) =>
+            v.latitude != null &&
+            v.longitude != null &&
+            v.trip_id != null &&
+            v.route_id != null &&
+            v.route_id !== ""
         )
         .map((v) => (
           <BusMarker
             key={`bus-${v.vehicle_id}`}
             vehicle_id={v.vehicle_id}
             trip_id={v.trip_id!}
-            route_id={v.route_id ?? "—"}
+            route_id={v.route_id!}
             latitude={v.latitude!}
             longitude={v.longitude!}
             bearing={v.bearing ?? 0}

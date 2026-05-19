@@ -13,6 +13,10 @@ import {
   TouchableOpacity,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import { supabase } from "@/lib/supabase";
+import { BusMarker } from "@/components/busViews";
+import { StopMarker } from "@/components/stopViews";
+import type { VehiclePosition, CalgaryTransitStop } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
@@ -245,6 +249,8 @@ export default function CommuteScreen() {
 
   const [rawStops, setRawStops] = useState<CommuteStop[]>([]);
   const [currentStopIndex, setCurrentStopIndex] = useState(1); // start at first transit stop
+  const [routeVehicles, setRouteVehicles] = useState<VehiclePosition[]>([]);
+  const [routeStops, setRouteStops] = useState<CalgaryTransitStop[]>([]);
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
     longitude: number;
@@ -346,6 +352,83 @@ export default function CommuteScreen() {
       setCurrentStopIndex(nextIdx);
     }
   }, [userLocation, rawStops, currentStopIndex]);
+
+  // ── Route IDs extracted from the active route's TRANSIT steps ────────────────
+  const transitRouteIds = useMemo(() => {
+    if (!route) return [];
+    const ids = (route.legs ?? [])
+      .flatMap((l) => l.steps ?? [])
+      .filter((s) => s.travelMode === "TRANSIT")
+      .map(
+        (s) =>
+          s.transitDetails?.transitLine?.nameShort ||
+          s.transitDetails?.transitLine?.name
+      )
+      .filter((id): id is string => Boolean(id));
+    return [...new Set(ids)];
+  }, [route]);
+
+  // ── Fetch live vehicles for the route, poll every 30s ─────────────────────────
+  useEffect(() => {
+    if (transitRouteIds.length === 0) {
+      setRouteVehicles([]);
+      return;
+    }
+
+    const fetchVehicles = () =>
+      supabase
+        .from("vehicle_positions")
+        .select("*")
+        .in("route_id", transitRouteIds)
+        .then(({ data }) => {
+          if (data) setRouteVehicles(data as VehiclePosition[]);
+        });
+
+    fetchVehicles();
+    const id = setInterval(fetchVehicles, 30_000);
+    return () => clearInterval(id);
+  }, [transitRouteIds]);
+
+  // ── Fetch all stops for those trips whenever vehicles update ──────────────────
+  useEffect(() => {
+    if (routeVehicles.length === 0) {
+      setRouteStops([]);
+      return;
+    }
+
+    const tripIds = routeVehicles
+      .map((v) => v.trip_id)
+      .filter((id): id is string => Boolean(id));
+    if (tripIds.length === 0) return;
+
+    const now = Math.floor(Date.now() / 1000);
+
+    supabase
+      .from("stop_time_updates")
+      .select("stop_id")
+      .in("trip_id", tripIds)
+      .gte("arrival_time", now)
+      .limit(500)
+      .then(async ({ data: rawStus }) => {
+        const stus = rawStus as Array<{ stop_id: string | null }> | null;
+        if (!stus?.length) return;
+
+        const stopIds = [
+          ...new Set(
+            stus
+              .map((s) => parseInt(s.stop_id ?? "", 10))
+              .filter((n) => !isNaN(n))
+          ),
+        ];
+
+        const { data: stops } = await supabase
+          .from("calgary_transit_stops")
+          .select("*")
+          .in("teleride_number", stopIds);
+
+        if (stops) setRouteStops(stops as CalgaryTransitStop[]);
+      });
+  }, [routeVehicles]);
 
   // ── Fit map to route ──────────────────────────────────────────────────────────
   useEffect(() => {
@@ -555,6 +638,39 @@ export default function CommuteScreen() {
                 </Marker>
               );
             })}
+
+            {/* All transit stops along the active route's trips */}
+            {routeStops
+              .filter((s) => s.point != null && s.teleride_number != null)
+              .map((s) => (
+                <StopMarker
+                  key={`commute-stop-${s.teleride_number}`}
+                  teleride_number={s.teleride_number!}
+                  stop_name={s.stop_name ?? "Unknown Stop"}
+                  point={s.point!}
+                />
+              ))}
+
+            {/* Live buses currently on the active route */}
+            {routeVehicles
+              .filter(
+                (v) =>
+                  v.latitude != null &&
+                  v.longitude != null &&
+                  v.trip_id != null &&
+                  v.route_id != null
+              )
+              .map((v) => (
+                <BusMarker
+                  key={`commute-bus-${v.vehicle_id}`}
+                  vehicle_id={v.vehicle_id}
+                  trip_id={v.trip_id!}
+                  route_id={v.route_id!}
+                  latitude={v.latitude!}
+                  longitude={v.longitude!}
+                  bearing={v.bearing ?? 0}
+                />
+              ))}
           </MapView>
 
           <View style={styles.liveBadge}>

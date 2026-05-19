@@ -149,36 +149,28 @@ function BusMarkerComponent({
       }}
     >
       {/*
-        Arrow rotated inside SVG so the route label stays upright.
-        tracksViewChanges is briefly enabled only when bearing changes AND
-        the callout is closed — this is what keeps the callout stable.
+        Three absolute layers so only the arrow rotates while the circle
+        and route label stay upright. tracksViewChanges briefly flips true
+        on bearing change so the native marker image regenerates.
       */}
-      <Svg width={36} height={36} viewBox="0 0 36 36">
-        <SvgCircle
-          cx="18"
-          cy="18"
-          r="16"
-          fill="#0058BC"
-          stroke="white"
-          strokeWidth="2"
-        />
-        <Path
-          d="M18 4 L13 15 L18 12 L23 15 Z"
-          fill="white"
-          opacity={0.9}
-          transform={`rotate(${bearing}, 18, 18)`}
-        />
-        <SvgText
-          x="18"
-          y="26"
-          textAnchor="middle"
-          fill="white"
-          fontSize="9"
-          fontWeight="bold"
-        >
-          {route_id}
-        </SvgText>
-      </Svg>
+      <View style={s.markerContainer}>
+        {/* Background circle */}
+        <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
+          <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
+        </Svg>
+        {/* Directional arrow — rotates with bearing */}
+        <View style={[StyleSheet.absoluteFill, { transform: [{ rotate: `${bearing}deg` }] }]}>
+          <Svg width={36} height={36} viewBox="0 0 36 36">
+            <Path d="M18 4 L13 15 L18 12 L23 15 Z" fill="white" opacity={0.9} />
+          </Svg>
+        </View>
+        {/* Route label — always upright */}
+        <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
+          <SvgText x="18" y="26" textAnchor="middle" fill="white" fontSize="9" fontWeight="bold">
+            {route_id}
+          </SvgText>
+        </Svg>
+      </View>
 
       <Callout tooltip>
         <View style={s.callout}>
@@ -246,6 +238,10 @@ export const BusMarker = memo(BusMarkerComponent);
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
+  markerContainer: {
+    width: 36,
+    height: 36,
+  },
   callout: {
     width: 270,
     padding: 13,
