@@ -283,30 +283,31 @@ export default function MapScreen() {
       ));
   }, [transitStops, mapRegion]);
 
-  const busMarkers = useMemo(
-    () =>
-      vehicles
-        .filter(
-          (v) =>
-            v.latitude != null &&
-            v.longitude != null &&
-            v.trip_id != null &&
-            v.route_id != null &&
-            v.route_id !== ""
-        )
-        .map((v) => (
-          <BusMarker
-            key={`bus-${v.vehicle_id}`}
-            vehicle_id={v.vehicle_id}
-            trip_id={v.trip_id!}
-            route_id={v.route_id!}
-            latitude={v.latitude!}
-            longitude={v.longitude!}
-            bearing={v.bearing ?? 0}
-          />
-        )),
-    [vehicles]
-  );
+  // Bus markers: same Fabric interop crash can happen if 200+ vehicles mount at once.
+  // Gate on mapRegion too — defer all markers until the map has settled.
+  const busMarkers = useMemo(() => {
+    if (!mapRegion) return [];
+    return vehicles
+      .filter(
+        (v) =>
+          v.latitude != null &&
+          v.longitude != null &&
+          v.trip_id != null &&
+          v.route_id != null &&
+          v.route_id !== ""
+      )
+      .map((v) => (
+        <BusMarker
+          key={`bus-${v.vehicle_id}`}
+          vehicle_id={v.vehicle_id}
+          trip_id={v.trip_id!}
+          route_id={v.route_id!}
+          latitude={v.latitude!}
+          longitude={v.longitude!}
+          bearing={v.bearing ?? 0}
+        />
+      ));
+  }, [vehicles, mapRegion]);
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
