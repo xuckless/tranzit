@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
 import { StopMarker, parseWKTPoint } from "@/components/stopViews";
-import { BusMarker } from "@/components/busViews";
+import { PooledBusMarker } from "@/components/busViews";
 import type { SelectedDestination } from "@/types/places";
 import type { CalgaryTransitStop, VehiclePosition } from "@/types/database";
 import MapView, { Marker, Region } from "react-native-maps";
@@ -45,6 +45,11 @@ const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
 const SNAP_EXPANDED = SCREEN_HEIGHT * 0.62;
 const DELTA = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
+
+// Fixed pool of bus marker slots — count NEVER changes after first mount.
+// Active vehicles fill slots; idle slots park at DUMMY_COORD with opacity=0.
+// This prevents AIRMap insertReactSubview:atIndex: crashes from vehicle churn.
+const BUS_POOL_SIZE = 200;
 
 // Hardcoded — this is a deployed service URL, not a secret.
 // Do not move to env: EXPO_PUBLIC_ vars are bundled into the binary and
@@ -244,7 +249,7 @@ export default function MapScreen() {
     });
   }, []);
 
-  // Poll live vehicle positions every 30s.
+  // Poll live vehicle positions every 60s (halved from 30s to reduce CPU/network load).
   useEffect(() => {
     const fetchVehicles = () =>
       supabase
@@ -254,7 +259,7 @@ export default function MapScreen() {
           if (data) setVehicles(data as VehiclePosition[]);
         });
     fetchVehicles();
-    const id = setInterval(fetchVehicles, 30_000);
+    const id = setInterval(fetchVehicles, 60_000);
     return () => clearInterval(id);
   }, []);
 
@@ -290,31 +295,26 @@ export default function MapScreen() {
       ));
   }, [stopsEnabled, transitStops]);
 
-  // Bus markers: gated on busesEnabled (200 ms after stops) so the two arrays
-  // don't mount in the same commit frame. No mapRegion viewport filter — same
-  // reason as stops: removing/re-adding on pan causes the AIRMap index crash.
-  const busMarkers = useMemo(() => {
+  // Fixed-size pool of bus marker slots — always BUS_POOL_SIZE elements, always.
+  // When vehicles update, active buses fill the front slots; remaining slots get
+  // vehicle=null (invisible, parked at dummy coord). React only updates PROPS —
+  // never inserts or removes — so AIRMap's native array stays perfectly in sync.
+  const busPool = useMemo(() => {
     if (!busesEnabled) return [];
-    return vehicles
-      .filter(
-        (v) =>
-          v.latitude != null &&
-          v.longitude != null &&
-          v.trip_id != null &&
-          v.route_id != null &&
-          v.route_id !== ""
-      )
-      .map((v) => (
-        <BusMarker
-          key={`bus-${v.vehicle_id}`}
-          vehicle_id={v.vehicle_id}
-          trip_id={v.trip_id!}
-          route_id={v.route_id!}
-          latitude={v.latitude!}
-          longitude={v.longitude!}
-          bearing={v.bearing ?? 0}
-        />
-      ));
+    const active = vehicles.filter(
+      (v) =>
+        v.latitude != null &&
+        v.longitude != null &&
+        v.trip_id != null &&
+        v.route_id != null &&
+        v.route_id !== "",
+    );
+    return Array.from({ length: BUS_POOL_SIZE }, (_, i) => (
+      <PooledBusMarker
+        key={`bus-slot-${i}`}
+        vehicle={active[i] ?? null}
+      />
+    ));
   }, [busesEnabled, vehicles]);
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
@@ -663,8 +663,8 @@ export default function MapScreen() {
         {/* Transit stops — static, loaded once from calgary_transit_stops */}
         {stopMarkers}
 
-        {/* Live buses — polled every 30s from vehicle_positions */}
-        {busMarkers}
+        {/* Live buses — polled every 60s, fixed pool so count never changes */}
+        {busPool}
       </MapView>
 
       {/* Re-center button */}

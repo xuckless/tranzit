@@ -7,6 +7,7 @@ import type {
   StopTimeUpdate,
   CalgaryTransitRoute,
   CalgaryTransitStop,
+  VehiclePosition,
 } from "@/types/database";
 import { theme } from "@/styles/theme";
 
@@ -29,50 +30,70 @@ interface TripStop {
   passed: boolean;
 }
 
-export interface BusMarkerProps {
-  vehicle_id: string;
-  trip_id: string;
-  route_id: string;
-  latitude: number;
-  longitude: number;
-  bearing: number;
+export interface PooledBusMarkerProps {
+  vehicle: VehiclePosition | null;
 }
+
+// Inactive slots park here — off-screen enough to never clutter the map,
+// but a valid coordinate so the native layer doesn't choke.
+const DUMMY_COORD = { latitude: 51.070664, longitude: -114.059263 };
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-function BusMarkerComponent({
-  vehicle_id: _vehicle_id,
-  trip_id,
-  route_id,
-  latitude,
-  longitude,
-  bearing,
-}: BusMarkerProps) {
+function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
   const [loading, setLoading] = useState(false);
+  // tracksViewChanges is only briefly true when bearing changes so the arrow redraws.
+  const [tracksViewChanges, setTracksViewChanges] = useState(false);
 
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // tracksViewChanges starts false. Setting it to true (even briefly) re-creates
-  // the native marker view and dismisses any open callout. We only flip it to
-  // update the SVG bearing arrow, and only when the callout is NOT open.
-  const [tracksViewChanges, setTracksViewChanges] = useState(false);
-  const prevBearingRef = useRef(bearing);
   const calloutOpenRef = useRef(false);
+  const prevBearingRef = useRef(vehicle?.bearing ?? 0);
 
+  const vehicleId = vehicle?.vehicle_id ?? null;
+  const tripId    = vehicle?.trip_id    ?? null;
+  const routeId   = vehicle?.route_id   ?? null;
+  const bearing   = vehicle?.bearing    ?? 0;
+  const latitude  = vehicle?.latitude   ?? DUMMY_COORD.latitude;
+  const longitude = vehicle?.longitude  ?? DUMMY_COORD.longitude;
+
+  // When this slot is reassigned to a different vehicle, wipe stale state
+  // and stop any open polling so the old trip data doesn't bleed through.
   useEffect(() => {
-    // Skip update if callout is showing — avoids dismissing it
-    if (calloutOpenRef.current) return;
+    setTripStops([]);
+    setRouteName("");
+    setLoading(false);
+    calloutOpenRef.current = false;
+    if (pollingRef.current !== null) {
+      clearInterval(pollingRef.current);
+      pollingRef.current = null;
+    }
+  }, [vehicleId]);
+
+  // Briefly flip tracksViewChanges to let the native layer re-snapshot
+  // the bearing arrow — only when the callout is not open (re-snapshotting
+  // while the callout is open forces it to close).
+  useEffect(() => {
+    if (!vehicle || calloutOpenRef.current) return;
     if (prevBearingRef.current === bearing) return;
     prevBearingRef.current = bearing;
     setTracksViewChanges(true);
     const t = setTimeout(() => setTracksViewChanges(false), 150);
     return () => clearTimeout(t);
-  }, [bearing]);
+  }, [bearing, vehicle]);
 
-  // ── Fetch ─────────────────────────────────────────────────────────────────
+  // Stop polling on unmount
+  useEffect(
+    () => () => {
+      if (pollingRef.current !== null) clearInterval(pollingRef.current);
+    },
+    [],
+  );
+
+  // ── Trip fetch ────────────────────────────────────────────────────────────
   const fetchTripDetails = useCallback(async () => {
+    if (!tripId || !routeId) return;
     setLoading(true);
     const now = Math.floor(Date.now() / 1000);
 
@@ -80,17 +101,17 @@ function BusMarkerComponent({
       supabase
         .from("stop_time_updates")
         .select("*")
-        .eq("trip_id", trip_id)
+        .eq("trip_id", tripId)
         .order("stop_sequence"),
       supabase
         .from("calgary_transit_routes")
         .select("*")
-        .eq("route_short_name", route_id)
+        .eq("route_short_name", routeId)
         .limit(1)
         .maybeSingle(),
     ]);
     const stopTimes = rawStopTimes as StopTimeUpdate[] | null;
-    const routeRow = rawRouteRow as CalgaryTransitRoute | null;
+    const routeRow  = rawRouteRow  as CalgaryTransitRoute | null;
 
     if (routeRow?.route_long_name) setRouteName(routeRow.route_long_name);
 
@@ -99,7 +120,6 @@ function BusMarkerComponent({
       return;
     }
 
-    // stop_id TEXT → calgary_transit_stops.teleride_number INTEGER
     const numericIds = stopTimes
       .map((s) => parseInt(s.stop_id ?? "", 10))
       .filter((n) => !isNaN(n));
@@ -111,38 +131,39 @@ function BusMarkerComponent({
     const stopRows = rawStopRows as CalgaryTransitStop[] | null;
 
     const nameMap = new Map(
-      stopRows?.map((r) => [String(r.teleride_number), r.stop_name]) ?? []
+      stopRows?.map((r) => [String(r.teleride_number), r.stop_name]) ?? [],
     );
 
     setTripStops(
       stopTimes.map((s) => ({
         stop_sequence: s.stop_sequence,
-        stop_id: s.stop_id ?? "",
-        stop_name: nameMap.get(s.stop_id ?? "") ?? `Stop ${s.stop_id}`,
-        arrival_time: s.arrival_time ?? 0,
-        passed: (s.arrival_time ?? 0) < now,
-      }))
+        stop_id:       s.stop_id ?? "",
+        stop_name:     nameMap.get(s.stop_id ?? "") ?? `Stop ${s.stop_id}`,
+        arrival_time:  s.arrival_time ?? 0,
+        passed:        (s.arrival_time ?? 0) < now,
+      })),
     );
     setLoading(false);
-  }, [trip_id, route_id]);
+  }, [tripId, routeId]);
 
-  // Clean up polling on unmount
-  useEffect(() => () => {
-    if (pollingRef.current !== null) clearInterval(pollingRef.current);
-  }, []);
-
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Marker
       coordinate={{ latitude, longitude }}
       anchor={{ x: 0.5, y: 0.5 }}
       tracksViewChanges={tracksViewChanges}
-      onPress={() => {
-        calloutOpenRef.current = true;
-        fetchTripDetails();
-        if (pollingRef.current === null) {
-          pollingRef.current = setInterval(fetchTripDetails, 30_000);
-        }
-      }}
+      opacity={vehicle ? 1 : 0}
+      onPress={
+        vehicle
+          ? () => {
+              calloutOpenRef.current = true;
+              fetchTripDetails();
+              if (pollingRef.current === null) {
+                pollingRef.current = setInterval(fetchTripDetails, 60_000);
+              }
+            }
+          : undefined
+      }
       onDeselect={() => {
         calloutOpenRef.current = false;
         if (pollingRef.current !== null) {
@@ -151,92 +172,107 @@ function BusMarkerComponent({
         }
       }}
     >
-      {/*
-        Three absolute layers so only the arrow rotates while the circle
-        and route label stay upright. tracksViewChanges briefly flips true
-        on bearing change so the native marker image regenerates.
-      */}
+      {/* Three layered SVGs so arrow rotates while route label stays upright */}
       <View style={s.markerContainer}>
-        {/* Background circle */}
         <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
           <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
         </Svg>
-        {/* Directional arrow — rotates with bearing */}
-        <View style={[StyleSheet.absoluteFill, { transform: [{ rotate: `${bearing}deg` }] }]}>
+        <View
+          style={[
+            StyleSheet.absoluteFill,
+            { transform: [{ rotate: `${bearing}deg` }] },
+          ]}
+        >
           <Svg width={36} height={36} viewBox="0 0 36 36">
             <Path d="M18 4 L13 15 L18 12 L23 15 Z" fill="white" opacity={0.9} />
           </Svg>
         </View>
-        {/* Route label — always upright */}
         <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
-          <SvgText x="18" y="26" textAnchor="middle" fill="white" fontSize="9" fontWeight="bold">
-            {route_id}
+          <SvgText
+            x="18"
+            y="26"
+            textAnchor="middle"
+            fill="white"
+            fontSize="9"
+            fontWeight="bold"
+          >
+            {routeId ?? ""}
           </SvgText>
         </Svg>
       </View>
 
+      {/*
+        Callout is ALWAYS present as a child of this Marker — removing it would
+        change the Marker's child count and risk another AIRMap index crash.
+        For inactive slots the callout body is a zero-size view.
+      */}
       <Callout tooltip>
-        <View style={s.callout}>
-          <Text style={s.calloutTitle}>Bus {route_id}</Text>
-          {routeName ? (
-            <Text style={s.destination} numberOfLines={1}>
-              {routeName}
-            </Text>
-          ) : null}
+        {vehicle ? (
+          <View style={s.callout}>
+            <Text style={s.calloutTitle}>Bus {routeId}</Text>
+            {routeName ? (
+              <Text style={s.destination} numberOfLines={1}>
+                {routeName}
+              </Text>
+            ) : null}
 
-          {loading ? (
-            <ActivityIndicator
-              size="small"
-              color={theme.colors.primary}
-              style={s.loader}
-            />
-          ) : tripStops.length === 0 ? (
-            <Text style={s.empty}>No schedule data</Text>
-          ) : (
-            <ScrollView
-              style={s.scroll}
-              nestedScrollEnabled
-              showsVerticalScrollIndicator={false}
-              onStartShouldSetResponder={() => true}
-            >
-              {tripStops.map((stop) => (
-                <View
-                  key={stop.stop_sequence}
-                  style={[s.stopRow, stop.passed && s.stopRowPassed]}
-                >
+            {loading ? (
+              <ActivityIndicator
+                size="small"
+                color={theme.colors.primary}
+                style={s.loader}
+              />
+            ) : tripStops.length === 0 ? (
+              <Text style={s.empty}>No schedule data</Text>
+            ) : (
+              <ScrollView
+                style={s.scroll}
+                nestedScrollEnabled
+                showsVerticalScrollIndicator={false}
+                onStartShouldSetResponder={() => true}
+              >
+                {tripStops.map((stop) => (
                   <View
-                    style={[
-                      s.sequenceDot,
-                      stop.passed && s.sequenceDotPassed,
-                    ]}
-                  />
-                  <View style={s.stopInfo}>
-                    <Text
-                      style={[s.stopName, stop.passed && s.passedText]}
-                      numberOfLines={1}
-                    >
-                      {stop.stop_name}
-                    </Text>
-                    <Text style={[s.stopTime, stop.passed && s.passedText]}>
-                      {fmtEpoch(stop.arrival_time)}
-                    </Text>
-                  </View>
-                  {stop.passed && (
-                    <View style={s.passedPill}>
-                      <Text style={s.passedPillText}>Passed</Text>
+                    key={stop.stop_sequence}
+                    style={[s.stopRow, stop.passed && s.stopRowPassed]}
+                  >
+                    <View
+                      style={[
+                        s.sequenceDot,
+                        stop.passed && s.sequenceDotPassed,
+                      ]}
+                    />
+                    <View style={s.stopInfo}>
+                      <Text
+                        style={[s.stopName, stop.passed && s.passedText]}
+                        numberOfLines={1}
+                      >
+                        {stop.stop_name}
+                      </Text>
+                      <Text style={[s.stopTime, stop.passed && s.passedText]}>
+                        {fmtEpoch(stop.arrival_time)}
+                      </Text>
                     </View>
-                  )}
-                </View>
-              ))}
-            </ScrollView>
-          )}
-        </View>
+                    {stop.passed && (
+                      <View style={s.passedPill}>
+                        <Text style={s.passedPillText}>Passed</Text>
+                      </View>
+                    )}
+                  </View>
+                ))}
+              </ScrollView>
+            )}
+          </View>
+        ) : (
+          // Zero-size placeholder keeps the Callout child stable in the tree
+          <View style={{ width: 0, height: 0 }} />
+        )}
       </Callout>
     </Marker>
   );
 }
 
-export const BusMarker = memo(BusMarkerComponent);
+export const PooledBusMarker = memo(PooledBusMarkerComponent);
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
