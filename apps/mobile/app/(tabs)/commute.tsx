@@ -110,8 +110,7 @@ function buildStops(
         name: td.stopDetails.departureStop.name,
         time: td.localizedValues?.departureTime?.time?.text,
         status: "upcoming",
-        coordinate:
-          td.stopDetails.departureStop.location?.latLng ?? undefined,
+        coordinate: td.stopDetails.departureStop.location?.latLng ?? undefined,
         mode: "TRANSIT",
         transitName: lineName,
         transitColor: lineColor,
@@ -123,8 +122,7 @@ function buildStops(
         name: td.stopDetails.arrivalStop.name,
         time: td.localizedValues?.arrivalTime?.time?.text,
         status: "upcoming",
-        coordinate:
-          td.stopDetails.arrivalStop.location?.latLng ?? undefined,
+        coordinate: td.stopDetails.arrivalStop.location?.latLng ?? undefined,
         mode: "TRANSIT",
         transitName: lineName,
         transitColor: lineColor,
@@ -142,7 +140,10 @@ function buildStops(
   return stops;
 }
 
-function applyStatuses(stops: CommuteStop[], currentIdx: number): CommuteStop[] {
+function applyStatuses(
+  stops: CommuteStop[],
+  currentIdx: number,
+): CommuteStop[] {
   return stops.map((s, i) => ({
     ...s,
     // Destination must win — it should never be overwritten by "current"
@@ -184,15 +185,9 @@ function StopItem({ stop }: { stop: CommuteStop }) {
             isCurrent && styles.stopDotCurrentRing,
           ]}
         >
-          {isDeparted && (
-            <Ionicons name="checkmark" size={10} color="white" />
-          )}
+          {isDeparted && <Ionicons name="checkmark" size={10} color="white" />}
           {isDestination && (
-            <Ionicons
-              name="location"
-              size={11}
-              color={theme.colors.selected}
-            />
+            <Ionicons name="location" size={11} color={theme.colors.selected} />
           )}
           {isCurrent && <View style={styles.stopDotCurrentInner} />}
         </View>
@@ -365,7 +360,7 @@ export default function CommuteScreen() {
       .map(
         (s) =>
           s.transitDetails?.transitLine?.nameShort ||
-          s.transitDetails?.transitLine?.name
+          s.transitDetails?.transitLine?.name,
       )
       .filter((id): id is string => Boolean(id));
     return [...new Set(ids)];
@@ -420,7 +415,7 @@ export default function CommuteScreen() {
           ...new Set(
             stus
               .map((s) => parseInt(s.stop_id ?? "", 10))
-              .filter((n) => !isNaN(n))
+              .filter((n) => !isNaN(n)),
           ),
         ];
 
@@ -495,10 +490,20 @@ export default function CommuteScreen() {
     }[] = [];
 
     if (completed.length > 1) {
-      result.push({ coords: completed, color: theme.colors.primary, strokeWidth: 5, isDash: false });
+      result.push({
+        coords: completed,
+        color: theme.colors.primary,
+        strokeWidth: 5,
+        isDash: false,
+      });
     }
     if (remaining.length > 1) {
-      result.push({ coords: remaining, color: lineColor, strokeWidth: 5, isDash: false });
+      result.push({
+        coords: remaining,
+        color: lineColor,
+        strokeWidth: 5,
+        isDash: false,
+      });
     }
     return result;
   }, [route, currentStopIndex, stops]);
@@ -552,13 +557,10 @@ export default function CommuteScreen() {
       .map((s, i) => ({ step: s, i }))
       .filter((x) => x.step.travelMode === "TRANSIT");
 
-    const completedFraction =
-      currentStopIndex / Math.max(1, stops.length - 1);
+    const completedFraction = currentStopIndex / Math.max(1, stops.length - 1);
     const completedStepIdx = Math.floor(completedFraction * allSteps.length);
 
-    const active = transitStepsWithIndex.find(
-      (x) => x.i >= completedStepIdx,
-    );
+    const active = transitStepsWithIndex.find((x) => x.i >= completedStepIdx);
     return active?.step ?? transitStepsWithIndex[0]?.step ?? null;
   }, [route, currentStopIndex, stops.length]);
 
@@ -667,7 +669,7 @@ export default function CommuteScreen() {
                   v.latitude != null &&
                   v.longitude != null &&
                   v.trip_id != null &&
-                  v.route_id != null
+                  v.route_id != null,
               )
               .map((v) => (
                 <BusMarker

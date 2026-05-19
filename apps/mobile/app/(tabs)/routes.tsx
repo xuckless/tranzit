@@ -133,7 +133,11 @@ export default function RouteScreen() {
       }
       if (cachedOrigin) {
         setOriginLabel(cachedOrigin.label || "Current Location");
-        setOrigin({ lat: cachedOrigin.lat, lng: cachedOrigin.lng, placeId: cachedOrigin.placeId });
+        setOrigin({
+          lat: cachedOrigin.lat,
+          lng: cachedOrigin.lng,
+          placeId: cachedOrigin.placeId,
+        });
       }
     }, [routes.length]),
   );
@@ -152,7 +156,9 @@ export default function RouteScreen() {
 
   // ── Abort in-flight route request on unmount ──────────────────────────────────
   useEffect(() => {
-    return () => { routeAbortRef.current?.abort(); };
+    return () => {
+      routeAbortRef.current?.abort();
+    };
   }, []);
 
   // ── Clear routes when destination is removed ──────────────────────────────────
@@ -168,7 +174,10 @@ export default function RouteScreen() {
   // ── Route fetch (manual) ──────────────────────────────────────────────────────
   const handleFindRoutes = useCallback(() => {
     const effectiveOrigin =
-      origin ?? (gpsLocation ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude } : null);
+      origin ??
+      (gpsLocation
+        ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+        : null);
     if (!effectiveOrigin || !destination?.placeId) return;
 
     routeAbortRef.current?.abort();
@@ -227,7 +236,8 @@ export default function RouteScreen() {
       })
       .catch((err: unknown) => {
         if (err instanceof Error && err.name === "AbortError") return;
-        const msg = err instanceof Error ? err.message : "Failed to load routes";
+        const msg =
+          err instanceof Error ? err.message : "Failed to load routes";
         setRouteError(msg);
         setIsLoadingRoutes(false);
       });
