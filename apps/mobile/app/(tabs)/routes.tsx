@@ -121,9 +121,26 @@ export default function RouteScreen() {
     setDestinationLabel(destNameParam);
   }, [destinationId, destinationLat, destinationLng, destNameParam]);
 
-  // ── Route fetch ───────────────────────────────────────────────────────────────
+  // ── Abort in-flight route request on unmount ──────────────────────────────────
   useEffect(() => {
-    if (!origin || !destination?.placeId) return;
+    return () => { routeAbortRef.current?.abort(); };
+  }, []);
+
+  // ── Clear routes when destination is removed ──────────────────────────────────
+  useEffect(() => {
+    if (!destination) {
+      setRoutes([]);
+      setSelectedRoute(null);
+      setRouteError(null);
+      routeAbortRef.current?.abort();
+    }
+  }, [destination]);
+
+  // ── Route fetch (manual) ──────────────────────────────────────────────────────
+  const handleFindRoutes = useCallback(() => {
+    const effectiveOrigin =
+      origin ?? (gpsLocation ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude } : null);
+    if (!effectiveOrigin || !destination?.placeId) return;
 
     routeAbortRef.current?.abort();
     const ctrl = new AbortController();
@@ -133,10 +150,12 @@ export default function RouteScreen() {
     setRouteError(null);
     setRoutes([]);
     setSelectedRoute(null);
+    Keyboard.dismiss();
+    setFocusedField(null);
 
     TranzitApiService.getRoute(
       {
-        origin: { lat: origin.lat, lng: origin.lng },
+        origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
         destination_id: destination.placeId,
       },
       ctrl.signal,
@@ -149,7 +168,7 @@ export default function RouteScreen() {
 
         if (fetchedRoutes.length > 0) {
           const fitCoords = [
-            { latitude: origin.lat, longitude: origin.lng },
+            { latitude: effectiveOrigin.lat, longitude: effectiveOrigin.lng },
             { latitude: destination.lat, longitude: destination.lng },
           ];
           setTimeout(() => {
@@ -162,14 +181,11 @@ export default function RouteScreen() {
       })
       .catch((err: unknown) => {
         if (err instanceof Error && err.name === "AbortError") return;
-        const msg =
-          err instanceof Error ? err.message : "Failed to load routes";
+        const msg = err instanceof Error ? err.message : "Failed to load routes";
         setRouteError(msg);
         setIsLoadingRoutes(false);
       });
-
-    return () => ctrl.abort();
-  }, [origin?.lat, origin?.lng, destination?.placeId]);
+  }, [origin, gpsLocation, destination]);
 
   // ── Polylines ─────────────────────────────────────────────────────────────────
   // The API does not return step-level polylines — only the route-level polyline
@@ -498,6 +514,36 @@ export default function RouteScreen() {
               </TouchableOpacity>
             )}
           </View>
+
+          {/* Find Routes button — only when not in search mode and destination is entered */}
+          {!focusedField && destinationLabel.length > 0 && (
+            <>
+              <View style={styles.searchDivider} />
+              <TouchableOpacity
+                style={[
+                  styles.findRoutesBtn,
+                  !destination?.placeId && styles.findRoutesBtnDisabled,
+                ]}
+                onPress={handleFindRoutes}
+                disabled={!destination?.placeId}
+                activeOpacity={0.8}
+              >
+                <Ionicons
+                  name="search"
+                  size={14}
+                  color={destination?.placeId ? "white" : theme.colors.text}
+                />
+                <Text
+                  style={[
+                    styles.findRoutesBtnText,
+                    !destination?.placeId && styles.findRoutesBtnTextDisabled,
+                  ]}
+                >
+                  Find Routes
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
         </View>
 
         {focusedField && (
@@ -734,6 +780,28 @@ const styles = StyleSheet.create({
     fontSize: theme.fontSize.body,
     fontWeight: "600",
     color: theme.colors.primary,
+  },
+
+  findRoutesBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    backgroundColor: theme.colors.primary,
+    borderRadius: 10,
+    paddingVertical: 9,
+    marginTop: 4,
+  },
+  findRoutesBtnDisabled: {
+    backgroundColor: theme.colors.muted,
+  },
+  findRoutesBtnText: {
+    fontSize: theme.fontSize.body,
+    fontWeight: "700",
+    color: "white",
+  },
+  findRoutesBtnTextDisabled: {
+    color: theme.colors.text,
   },
 
   // ── Search results area ──
