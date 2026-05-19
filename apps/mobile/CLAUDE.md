@@ -345,3 +345,33 @@ const { data } = await supabase
 - Added `handleExit`: calls `routeStore.clearJourney()` then navigates to the Routes tab.
 - Added a fixed "End Journey" bottom bar (always visible, below the `ScrollView`) with a red destructive button wired to `handleExit`.
 - `ScrollView` `paddingBottom` increased to 100 px so the last content item clears the exit bar.
+
+---
+
+## EXC_CRASH / SIGABRT — Diagnosis & Fixes (completed)
+
+**Crash chain:** `[__NSArrayM insertObject:nil atIndex:]` → `[AIRMap insertReactSubview:atIndex:]` → `RCTLegacyViewManagerInteropComponentView`
+
+Fabric runs `react-native-maps` in legacy interop mode. `AIRMap` receives a native subview insertion event but gets a `nil` view reference, throwing `NSInvalidArgumentException` → SIGABRT. Three separate causes were contributing.
+
+### Cause A — nil native view insert
+
+When `StopMarker` is a child of `MapView` and `parseWKTPoint` fails on a malformed WKT string, the component returns `null`. Under Fabric's interop layer, `AIRMap` still processes the insertion slot for that index with a `nil` reference.
+
+**Fix:** `parseWKTPoint` is exported from `stopViews.tsx` and called in `map.tsx` to pre-validate every stop's WKT before constructing a `<StopMarker>`. A `<StopMarker>` is never created for a stop that would produce a `null` render.
+
+### Cause B — bulk insert race
+
+Even with valid WKT, mounting 500+ markers simultaneously in a single Fabric mounting transaction overflows `AIRMap`'s sequential subview insert queue — indices desync under the interop layer.
+
+**Fix:** `stopMarkers` returns `[]` until `onRegionChangeComplete` fires (`mapRegion` starts as `null`). After that, only stops within the current viewport bounds (with 50% padding to prevent flicker on small pans) are included. At the default zoom level the viewport spans ~1 km², containing ~30–60 stops — well within `AIRMap`'s safe range.
+
+### Cause C — interval accumulation
+
+Every tapped stop or bus marker started a permanent 30 s `setInterval`, driving constant Supabase fetches and React state updates that caused rapid marker re-renders — a compounding input to the crash.
+
+**Fix:** Polling is now gated to callout-open only. The interval is cleared when the callout closes.
+
+### Architectural constraint to preserve
+
+**Never render `<StopMarker>` or `<BusMarker>` for data that has not passed WKT pre-validation in `map.tsx`.** Returning `null` from a `MapView` child is not safe under Fabric's legacy interop mode — it will reintroduce Cause A.
