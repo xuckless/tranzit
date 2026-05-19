@@ -14,7 +14,7 @@ import {
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { supabase } from "@/lib/supabase";
-import { BusMarker } from "@/components/busViews";
+import { PooledBusMarker } from "@/components/busViews";
 import { StopMarker } from "@/components/stopViews";
 import type { VehiclePosition, CalgaryTransitStop } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
@@ -674,14 +674,9 @@ export default function CommuteScreen() {
                   v.route_id != null,
               )
               .map((v) => (
-                <BusMarker
+                <PooledBusMarker
                   key={`commute-bus-${v.vehicle_id}`}
-                  vehicle_id={v.vehicle_id}
-                  trip_id={v.trip_id!}
-                  route_id={v.route_id!}
-                  latitude={v.latitude!}
-                  longitude={v.longitude!}
-                  bearing={v.bearing ?? 0}
+                  vehicle={v}
                 />
               ))}
           </MapView>

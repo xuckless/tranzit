@@ -10,33 +10,38 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { useState } from "react";
-import { theme } from "@/styles/theme";
+import { theme, PASTELS } from "@/styles/theme";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import type { SavedPlace } from "@/lib/db";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
 
-// ─── Category → icon/color ────────────────────────────────────────────────────
+// ─── Category → pastel + icon ─────────────────────────────────────────────────
 
-const CATEGORY_ICONS: Record<string, { icon: string; color: string }> = {
-  home:       { icon: "home",           color: theme.colors.primary },
-  work:       { icon: "briefcase",      color: "#0070EB" },
-  office:     { icon: "briefcase",      color: "#0070EB" },
-  school:     { icon: "university",     color: theme.colors.selected },
-  university: { icon: "university",     color: theme.colors.selected },
-  gym:        { icon: "dumbbell",       color: theme.colors.tertiary },
-  food:       { icon: "utensils",       color: "#E0A000" },
-  restaurant: { icon: "utensils",       color: "#E0A000" },
-  health:     { icon: "heartbeat",      color: "#D32F2F" },
-  hospital:   { icon: "hospital",       color: "#D32F2F" },
-  shopping:   { icon: "shopping-bag",   color: "#9C27B0" },
-  park:       { icon: "tree",           color: "#388E3C" },
+type PastelKey = keyof typeof PASTELS;
+
+const CATEGORY_STYLE: Record<
+  string,
+  { icon: string; pastel: PastelKey }
+> = {
+  home:       { icon: "home",         pastel: "lavender" },
+  work:       { icon: "briefcase",    pastel: "sky"      },
+  office:     { icon: "briefcase",    pastel: "sky"      },
+  school:     { icon: "university",   pastel: "butter"   },
+  university: { icon: "university",   pastel: "butter"   },
+  gym:        { icon: "dumbbell",     pastel: "rose"     },
+  food:       { icon: "utensils",     pastel: "peach"    },
+  restaurant: { icon: "utensils",     pastel: "peach"    },
+  health:     { icon: "heartbeat",    pastel: "rose"     },
+  hospital:   { icon: "hospital",     pastel: "rose"     },
+  shopping:   { icon: "shopping-bag", pastel: "lavender" },
+  park:       { icon: "tree",         pastel: "mint"     },
 };
 
-function categoryIcon(name: string) {
+function categoryStyle(name: string): { icon: string; pastel: PastelKey } {
   return (
-    CATEGORY_ICONS[name.toLowerCase()] ?? {
+    CATEGORY_STYLE[name.toLowerCase()] ?? {
       icon: "map-marker-alt",
-      color: theme.colors.text,
+      pastel: "sky",
     }
   );
 }
@@ -54,14 +59,19 @@ function PlaceRow({
   categoryId: number;
   onSetDefault: (categoryId: number, placeId: string) => void;
 }) {
-  const { icon, color } = categoryIcon(categoryName);
+  const { icon, pastel } = categoryStyle(categoryName);
+  const p = PASTELS[pastel];
   const displayName = place.label ?? place.address;
   const subtitle = place.label ? place.address : null;
 
   return (
-    <View style={styles.placeRow}>
-      <View style={[styles.placeIconBox, { backgroundColor: color + "18" }]}>
-        <FontAwesome5 name={icon as any} size={14} color={color} />
+    <TouchableOpacity
+      style={styles.placeRow}
+      activeOpacity={0.75}
+      onPress={() => {}}
+    >
+      <View style={[styles.placeIconBox, { backgroundColor: p.bg }]}>
+        <FontAwesome5 name={icon as any} size={15} color={p.ink} />
       </View>
 
       <View style={styles.placeText}>
@@ -83,11 +93,25 @@ function PlaceRow({
         <Ionicons
           name={place.isDefault ? "star" : "star-outline"}
           size={20}
-          color={
-            place.isDefault ? theme.colors.secondary : theme.colors.border
-          }
+          color={place.isDefault ? theme.colors.accent : theme.colors.ink3}
         />
       </TouchableOpacity>
+    </TouchableOpacity>
+  );
+}
+
+// ─── Empty state ──────────────────────────────────────────────────────────────
+
+function EmptyState() {
+  return (
+    <View style={styles.emptyState}>
+      <View style={styles.emptyIconWrap}>
+        <Ionicons name="bookmark" size={42} color={theme.colors.ink3} />
+      </View>
+      <Text style={styles.emptyTitle}>Nothing pinned yet</Text>
+      <Text style={styles.emptySubtitle}>
+        Star a stop, route, or place and it'll live here for quick access.
+      </Text>
     </View>
   );
 }
@@ -130,22 +154,21 @@ export default function SavedScreen() {
 
   return (
     <SafeAreaView style={styles.screen}>
-      <View style={styles.header}>
-        <Text style={styles.headerTitle}>Saved Places</Text>
+      {/* Page header */}
+      <View style={styles.pageHeader}>
+        <View>
+          <Text style={styles.pageTitle}>Saved Places</Text>
+          <Text style={styles.pageSubtitle}>
+            Tap a place to get there fast.
+          </Text>
+        </View>
+        <Text style={styles.placeCount}>
+          {sections.reduce((n, s) => n + s.data.length, 0)} places
+        </Text>
       </View>
 
       {sections.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Ionicons
-            name="bookmark-outline"
-            size={48}
-            color={theme.colors.border}
-          />
-          <Text style={styles.emptyTitle}>No saved places yet</Text>
-          <Text style={styles.emptySubtitle}>
-            Tap + to search for a place and save it to a category.
-          </Text>
-        </View>
+        <EmptyState />
       ) : (
         <SectionList
           sections={sections}
@@ -161,17 +184,19 @@ export default function SavedScreen() {
             </View>
           )}
           renderItem={({ item, section }) => (
-            <PlaceRow
-              place={item}
-              categoryName={section.title}
-              categoryId={section.categoryId}
-              onSetDefault={markDefault}
-            />
+            <View style={styles.rowWrap}>
+              <PlaceRow
+                place={item}
+                categoryName={section.title}
+                categoryId={section.categoryId}
+                onSetDefault={markDefault}
+              />
+            </View>
           )}
-          SectionSeparatorComponent={() => (
-            <View style={styles.sectionSeparator} />
+          SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
+          ItemSeparatorComponent={() => (
+            <View style={styles.itemSeparator} />
           )}
-          ItemSeparatorComponent={() => <View style={styles.itemSeparator} />}
         />
       )}
 
@@ -196,107 +221,142 @@ export default function SavedScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: theme.colors.neutral },
+  screen: { flex: 1, backgroundColor: theme.colors.surface },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
-  header: {
+  // Page header
+  pageHeader: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
     paddingHorizontal: theme.spacing.screen,
     paddingTop: 12,
-    paddingBottom: 12,
-    backgroundColor: "white",
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.muted,
+    paddingBottom: 16,
+    backgroundColor: theme.colors.surface,
   },
-  headerTitle: {
-    fontSize: theme.fontSize.title,
-    fontWeight: "700",
-    color: theme.colors.text,
+  pageTitle: {
+    fontSize: 30,
+    fontWeight: "800",
+    color: theme.colors.ink,
+    letterSpacing: -0.8,
+  },
+  pageSubtitle: {
+    fontSize: 14,
+    color: theme.colors.ink2,
+    marginTop: 2,
+  },
+  placeCount: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: theme.colors.ink3,
   },
 
-  list: { paddingBottom: 40 },
+  list: { paddingBottom: 80 },
 
+  // Section
   sectionHeader: {
     paddingHorizontal: theme.spacing.screen,
-    paddingTop: 20,
+    paddingTop: 8,
     paddingBottom: 6,
   },
   sectionTitle: {
     fontSize: 11,
     fontWeight: "700",
-    letterSpacing: 0.8,
-    color: theme.colors.text,
-    opacity: 0.5,
+    letterSpacing: 1.4,
+    color: theme.colors.ink3,
+    textTransform: "uppercase",
   },
-  sectionSeparator: { height: 8 },
 
+  // Rows
+  rowWrap: {
+    marginHorizontal: theme.spacing.screen,
+    backgroundColor: theme.colors.card,
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: theme.colors.divider,
+    overflow: "hidden",
+  },
   placeRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 12,
-    backgroundColor: "white",
-    paddingHorizontal: theme.spacing.screen,
+    paddingHorizontal: 14,
     paddingVertical: 14,
   },
   placeIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
+    width: 44,
+    height: 44,
+    borderRadius: 14,
     justifyContent: "center",
     alignItems: "center",
+    flexShrink: 0,
   },
   placeText: { flex: 1 },
   placeName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: theme.colors.text,
+    fontSize: 15.5,
+    fontWeight: "700",
+    color: theme.colors.ink,
+    letterSpacing: -0.2,
   },
   placeAddress: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    opacity: 0.55,
+    fontSize: 13,
+    color: theme.colors.ink3,
     marginTop: 2,
   },
   itemSeparator: {
     height: 1,
-    backgroundColor: theme.colors.muted,
-    marginLeft: theme.spacing.screen + 36 + 12,
+    backgroundColor: theme.colors.divider,
+    marginLeft: 14 + 44 + 12,
   },
 
+  // Empty
   emptyState: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
     padding: 40,
   },
+  emptyIconWrap: {
+    width: 90,
+    height: 90,
+    borderRadius: 30,
+    backgroundColor: theme.colors.surface2,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 8,
+  },
   emptyTitle: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "700",
-    color: theme.colors.text,
+    fontSize: 20,
+    fontWeight: "800",
+    color: theme.colors.ink,
+    letterSpacing: -0.3,
   },
   emptySubtitle: {
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text,
-    opacity: 0.55,
+    fontSize: 14,
+    color: theme.colors.ink2,
     textAlign: "center",
-    lineHeight: 20,
+    lineHeight: 22,
+    maxWidth: 280,
   },
-  errorText: { fontSize: theme.fontSize.body, color: theme.colors.error },
 
+  errorText: { fontSize: 14, color: theme.colors.error },
+
+  // FAB
   fab: {
     position: "absolute",
     bottom: 28,
     right: 20,
     width: 56,
     height: 56,
-    borderRadius: 28,
+    borderRadius: 18,
     backgroundColor: theme.colors.primary,
     justifyContent: "center",
     alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
     elevation: 8,
   },
 });

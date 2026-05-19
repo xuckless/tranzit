@@ -4,36 +4,46 @@ import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { theme } from "@/styles/theme";
-// import { SafeAreaView } from "react-native-safe-area-context";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+
+// Tranzit logo mark — bus body with wheels
+function TranzitLogoMark({ size = 18 }: { size?: number }) {
+  return (
+    <View
+      style={{
+        width: size + 12,
+        height: size + 12,
+        borderRadius: (size + 12) * 0.33,
+        backgroundColor: theme.colors.primary,
+        justifyContent: "center",
+        alignItems: "center",
+        shadowColor: theme.colors.primary,
+        shadowOffset: { width: 0, height: 3 },
+        shadowOpacity: 0.3,
+        shadowRadius: 6,
+        elevation: 4,
+      }}
+    >
+      <Ionicons name="bus" size={size} color="#fff" />
+    </View>
+  );
+}
 
 function HeaderBar() {
   const navigation = useNavigation();
-  const insets = useSafeAreaInsets(); // Hook to get status bar height
-
-  const handleSettings = () => {
-    navigation.navigate("settings" as never);
-  };
+  const insets = useSafeAreaInsets();
 
   return (
-    <View
-      style={[
-        styles.headerContainer,
-        { paddingTop: insets.top + 8 }, // Dynamically adjust for notch
-      ]}
-    >
+    <View style={[styles.headerContainer, { paddingTop: insets.top + 8 }]}>
       <View style={styles.headerLeft}>
-        <View style={styles.logoCircle}>
-          <Ionicons name="train" size={20} color="white" />
-        </View>
-        <Text style={styles.appName}>RoutesLink</Text>
+        <TranzitLogoMark size={18} />
+        <Text style={styles.appName}>Tranzit</Text>
       </View>
-      <TouchableOpacity style={styles.settingsButton} onPress={handleSettings}>
-        <Ionicons
-          name="settings-outline"
-          size={24}
-          color="white" // Neutral color on primary background
-        />
+      <TouchableOpacity
+        style={styles.settingsButton}
+        onPress={() => navigation.navigate("settings" as never)}
+      >
+        <Ionicons name="settings-outline" size={20} color="#fff" />
       </TouchableOpacity>
     </View>
   );
@@ -45,37 +55,28 @@ export default function RootLayout() {
       screenOptions={({ route }) => ({
         headerShown: true,
         header: () => <HeaderBar />,
-        // Active tab Styling
-        tabBarActiveTintColor: theme.colors.selected,
-        tabBarActiveBackgroundColor: theme.colors.secondary,
-
-        tabBarInactiveTintColor: theme.colors.text,
+        tabBarActiveTintColor: theme.colors.primary,
+        tabBarInactiveTintColor: theme.colors.ink3,
         tabBarStyle: styles.tabBar,
         tabBarLabelStyle: styles.tabBarLabel,
-
-        tabBarItemStyle: {
-          borderRadius: 12,
-          marginHorizontal: 4,
-          height: 50,
-          // backgroundColor: theme.colors.primary,
-        },
-        tabBarBackground: () => null,
-        sceneContainerStyle: {
-          backgroundColor: theme.colors.secondary,
-        },
+        tabBarItemStyle: styles.tabBarItem,
+        sceneContainerStyle: { backgroundColor: theme.colors.surface },
       })}
     >
       <Tabs.Screen
         name="map"
         options={{
           title: "Map",
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons
-              name="map-outline"
-              size={size}
-              color={color}
-              focused={focused}
-            />
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <Ionicons
+                name={focused ? "map" : "map-outline"}
+                size={22}
+                color={color}
+              />
+            </View>
           ),
         }}
       />
@@ -83,8 +84,16 @@ export default function RootLayout() {
         name="routes"
         options={{
           title: "Routes",
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons name="bus-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <Ionicons
+                name={focused ? "bus" : "bus-outline"}
+                size={22}
+                color={color}
+              />
+            </View>
           ),
         }}
       />
@@ -92,8 +101,16 @@ export default function RootLayout() {
         name="saved"
         options={{
           title: "Saved",
-          tabBarIcon: ({ color, size }) => (
-            <Ionicons name="bookmark-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <Ionicons
+                name={focused ? "bookmark" : "bookmark-outline"}
+                size={22}
+                color={color}
+              />
+            </View>
           ),
         }}
       />
@@ -101,8 +118,16 @@ export default function RootLayout() {
         name="report"
         options={{
           title: "Report",
-          tabBarIcon: ({ color, size, focused }) => (
-            <Ionicons name="warning-outline" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <Ionicons
+                name={focused ? "warning" : "warning-outline"}
+                size={22}
+                color={color}
+              />
+            </View>
           ),
         }}
       />
@@ -110,8 +135,12 @@ export default function RootLayout() {
         name="commute"
         options={{
           title: "Commute",
-          tabBarIcon: ({ color, size, focused }) => (
-            <MaterialIcons name="route" size={size} color={color} />
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <MaterialIcons name="route" size={22} color={color} />
+            </View>
           ),
         }}
       />
@@ -124,47 +153,68 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    paddingHorizontal: 16,
-    paddingVertical: 6,
-    backgroundColor: theme.colors.neutral,
-    // backgroundColor: "transparent",
+    paddingHorizontal: 18,
+    paddingBottom: 10,
+    backgroundColor: theme.colors.surface,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.neutral,
-  },
-  logoCircle: {
-    width: 30,
-    height: 30,
-    borderRadius: 20,
-    backgroundColor: "#0070EB",
-    justifyContent: "center",
-    alignItems: "center",
+    borderBottomColor: theme.colors.divider,
   },
   headerLeft: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
   },
   appName: {
-    fontSize: theme.fontSize.title,
+    fontSize: 22,
     fontWeight: "800",
     color: theme.colors.primary,
+    letterSpacing: -0.5,
   },
   settingsButton: {
-    padding: 8,
-    borderRadius: 8,
+    width: 40,
+    height: 40,
+    borderRadius: 12,
     backgroundColor: theme.colors.primary,
+    justifyContent: "center",
+    alignItems: "center",
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
   },
+
+  // Tab bar
   tabBar: {
-    backgroundColor: theme.colors.background,
-    borderTopColor: theme.colors.neutral,
-    height: 70,
-    paddingBottom: 8,
+    backgroundColor: "#FFFFFF",
+    borderTopWidth: 1,
+    borderTopColor: theme.colors.divider,
+    height: 68,
+    paddingBottom: 6,
     paddingHorizontal: 8,
-    display: "flex",
-    justifyContent: "space-around",
+    shadowColor: "rgba(20,30,80,0.06)",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 1,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  tabBarItem: {
+    marginHorizontal: 2,
+    height: 56,
   },
   tabBarLabel: {
-    fontSize: 12,
-    fontWeight: "600",
+    fontSize: 10.5,
+    fontWeight: "700",
+    letterSpacing: 0.1,
+    marginTop: -2,
+  },
+  tabIconWrap: {
+    paddingHorizontal: 4,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "transparent",
+  },
+  tabIconWrapActive: {
+    backgroundColor: theme.colors.primaryDim,
   },
 });
