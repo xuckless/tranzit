@@ -1,3 +1,15 @@
+// ─── Unified destination search result ───────────────────────────────────────
+// Normalized shape from both /search (instant) and /autocomplete/json (delayed).
+// location is populated only for /search results; autocomplete results require
+// a subsequent POST /details call to resolve coordinates.
+
+export interface SearchSuggestion {
+  placeId: string;
+  mainText: string;
+  secondaryText?: string;
+  location?: { latitude: number; longitude: number };
+}
+
 // ─── Place / Search API ───────────────────────────────────────────────────────
 
 export interface PlaceResult {

@@ -40,17 +40,11 @@ export function usePlacesSearch(userLocation?: UserLocation | null) {
         abortRef.current = controller;
 
         try {
-          // prioritze to search around user location
           let url = `${BASE_URL}/search?q=${encodeURIComponent(trimmed)}`;
 
           if (userLocation) {
             url += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
           }
-
-          // const res = await fetch(
-          //   `${BASE_URL}/search?q=${encodeURIComponent(trimmed)}`,
-          //   { signal: controller.signal },
-          // );
 
           const res = await fetch(url, { signal: controller.signal });
 
@@ -61,10 +55,11 @@ export function usePlacesSearch(userLocation?: UserLocation | null) {
           if (!res.ok) throw new Error(`Search failed: ${res.status}`);
 
           const data: PlacesSearchResponse = await res.json();
+          const places = data.places ?? [];
 
           setState(
-            data.places.length > 0
-              ? { status: "success", results: data.places, query: trimmed }
+            places.length > 0
+              ? { status: "success", results: places, query: trimmed }
               : { status: "empty", query: trimmed },
           );
         } catch (err: unknown) {

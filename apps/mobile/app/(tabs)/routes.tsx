@@ -22,15 +22,15 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { theme } from "@/styles/theme";
 import { TranzitApiService } from "@/services/TranzitApiService";
-import { usePlacesSearch } from "@/hooks/usePlacesSearch";
-import { SearchResultsList } from "@/components/search/SearchResultsList";
+import { useDestinationSearch } from "@/hooks/useDestinationSearch";
+import { DestinationSuggestionsList } from "@/components/search/DestinationSuggestionsList";
 import {
   RoutePickerSheet,
   normalizeColor,
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
-import type { Route, SelectedDestination } from "@/types/places";
+import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -92,8 +92,8 @@ export default function RouteScreen() {
   const [routeError, setRouteError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("All");
 
-  const originSearch = usePlacesSearch(gpsLocation);
-  const destSearch = usePlacesSearch(gpsLocation);
+  const originSearch = useDestinationSearch(gpsLocation);
+  const destinationSearch = useDestinationSearch(gpsLocation);
 
   // ── Location ─────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -142,24 +142,29 @@ export default function RouteScreen() {
       ctrl.signal,
     )
       .then((res) => {
-        setRoutes(res.routes);
-        setSelectedRoute(res.routes[0] ?? null);
+        const fetchedRoutes = res.routes ?? [];
+        setRoutes(fetchedRoutes);
+        setSelectedRoute(fetchedRoutes[0] ?? null);
         setIsLoadingRoutes(false);
 
-        const fitCoords = [
-          { latitude: origin.lat, longitude: origin.lng },
-          { latitude: destination.lat, longitude: destination.lng },
-        ];
-        setTimeout(() => {
-          mapRef.current?.fitToCoordinates(fitCoords, {
-            edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-            animated: true,
-          });
-        }, 400);
+        if (fetchedRoutes.length > 0) {
+          const fitCoords = [
+            { latitude: origin.lat, longitude: origin.lng },
+            { latitude: destination.lat, longitude: destination.lng },
+          ];
+          setTimeout(() => {
+            mapRef.current?.fitToCoordinates(fitCoords, {
+              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
+              animated: true,
+            });
+          }, 400);
+        }
       })
-      .catch((err: Error) => {
-        if (err.name === "AbortError") return;
-        setRouteError(err.message || "Failed to load routes");
+      .catch((err: unknown) => {
+        if (err instanceof Error && err.name === "AbortError") return;
+        const msg =
+          err instanceof Error ? err.message : "Failed to load routes";
+        setRouteError(msg);
         setIsLoadingRoutes(false);
       });
 
@@ -172,22 +177,33 @@ export default function RouteScreen() {
   // is thicker and uses the first transit line's color (or a palette fallback).
 
   const routePolylines = useMemo(() => {
-    return routes.map((r, i) => {
+    return routes.flatMap((r, i) => {
+      const encoded = r.polyline?.encodedPolyline;
+      if (!encoded) return [];
+      let coords: { latitude: number; longitude: number }[];
+      try {
+        coords = decodePolyline(encoded);
+      } catch {
+        return [];
+      }
+      if (coords.length === 0) return [];
+
       const isSelected = r === selectedRoute;
-      // Use first transit step's color for the selected route if available
-      const transitStep = r.legs
-        .flatMap((l) => l.steps)
+      const transitStep = (r.legs ?? [])
+        .flatMap((l) => l.steps ?? [])
         .find((s) => s.travelMode === "TRANSIT");
       const lineColor = transitStep?.transitDetails?.transitLine?.color
         ? normalizeColor(transitStep.transitDetails.transitLine.color)
         : ROUTE_PALETTE[i % ROUTE_PALETTE.length];
 
-      return {
-        coords: decodePolyline(r.polyline.encodedPolyline),
-        color: isSelected ? lineColor : "#C1C6D7",
-        width: isSelected ? 5 : 3,
-        isDash: !isSelected,
-      };
+      return [
+        {
+          coords,
+          color: isSelected ? lineColor : "#C1C6D7",
+          width: isSelected ? 5 : 3,
+          isDash: !isSelected,
+        },
+      ];
     });
   }, [routes, selectedRoute]);
 
@@ -195,8 +211,8 @@ export default function RouteScreen() {
   const filteredRoutes = useMemo(() => {
     if (activeFilter === "All") return routes;
     return routes.filter((route) => {
-      const transitSteps = route.legs
-        .flatMap((l) => l.steps)
+      const transitSteps = (route.legs ?? [])
+        .flatMap((l) => l.steps ?? [])
         .filter((s) => s.travelMode === "TRANSIT");
       if (transitSteps.length === 0) return false;
       return transitSteps.some((s) => {
@@ -229,52 +245,86 @@ export default function RouteScreen() {
     [originSearch],
   );
 
-  const handleDestChange = useCallback(
-    (text: string) => {
-      setDestinationLabel(text);
-      if (text.trim()) destSearch.search(text);
-      else destSearch.reset();
-    },
-    [destSearch],
-  );
-
   const handleSelectOrigin = useCallback(
-    (dest: SelectedDestination) => {
-      setOriginLabel(dest.displayText);
-      setOrigin({
-        placeId: dest.placeId,
-        lat: dest.coordinate.latitude,
-        lng: dest.coordinate.longitude,
-      });
+    async (suggestion: SearchSuggestion) => {
       setFocusedField(null);
       originSearch.reset();
       Keyboard.dismiss();
+      setOriginLabel(suggestion.mainText);
+      if (suggestion.location) {
+        setOrigin({
+          placeId: suggestion.placeId,
+          lat: suggestion.location.latitude,
+          lng: suggestion.location.longitude,
+        });
+      } else {
+        try {
+          const details = await TranzitApiService.getPlaceDetails(
+            suggestion.placeId,
+          );
+          setOrigin({
+            placeId: suggestion.placeId,
+            lat: details.location.latitude,
+            lng: details.location.longitude,
+          });
+        } catch (e) {
+          console.error("[routes] origin details fetch failed:", e);
+          setRouteError("Could not load origin. Please try again.");
+        }
+      }
     },
     [originSearch],
   );
 
-  const handleSelectDest = useCallback(
-    (dest: SelectedDestination) => {
-      setDestinationLabel(dest.displayText);
-      setDestination({
-        placeId: dest.placeId,
-        lat: dest.coordinate.latitude,
-        lng: dest.coordinate.longitude,
-      });
-      setFocusedField(null);
-      destSearch.reset();
-      Keyboard.dismiss();
+  const handleDestChange = useCallback(
+    (text: string) => {
+      setDestinationLabel(text);
+      if (text.trim()) destinationSearch.search(text);
+      else destinationSearch.reset();
     },
-    [destSearch],
+    [destinationSearch],
+  );
+
+  // /search results already have coordinates — use them directly.
+  // Autocomplete-only results (no location) require a POST /details call.
+  const handleSelectDest = useCallback(
+    async (suggestion: SearchSuggestion) => {
+      setFocusedField(null);
+      destinationSearch.reset();
+      Keyboard.dismiss();
+      setDestinationLabel(suggestion.mainText);
+      if (suggestion.location) {
+        setDestination({
+          placeId: suggestion.placeId,
+          lat: suggestion.location.latitude,
+          lng: suggestion.location.longitude,
+        });
+      } else {
+        try {
+          const details = await TranzitApiService.getPlaceDetails(
+            suggestion.placeId,
+          );
+          setDestination({
+            placeId: suggestion.placeId,
+            lat: details.location.latitude,
+            lng: details.location.longitude,
+          });
+        } catch (e) {
+          console.error("[routes] destination details fetch failed:", e);
+          setRouteError("Could not load destination. Please try again.");
+        }
+      }
+    },
+    [destinationSearch],
   );
 
   const dismissSearch = useCallback(() => {
     setFocusedField(null);
     originSearch.reset();
-    destSearch.reset();
+    destinationSearch.reset();
     Keyboard.dismiss();
     if (!originLabel.trim()) setOriginLabel("Current Location");
-  }, [originSearch, destSearch, originLabel]);
+  }, [originSearch, destinationSearch, originLabel]);
 
   const handleStart = useCallback(() => {
     if (!selectedRoute || !destination || !origin) return;
@@ -299,10 +349,6 @@ export default function RouteScreen() {
     router,
   ]);
 
-  // ── Active search state ───────────────────────────────────────────────────────
-  const activeSearch = focusedField === "origin" ? originSearch : destSearch;
-  const handleSelectActive =
-    focusedField === "origin" ? handleSelectOrigin : handleSelectDest;
 
   // ─── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -424,7 +470,10 @@ export default function RouteScreen() {
               style={styles.searchInput}
               value={destinationLabel}
               onChangeText={handleDestChange}
-              onFocus={() => setFocusedField("destination")}
+              onFocus={() => {
+                setFocusedField("destination");
+                originSearch.reset();
+              }}
               placeholder="Where to?"
               placeholderTextColor={theme.colors.text}
               returnKeyType="search"
@@ -437,7 +486,7 @@ export default function RouteScreen() {
                 onPress={() => {
                   setDestinationLabel("");
                   setDestination(null);
-                  destSearch.reset();
+                  destinationSearch.reset();
                 }}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
@@ -463,26 +512,44 @@ export default function RouteScreen() {
       </View>
 
       {/* ── Content area ── */}
-      {focusedField ? (
-        // ── Search results ──
-        <View style={styles.searchResultsArea}>
-          {activeSearch.state.status === "loading" && (
+      {focusedField === "destination" ? (
+        // ── Destination: instant /search + delayed /autocomplete/json merged ──
+        <View style={[styles.searchResultsArea, { paddingHorizontal: theme.spacing.screen }]}>
+          {destinationSearch.status === "loading" && (
             <ActivityIndicator
               style={{ marginTop: 24 }}
               size="small"
               color={theme.colors.primary}
             />
           )}
-          {activeSearch.state.status === "success" && (
-            <SearchResultsList
-              results={activeSearch.state.results}
-              onSelect={handleSelectActive}
+          {destinationSearch.status === "success" && (
+            <DestinationSuggestionsList
+              suggestions={destinationSearch.suggestions}
+              onSelect={handleSelectDest}
             />
           )}
-          {activeSearch.state.status === "empty" && (
-            <Text style={styles.emptyText}>
-              No results for "{activeSearch.state.query}"
-            </Text>
+          {destinationSearch.status === "empty" && (
+            <Text style={styles.emptyText}>No results found</Text>
+          )}
+        </View>
+      ) : focusedField === "origin" ? (
+        // ── Origin: same dual-source search as destination ──
+        <View style={[styles.searchResultsArea, { paddingHorizontal: theme.spacing.screen }]}>
+          {originSearch.status === "loading" && (
+            <ActivityIndicator
+              style={{ marginTop: 24 }}
+              size="small"
+              color={theme.colors.primary}
+            />
+          )}
+          {originSearch.status === "success" && (
+            <DestinationSuggestionsList
+              suggestions={originSearch.suggestions}
+              onSelect={handleSelectOrigin}
+            />
+          )}
+          {originSearch.status === "empty" && (
+            <Text style={styles.emptyText}>No results found</Text>
           )}
         </View>
       ) : (
@@ -672,7 +739,6 @@ const styles = StyleSheet.create({
   // ── Search results area ──
   searchResultsArea: {
     flex: 1,
-    paddingHorizontal: theme.spacing.screen,
     paddingTop: theme.spacing.element,
   },
   emptyText: {
@@ -763,3 +829,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
   },
 });
+

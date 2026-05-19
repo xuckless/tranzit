@@ -26,7 +26,7 @@ export const TranzitApiService = {
     if (res.status === 404) return [];
     if (!res.ok) throw new Error(`Search failed: ${res.status}`);
     const data: PlacesSearchResponse = await res.json();
-    return data.places;
+    return data.places ?? [];
   },
 
   async getPlaceDetails(
@@ -54,6 +54,7 @@ export const TranzitApiService = {
       signal,
     });
     if (!res.ok) throw new Error(`Route failed: ${res.status}`);
-    return res.json() as Promise<RouteResponse>;
+    const data: RouteResponse = await res.json();
+    return { routes: data.routes ?? [] };
   },
 };
