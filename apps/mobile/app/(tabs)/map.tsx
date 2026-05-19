@@ -206,6 +206,13 @@ export default function MapScreen() {
   // Tracked after first pan/animate — null means map hasn't settled yet (safe: no markers)
   const [mapRegion, setMapRegion] = useState<Region | null>(null);
 
+  // Stagger marker mounting to avoid AIRMap insertReactSubview:atIndex: crash
+  // (Fabric interop bug: bulk-inserting two large arrays in the same commit frame).
+  const [mapReady, setMapReady] = useState(false);
+  const [stopsEnabled, setStopsEnabled] = useState(false);
+  const [busesEnabled, setBusesEnabled] = useState(false);
+  const mapInitRef = useRef(false);
+
   // Fetch active stops that currently have scheduled arrivals.
   // A stop renders if it is active AND has at least one stop_time_update where
   // schedule_relationship != NO_DATA and the bus is upcoming or already at the stop.
@@ -251,27 +258,27 @@ export default function MapScreen() {
     return () => clearInterval(id);
   }, []);
 
-  // Only render stop markers once the map has settled (mapRegion != null) and
-  // only within the visible viewport. This prevents two crash vectors:
-  //   1. Bulk-inserting hundreds of markers at once into AIRMap (Fabric interop crash)
-  //   2. A StopMarker returning null (bad WKT) causing AIRMap to insert a nil native view
+  // Once the map is ready AND has a region, enable stops immediately then buses
+  // 200 ms later — two separate commit frames prevent the AIRMap index crash.
+  useEffect(() => {
+    if (!mapReady || !mapRegion || mapInitRef.current) return;
+    mapInitRef.current = true;
+    setStopsEnabled(true);
+    const t = setTimeout(() => setBusesEnabled(true), 200);
+    return () => clearTimeout(t);
+  }, [mapReady, mapRegion]);
+
+  // Render all active stops once — never remove them on pan/zoom.
+  // Viewport-filtering (adding/removing on each onRegionChangeComplete) causes
+  // AIRMap insertReactSubview:atIndex: out-of-bounds crashes in the Fabric interop
+  // layer: native loses count when children churn in and out mid-session.
+  // tracksViewChanges={false} keeps each stop marker near-zero cost.
   const stopMarkers = useMemo(() => {
-    if (!mapRegion || mapRegion.latitudeDelta > 0.04) return [];
-
-    // 50% padding so stops don't flicker on small pans
-    const latPad = mapRegion.latitudeDelta * 0.75;
-    const lngPad = mapRegion.longitudeDelta * 0.75;
-
+    if (!stopsEnabled) return [];
     return transitStops
       .filter((s) => {
         if (!s.point || !s.teleride_number) return false;
-        // Pre-validate WKT — StopMarker returning null inside MapView crashes AIRMap
-        const coord = parseWKTPoint(s.point);
-        if (!coord) return false;
-        return (
-          Math.abs(coord.latitude - mapRegion.latitude) < latPad &&
-          Math.abs(coord.longitude - mapRegion.longitude) < lngPad
-        );
+        return parseWKTPoint(s.point) !== null;
       })
       .map((s) => (
         <StopMarker
@@ -281,12 +288,13 @@ export default function MapScreen() {
           point={s.point!}
         />
       ));
-  }, [transitStops, mapRegion]);
+  }, [stopsEnabled, transitStops]);
 
-  // Bus markers: same Fabric interop crash can happen if 200+ vehicles mount at once.
-  // Gate on mapRegion too — defer all markers until the map has settled.
+  // Bus markers: gated on busesEnabled (200 ms after stops) so the two arrays
+  // don't mount in the same commit frame. No mapRegion viewport filter — same
+  // reason as stops: removing/re-adding on pan causes the AIRMap index crash.
   const busMarkers = useMemo(() => {
-    if (!mapRegion) return [];
+    if (!busesEnabled) return [];
     return vehicles
       .filter(
         (v) =>
@@ -307,7 +315,7 @@ export default function MapScreen() {
           bearing={v.bearing ?? 0}
         />
       ));
-  }, [vehicles, mapRegion]);
+  }, [busesEnabled, vehicles]);
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
@@ -607,6 +615,7 @@ export default function MapScreen() {
         style={styles.map}
         showsUserLocation={false}
         showsCompass={true}
+        onMapReady={() => setMapReady(true)}
         onRegionChangeComplete={(region) => setMapRegion(region)}
         onPress={(e) => {
           const coord = e.nativeEvent.coordinate;
@@ -630,27 +639,26 @@ export default function MapScreen() {
           ...DELTA,
         }}
       >
-        {/* User location dot — follows userLocation, not region */}
-        {userLocation && (
-          <Marker
-            coordinate={userLocation}
-            anchor={{ x: 0.5, y: 0.5 }}
-            flat
-            tracksViewChanges={false}
-          >
-            <DirectionMarker heading={heading} />
-          </Marker>
-        )}
+        {/* User location dot — always mounted so its index in AIRMap never shifts.
+            Invisible until location is known; coordinate updates natively. */}
+        <Marker
+          coordinate={userLocation ?? { latitude: 51.070664, longitude: -114.059263 }}
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat
+          tracksViewChanges={false}
+          opacity={userLocation ? 1 : 0}
+        >
+          <DirectionMarker heading={heading} />
+        </Marker>
 
-        {/* Destination pin — appears immediately on suggestion select */}
-        {destination && (
-          <Marker
-            coordinate={destination}
-            anchor={{ x: 0.5, y: 1.0 }}
-            tracksViewChanges={false}
-            pinColor={theme.colors.primary}
-          />
-        )}
+        {/* Destination pin — always mounted for the same reason; hidden until set */}
+        <Marker
+          coordinate={destination ?? { latitude: 51.070664, longitude: -114.059263 }}
+          anchor={{ x: 0.5, y: 1.0 }}
+          tracksViewChanges={false}
+          pinColor={theme.colors.primary}
+          opacity={destination ? 1 : 0}
+        />
 
         {/* Transit stops — static, loaded once from calgary_transit_stops */}
         {stopMarkers}
