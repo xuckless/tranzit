@@ -58,6 +58,23 @@ function haversineMeters(
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+function safeDecodePolyline(
+  encoded: string,
+): { latitude: number; longitude: number }[] {
+  if (!encoded) return [];
+  try {
+    return decodePolyline(encoded);
+  } catch (e) {
+    console.error("[commute] polyline decode failed:", e);
+    return [];
+  }
+}
+
+function parseDurationSecs(duration: string): number | null {
+  const secs = parseInt(duration?.replace("s", "") ?? "", 10);
+  return isNaN(secs) ? null : secs;
+}
+
 function buildStops(
   route: Route,
   originLabel: string,
@@ -72,7 +89,7 @@ function buildStops(
     mode: "WALK",
   });
 
-  const allSteps = route.legs.flatMap((l) => l.steps);
+  const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
   let idx = 0;
 
   for (const step of allSteps) {
@@ -123,27 +140,21 @@ function buildStops(
 function applyStatuses(stops: CommuteStop[], currentIdx: number): CommuteStop[] {
   return stops.map((s, i) => ({
     ...s,
+    // Destination must win — it should never be overwritten by "current"
     status:
-      i < currentIdx
-        ? "departed"
-        : i === currentIdx
-          ? "current"
-          : i === stops.length - 1
-            ? "destination"
+      i === stops.length - 1
+        ? "destination"
+        : i < currentIdx
+          ? "departed"
+          : i === currentIdx
+            ? "current"
             : "upcoming",
   }));
 }
 
 // ─── StopItem ─────────────────────────────────────────────────────────────────
 
-function StopItem({
-  stop,
-  total,
-}: {
-  stop: CommuteStop;
-  index: number;
-  total: number;
-}) {
+function StopItem({ stop }: { stop: CommuteStop }) {
   const isDeparted = stop.status === "departed";
   const isCurrent = stop.status === "current";
   const isDestination = stop.status === "destination";
@@ -272,29 +283,43 @@ export default function CommuteScreen() {
   useEffect(() => {
     if (!route) return;
 
-    (async () => {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== "granted") return;
+    // Guard against unmount happening before the async subscription resolves
+    let cancelled = false;
 
-      locationSubRef.current = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.BestForNavigation,
-          distanceInterval: 10,
-          timeInterval: 3000,
-        },
-        ({ coords }) => {
-          setUserLocation({
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-          });
-          if (coords.speed != null && coords.speed >= 0) {
-            setCurrentSpeed(Math.round(coords.speed * 3.6)); // m/s → km/h
-          }
-        },
-      );
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (cancelled || status !== "granted") return;
+
+        const sub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.BestForNavigation,
+            distanceInterval: 10,
+            timeInterval: 3000,
+          },
+          ({ coords }) => {
+            setUserLocation({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+            });
+            if (coords.speed != null && coords.speed >= 0) {
+              setCurrentSpeed(Math.round(coords.speed * 3.6)); // m/s → km/h
+            }
+          },
+        );
+
+        if (cancelled) {
+          sub.remove();
+          return;
+        }
+        locationSubRef.current = sub;
+      } catch (e) {
+        console.error("[commute] GPS subscription failed:", e);
+      }
     })();
 
     return () => {
+      cancelled = true;
       locationSubRef.current?.remove();
       locationSubRef.current = null;
     };
@@ -324,8 +349,8 @@ export default function CommuteScreen() {
 
   // ── Fit map to route ──────────────────────────────────────────────────────────
   useEffect(() => {
-    if (!route?.polyline.encodedPolyline) return;
-    const coords = decodePolyline(route.polyline.encodedPolyline);
+    if (!route?.polyline?.encodedPolyline) return;
+    const coords = safeDecodePolyline(route.polyline.encodedPolyline);
     if (coords.length === 0) return;
     setTimeout(() => {
       mapRef.current?.fitToCoordinates(coords, {
@@ -343,8 +368,8 @@ export default function CommuteScreen() {
   );
 
   const routePolylines = useMemo(() => {
-    if (!route) return [];
-    const allCoords = decodePolyline(route.polyline.encodedPolyline);
+    if (!route?.polyline?.encodedPolyline) return [];
+    const allCoords = safeDecodePolyline(route.polyline.encodedPolyline);
     if (allCoords.length === 0) return [];
 
     const currentStop = stops[currentStopIndex];
@@ -366,8 +391,8 @@ export default function CommuteScreen() {
       });
     }
 
-    const transitStep = route.legs
-      .flatMap((l) => l.steps)
+    const transitStep = (route.legs ?? [])
+      .flatMap((l) => l.steps ?? [])
       .find((s) => s.travelMode === "TRANSIT");
     const lineColor = normalizeColor(
       transitStep?.transitDetails?.transitLine?.color,
@@ -394,13 +419,14 @@ export default function CommuteScreen() {
 
   const etaMinutes = useMemo(() => {
     if (!route) return null;
-    const secs = parseInt(route.duration.replace("s", ""), 10);
-    return Math.round(secs / 60);
+    const secs = parseDurationSecs(route.duration);
+    return secs != null ? Math.round(secs / 60) : null;
   }, [route]);
 
   const arrivalTime = useMemo(() => {
     if (!route) return null;
-    const secs = parseInt(route.duration.replace("s", ""), 10);
+    const secs = parseDurationSecs(route.duration);
+    if (secs == null) return null;
     const arrival = new Date(Date.now() + secs * 1000);
     return arrival.toLocaleTimeString("en-CA", {
       hour: "2-digit",
@@ -411,7 +437,7 @@ export default function CommuteScreen() {
 
   const progressLabels = useMemo(() => {
     if (!route) return ["Walking", "Riding"];
-    const allSteps = route.legs.flatMap((l) => l.steps);
+    const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
     const labels: string[] = [];
     for (const step of allSteps) {
       const label =
@@ -434,7 +460,7 @@ export default function CommuteScreen() {
 
   const boardingStep = useMemo(() => {
     if (!route) return null;
-    const allSteps = route.legs.flatMap((l) => l.steps);
+    const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
     // Find the first TRANSIT step that is not yet completed
     const transitStepsWithIndex = allSteps
       .map((s, i) => ({ step: s, i }))
@@ -451,7 +477,7 @@ export default function CommuteScreen() {
   }, [route, currentStopIndex, stops.length]);
 
   const co2Saved = useMemo(() => {
-    if (!route) return null;
+    if (!route?.distanceMeters) return null;
     const km = route.distanceMeters / 1000;
     return (km * 0.16).toFixed(1); // ~0.16 kg CO₂/km saved vs car
   }, [route]);
@@ -605,13 +631,8 @@ export default function CommuteScreen() {
               <View style={styles.trackBg} />
               <View style={[styles.trackDone, { height: trackDoneHeight }]} />
 
-              {stops.map((stop, i) => (
-                <StopItem
-                  key={stop.id}
-                  stop={stop}
-                  index={i}
-                  total={stops.length}
-                />
+              {stops.map((stop) => (
+                <StopItem key={stop.id} stop={stop} />
               ))}
             </View>
           </View>
