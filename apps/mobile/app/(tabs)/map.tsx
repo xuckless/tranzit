@@ -26,6 +26,12 @@ import { theme } from "@/styles/theme";
 import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { PlaceDetails } from "@/types/places";
+import { useQuickAccess } from "@/hooks/useSavedPlaces";
+import type { QuickAccessPlace } from "@/lib/db";
+import {
+  SavePlaceModal,
+  type PreselectedPlace,
+} from "@/components/SavePlaceModal";
 import Svg, {
   Path,
   Circle,
@@ -65,17 +71,29 @@ interface Coordinate {
 
 // ─── Data ──────────────────────────────────────────────────────────────────────
 
-const QUICK_ACCESS = [
-  { id: "home", label: "Home", icon: "home", color: theme.colors.primary },
-  { id: "work", label: "Work", icon: "briefcase", color: "#0070EB" },
-  {
-    id: "school",
-    label: "University",
-    icon: "university",
-    color: theme.colors.selected,
-  },
-  { id: "gym", label: "Gym", icon: "dumbbell", color: theme.colors.tertiary },
-];
+const CATEGORY_ICONS: Record<string, { icon: string; color: string }> = {
+  home:       { icon: "home",         color: theme.colors.primary },
+  work:       { icon: "briefcase",    color: "#0070EB" },
+  office:     { icon: "briefcase",    color: "#0070EB" },
+  school:     { icon: "university",   color: theme.colors.selected },
+  university: { icon: "university",   color: theme.colors.selected },
+  gym:        { icon: "dumbbell",     color: theme.colors.tertiary },
+  food:       { icon: "utensils",     color: "#E0A000" },
+  restaurant: { icon: "utensils",     color: "#E0A000" },
+  health:     { icon: "heartbeat",    color: "#D32F2F" },
+  hospital:   { icon: "hospital",     color: "#D32F2F" },
+  shopping:   { icon: "shopping-bag", color: "#9C27B0" },
+  park:       { icon: "tree",         color: "#388E3C" },
+};
+
+function quickIcon(categoryName: string) {
+  return (
+    CATEGORY_ICONS[categoryName.toLowerCase()] ?? {
+      icon: "map-marker-alt",
+      color: theme.colors.text,
+    }
+  );
+}
 
 const NEARBY_STOPS = [
   {
@@ -163,6 +181,8 @@ export default function MapScreen() {
   const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
   const lastSnap = useRef(SNAP_COLLAPSED);
   const headingRef = useRef(0);
+  const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
+  const [showSaveModal, setShowSaveModal] = useState(false);
 
   const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
   const [region, setRegion] = useState<Region | null>(null);
@@ -827,28 +847,51 @@ export default function MapScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.quickRow}
             >
-              {QUICK_ACCESS.map((item) => (
-                <TouchableOpacity
-                  key={item.id}
-                  style={styles.quickChip}
-                  activeOpacity={0.8}
-                >
-                  <View
-                    style={[
-                      styles.quickIconBox,
-                      { backgroundColor: item.color + "18" },
-                    ]}
+              {quickAccessPlaces.map((item: QuickAccessPlace) => {
+                const { icon, color } = quickIcon(item.categoryName);
+                return (
+                  <TouchableOpacity
+                    key={`${item.categoryId}-${item.googlePlaceId}`}
+                    style={styles.quickChip}
+                    activeOpacity={0.8}
+                    onPress={() => {
+                      const coord = {
+                        latitude: item.latitude,
+                        longitude: item.longitude,
+                      };
+                      setDestination(coord);
+                      mapRef.current?.animateToRegion(
+                        { ...coord, ...DELTA },
+                        900
+                      );
+                      router.navigate({
+                        pathname: "/(tabs)/routes",
+                        params: {
+                          destinationId: item.googlePlaceId,
+                          destinationLat: String(item.latitude),
+                          destinationLng: String(item.longitude),
+                          destinationName: item.label ?? item.address,
+                        },
+                      } as never);
+                    }}
                   >
-                    <FontAwesome5
-                      name={item.icon as any}
-                      size={14}
-                      color={item.color}
-                    />
-                  </View>
-                  <Text style={styles.quickLabel}>{item.label}</Text>
-                </TouchableOpacity>
-              ))}
-              <TouchableOpacity style={styles.quickChip} activeOpacity={0.8}>
+                    <View
+                      style={[
+                        styles.quickIconBox,
+                        { backgroundColor: color + "18" },
+                      ]}
+                    >
+                      <FontAwesome5 name={icon as any} size={14} color={color} />
+                    </View>
+                    <Text style={styles.quickLabel}>{item.categoryName}</Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <TouchableOpacity
+                style={styles.quickChip}
+                activeOpacity={0.8}
+                onPress={() => setShowSaveModal(true)}
+              >
                 <View
                   style={[
                     styles.quickIconBox,
@@ -928,6 +971,26 @@ export default function MapScreen() {
           </View>
         )}
       </Animated.View>
+
+      <SavePlaceModal
+        visible={showSaveModal}
+        onClose={() => setShowSaveModal(false)}
+        onSaved={refreshQuickAccess}
+        userLocation={userLocation}
+        preselectedPlace={
+          placeDetails?.place && !placeDetails.isFetching
+            ? ({
+                googlePlaceId: placeDetails.place.id,
+                displayName: placeDetails.place.displayName.text,
+                address:
+                  placeDetails.place.formattedAddress ||
+                  placeDetails.place.displayName.text,
+                latitude: placeDetails.place.location.latitude,
+                longitude: placeDetails.place.location.longitude,
+              } satisfies PreselectedPlace)
+            : null
+        }
+      />
     </View>
   );
 }
