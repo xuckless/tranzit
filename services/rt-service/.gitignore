@@ -1,0 +1,6 @@
+.env
+.claude/
+.idea/
+*.exe
+*.test
+go.sum
