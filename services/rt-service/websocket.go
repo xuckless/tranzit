@@ -54,6 +54,12 @@ func (h *wsHub) broadcast(feedName string, raw []byte) {
 }
 
 func (h *wsHub) serveWS(w http.ResponseWriter, r *http.Request) {
+	// Non-WS requests (e.g. Cloud Run health probes) get a plain 200.
+	if r.Header.Get("Upgrade") != "websocket" {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("tranzit-rt-service ok"))
+		return
+	}
 	conn, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -71,8 +77,7 @@ func (h *wsHub) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func startWSServer(hub *wsHub, host string, port int) {
-	addr := fmt.Sprintf("%s:%d", host, port)
+func startWSServer(hub *wsHub, addr string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", hub.serveWS)
 	srv := &http.Server{Addr: addr, Handler: mux}

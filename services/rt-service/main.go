@@ -59,8 +59,14 @@ func main() {
 		fmt.Println("SODA2 data already loaded. Use --force-reload to refresh.")
 	}
 
+	// Cloud Run injects PORT; fall back to wsPort for local dev.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = fmt.Sprintf("%d", wsPort)
+	}
+
 	hub := newHub()
-	startWSServer(hub, "0.0.0.0", wsPort)
+	startWSServer(hub, "0.0.0.0:"+port)
 
 	fmt.Printf("Starting real-time polling every %ds. Ctrl+C to stop.\n", realtimeInterval)
 	for {
