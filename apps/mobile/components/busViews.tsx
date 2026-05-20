@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect, useRef, memo } from "react";
-import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from "react-native";
+import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
+import { ScrollView } from "react-native-gesture-handler";
 import Svg, { Circle as SvgCircle, Path, Text as SvgText } from "react-native-svg";
 import { Marker, Callout } from "react-native-maps";
 import { supabase } from "@/lib/supabase";
@@ -216,20 +217,18 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
               </Text>
             ) : null}
 
+            <View style={s.contentArea}>
             {loading ? (
               <ActivityIndicator
                 size="small"
                 color={theme.colors.primary}
-                style={s.loader}
               />
             ) : tripStops.length === 0 ? (
               <Text style={s.empty}>No schedule data</Text>
             ) : (
               <ScrollView
                 style={s.scroll}
-                nestedScrollEnabled
                 showsVerticalScrollIndicator={false}
-                onStartShouldSetResponder={() => true}
               >
                 {tripStops.map((stop) => (
                   <View
@@ -262,6 +261,7 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
                 ))}
               </ScrollView>
             )}
+            </View>
           </View>
         ) : (
           // Zero-size placeholder keeps the Callout child stable in the tree
@@ -303,19 +303,18 @@ const s = StyleSheet.create({
     marginTop: 2,
     marginBottom: 10,
   },
-  loader: {
-    marginVertical: 12,
-  },
   empty: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
     textAlign: "center",
     paddingVertical: 8,
   },
-  scroll: {
-    maxHeight: 200,
+  contentArea: {
+    height: 180,
+    justifyContent: "center" as const,
     marginTop: 4,
   },
+  scroll: { flex: 1 },
   stopRow: {
     flexDirection: "row",
     alignItems: "center",

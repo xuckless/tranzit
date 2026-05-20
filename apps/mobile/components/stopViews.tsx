@@ -3,9 +3,9 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   ActivityIndicator,
 } from "react-native";
+import { ScrollView } from "react-native-gesture-handler";
 import { Marker, Callout } from "react-native-maps";
 import { supabase } from "@/lib/supabase";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
@@ -284,20 +284,18 @@ function StopMarkerComponent({
           </Text>
           <Text style={s.calloutSub}>Stop #{teleride_number}</Text>
 
+          <View style={s.contentArea}>
           {loading ? (
             <ActivityIndicator
               size="small"
               color={theme.colors.primary}
-              style={s.loader}
             />
           ) : isEmpty ? (
             <Text style={s.empty}>No service data</Text>
           ) : (
             <ScrollView
               style={s.scroll}
-              nestedScrollEnabled
               showsVerticalScrollIndicator={false}
-              onStartShouldSetResponder={() => true}
             >
               {upcoming.length > 0 && (
                 <>
@@ -319,6 +317,7 @@ function StopMarkerComponent({
               )}
             </ScrollView>
           )}
+          </View>
         </View>
       </Callout>
     </Marker>
@@ -369,7 +368,11 @@ const s = StyleSheet.create({
     textAlign: "center",
     paddingVertical: 8,
   },
-  scroll: { maxHeight: 220 },
+  contentArea: {
+    height: 200,
+    justifyContent: "center" as const,
+  },
+  scroll: { flex: 1 },
 
   // ── Section labels ──
   sectionLabel: {
