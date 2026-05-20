@@ -4,3 +4,10 @@
 *.exe
 *.test
 go.sum
+
+
+Dockerfile
+.dockerignore
+
+hidden.md
+TODO.md
