@@ -109,30 +109,33 @@ export function useDestinationSearch(userLocation?: UserLocation | null) {
       // ── Phase 2: /autocomplete/json ───────────────────────────────────────────
       // Always finalises the result list. Fires faster for address queries since
       // phase 1 is skipped and the user needs a quick response.
-      acTimerRef.current = setTimeout(async () => {
-        if (currentQueryRef.current !== trimmed) return;
-        try {
-          const res = await fetch(
-            `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(trimmed)}`,
-            { signal: controller.signal },
-          );
-          if (controller.signal.aborted) return;
-          if (res.ok) {
-            const data = await res.json();
-            autocomplete = (data.predictions ?? []).map(
-              (p: AutocompletePrediction) => ({
-                placeId: p.place_id,
-                mainText: p.structured_formatting.main_text,
-                secondaryText: p.structured_formatting.secondary_text,
-              }),
+      acTimerRef.current = setTimeout(
+        async () => {
+          if (currentQueryRef.current !== trimmed) return;
+          try {
+            const res = await fetch(
+              `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(trimmed)}`,
+              { signal: controller.signal },
             );
+            if (controller.signal.aborted) return;
+            if (res.ok) {
+              const data = await res.json();
+              autocomplete = (data.predictions ?? []).map(
+                (p: AutocompletePrediction) => ({
+                  placeId: p.place_id,
+                  mainText: p.structured_formatting.main_text,
+                  secondaryText: p.structured_formatting.secondary_text,
+                }),
+              );
+            }
+          } catch (e) {
+            if (e instanceof Error && e.name === "AbortError") return;
+            console.error("[search] autocomplete failed:", e);
           }
-        } catch (e) {
-          if (e instanceof Error && e.name === "AbortError") return;
-          console.error("[search] autocomplete failed:", e);
-        }
-        merge();
-      }, isAddressQuery ? 300 : AUTOCOMPLETE_MS);
+          merge();
+        },
+        isAddressQuery ? 300 : AUTOCOMPLETE_MS,
+      );
     },
     [userLocation],
   );

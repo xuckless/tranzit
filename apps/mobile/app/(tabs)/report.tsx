@@ -9,7 +9,6 @@ import {
 import { theme, PASTELS } from "@/styles/theme";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-// import { MaterialCommunityIcons } from "@expo/vector-icons";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -79,14 +78,14 @@ function ReportIcon({
   size,
   color,
 }: {
-  lib: "ionicons" | "fa5" | "mci";
+  lib: "ionicons" | "fa5" | "fa6";
   name: string;
   size: number;
   color: string;
 }) {
   if (lib === "fa5")
     return <FontAwesome5 name={name as any} size={size} color={color} />;
-  if (lib === "mci")
+  if (lib === "fa6")
     return <FontAwesome6 name={name as any} size={size} color={color} />;
   return <Ionicons name={name as any} size={size} color={color} />;
 }
