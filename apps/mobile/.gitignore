@@ -3,6 +3,13 @@
 # dependencies
 node_modules/
 
+# hidden files
+.vscode/
+.idea/
+.zed/
+.claude/
+
+
 # Expo
 .expo/
 dist/
@@ -42,5 +49,3 @@ app-example
 /ios
 /android
 
-
-.claude/

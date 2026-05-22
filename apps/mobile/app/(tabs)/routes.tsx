@@ -720,12 +720,9 @@ export default function RouteScreen() {
           {!isLoadingRoutes && !routeError && routes.length > 0 && (
             <>
               {/* Filter chips */}
-              <View
+              <HorizontalView
                 style={{
-                  // backgroundColor: "black",
-                  borderColor: "black",
                   paddingHorizontal: theme.spacing.screen,
-                  flexDirection: "row",
                   paddingVertical: 6,
                   gap: theme.spacing.element,
                 }}
@@ -760,7 +757,7 @@ export default function RouteScreen() {
                     </TouchableOpacity>
                   );
                 })}
-              </View>
+              </HorizontalView>
 
               {/* Route list using RoutePickerSheet */}
               <View style={styles.routeListWrap}>
