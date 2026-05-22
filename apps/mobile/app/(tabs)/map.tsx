@@ -11,8 +11,8 @@ import {
   Keyboard,
 } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
-import { StopMarker, parseWKTPoint } from "@/components/stopViews";
-import { PooledBusMarker } from "@/components/busViews";
+import { StopMarker, StopDetailsPanel, parseWKTPoint } from "@/components/stopViews";
+import { PooledBusMarker, BusDetailsPanel } from "@/components/busViews";
 import type { SelectedDestination } from "@/types/places";
 import type { CalgaryTransitStop } from "@/types/database";
 import MapView, { Marker, Region } from "react-native-maps";
@@ -20,6 +20,8 @@ import mapStyle from "@/assets/map-style.json";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useVehicleSSE } from "@/lib/vehicleSSE";
 import { loadAndCacheStops } from "@/lib/transitStopsCache";
+import { middlewareQuery } from "@/lib/middleware";
+import type { VehiclePosition } from "@/types/database";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
@@ -47,11 +49,8 @@ const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
 const SNAP_EXPANDED = SCREEN_HEIGHT * 0.62;
 const DELTA = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
 
-// Fixed pool of bus marker slots — count NEVER changes after first mount.
-// Active vehicles fill slots; idle slots park at DUMMY_COORD with opacity=0.
-// This prevents AIRMap insertReactSubview:atIndex: crashes from vehicle churn.
-// 400 slots accommodate the ~300-350 filtered vehicles typical at peak hours.
-const BUS_POOL_SIZE = 400;
+// BUS_POOL_SIZE is defined and exported from vehicleSSE.ts.
+// useVehicleSSE() returns a pre-built (VehiclePosition | null)[] of that length.
 
 // Hardcoded — this is a deployed service URL, not a secret.
 // Do not move to env: EXPO_PUBLIC_ vars are bundled into the binary and
@@ -209,7 +208,16 @@ export default function MapScreen() {
   } | null>(null);
 
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
-  const vehicles = useVehicleSSE();
+  const [selectedStop, setSelectedStop] = useState<{
+    teleride_number: number;
+    stop_name: string;
+  } | null>(null);
+  const [selectedBus, setSelectedBus] = useState<{
+    vehicleId: string;
+    routeId: string;
+    tripId: string;
+  } | null>(null);
+  const pool = useVehicleSSE();
   // Tracked after first pan/animate — null means map hasn't settled yet (safe: no markers)
   const [mapRegion, setMapRegion] = useState<Region | null>(null);
 
@@ -220,37 +228,65 @@ export default function MapScreen() {
   const [busesEnabled, setBusesEnabled] = useState(false);
   const mapInitRef = useRef(false);
 
-  // Load active transit stops — SQLite cache first, middleware on cold start.
-  // All active stops are shown; the callout shows "No service data" if there are
-  // no current arrivals (simpler than the old arrival-join filter and avoids the
-  // complex OR that the middleware's equality-only API cannot express).
+  // Load active transit stops with an arrival filter to cap marker count.
+  // Without this filter all ~3000 active stops mount simultaneously, which
+  // overflows AIRGoogleMap's insertReactSubview:atIndex: queue under Fabric interop.
+  // The OR filter keeps only stops with imminent or in-progress service (~500-800).
   useEffect(() => {
-    loadAndCacheStops().then((stops) => {
+    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
+    Promise.all([
+      loadAndCacheStops(),
+      middlewareQuery<{ stop_id: string | null }>("stop_time_updates", {
+        schedule_relationship: "neq.NO_DATA",
+        or: `(arrival_time.gte.${fiveMinAgo},arrival_time.eq.-1)`,
+        limit: 5000,
+      }),
+    ]).then(([allStops, scheduledStus]) => {
+      const scheduled = new Set(scheduledStus.map((s) => s.stop_id));
       setTransitStops(
-        stops.filter(
+        allStops.filter(
           (s) =>
+            s.status?.toLowerCase() === "active" &&
             s.teleride_number != null &&
-            s.status?.toLowerCase() === "active",
+            scheduled.has(String(s.teleride_number)),
         ),
       );
     });
   }, []);
 
-  // Once the map is ready AND has a region, enable stops immediately then buses
-  // 200 ms later — two separate commit frames prevent the AIRMap index crash.
+  // Once the map is ready, enable stops immediately then buses 200 ms later.
+  // Two separate commit frames prevent the AIRMap insertReactSubview crash.
+  // mapRegion is NOT required: waiting for onRegionChangeComplete means buses
+  // never appear when location permission is pending or GPS is slow.
   useEffect(() => {
-    if (!mapReady || !mapRegion || mapInitRef.current) return;
+    if (!mapReady || mapInitRef.current) return;
     mapInitRef.current = true;
     setStopsEnabled(true);
     const t = setTimeout(() => setBusesEnabled(true), 200);
     return () => clearTimeout(t);
-  }, [mapReady, mapRegion]);
+  }, [mapReady]);
 
-  // Render all active stops once — never remove them on pan/zoom.
-  // Viewport-filtering (adding/removing on each onRegionChangeComplete) causes
-  // AIRMap insertReactSubview:atIndex: out-of-bounds crashes in the Fabric interop
-  // layer: native loses count when children churn in and out mid-session.
-  // tracksViewChanges={false} keeps each stop marker near-zero cost.
+  const handleStopPress = useCallback(
+    (teleride_number: number, stop_name: string) => {
+      setPressedPin(null);
+      setPlaceDetails(null);
+      setSelectedBus(null);
+      setSelectedStop({ teleride_number, stop_name });
+    },
+    [],
+  );
+
+  const handleBusPress = useCallback(
+    (vehicleId: string, routeId: string, tripId: string) => {
+      setPressedPin(null);
+      setPlaceDetails(null);
+      setSelectedStop(null);
+      setSelectedBus({ vehicleId, routeId, tripId });
+    },
+    [],
+  );
+
+  // Stop markers — pre-validated, rendered once, never added/removed on pan.
   const stopMarkers = useMemo(() => {
     if (!stopsEnabled) return [];
     return transitStops
@@ -264,31 +300,24 @@ export default function MapScreen() {
           teleride_number={s.teleride_number!}
           stop_name={s.stop_name ?? "Unknown Stop"}
           point={s.point!}
+          onPress={handleStopPress}
         />
       ));
-  }, [stopsEnabled, transitStops]);
+  }, [stopsEnabled, transitStops, handleStopPress]);
 
-  // Fixed-size pool of bus marker slots — always BUS_POOL_SIZE elements, always.
-  // When vehicles update, active buses fill the front slots; remaining slots get
-  // vehicle=null (invisible, parked at dummy coord). React only updates PROPS —
-  // never inserts or removes — so AIRMap's native array stays perfectly in sync.
+  // Fixed-size pool from vehicleSSE — useVehicleSSE() returns a stable
+  // (VehiclePosition | null)[] where each vehicle_id always occupies the
+  // same index. React only diffs props, never inserts/removes native children.
   const busPool = useMemo(() => {
     if (!busesEnabled) return [];
-    const active = vehicles.filter(
-      (v) =>
-        v.latitude != null &&
-        v.longitude != null &&
-        v.trip_id != null &&
-        v.route_id != null &&
-        v.route_id !== "",
-    );
-    return Array.from({ length: BUS_POOL_SIZE }, (_, i) => (
+    return (pool as (VehiclePosition | null)[]).map((vehicle, i) => (
       <PooledBusMarker
         key={`bus-slot-${i}`}
-        vehicle={active[i] ?? null}
+        vehicle={vehicle}
+        onPress={handleBusPress}
       />
     ));
-  }, [busesEnabled, vehicles]);
+  }, [busesEnabled, pool, handleBusPress]);
 
   const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
@@ -376,6 +405,8 @@ export default function MapScreen() {
     setDestination(null);
     setPressedPin(null);
     setPlaceDetails(null);
+    setSelectedStop(null);
+    setSelectedBus(null);
     pressAbortRef.current?.abort();
     if (userLocation) {
       const userRegion: Region = { ...userLocation, ...DELTA };
@@ -429,6 +460,8 @@ export default function MapScreen() {
       setPlaceDetails(null);
 
       // Drop pin + open sheet immediately
+      setSelectedStop(null);
+      setSelectedBus(null);
       setDestination(coord);
       setPressedPin({
         coordinate: coord,
@@ -503,6 +536,8 @@ export default function MapScreen() {
       Keyboard.dismiss();
       setIsSearchActive(false);
       setPressedPin(null);
+      setSelectedStop(null);
+      setSelectedBus(null);
       setDestination(coordinate);
       snapTo(SNAP_COLLAPSED);
       mapRef.current?.animateCamera({ center: coordinate, zoom: 15 }, { duration: 500 });
@@ -671,6 +706,25 @@ export default function MapScreen() {
             {isExpanded ? "Nearby Stops" : "Explore"}
           </Text>
         </View>
+        {/* ── Stop details panel (replaces Callout) ── */}
+        {selectedStop && !isSearchActive && (
+          <StopDetailsPanel
+            teleride_number={selectedStop.teleride_number}
+            stop_name={selectedStop.stop_name}
+            onClose={() => setSelectedStop(null)}
+          />
+        )}
+
+        {/* ── Bus details panel ── */}
+        {selectedBus && !isSearchActive && (
+          <BusDetailsPanel
+            vehicleId={selectedBus.vehicleId}
+            routeId={selectedBus.routeId}
+            tripId={selectedBus.tripId}
+            onClose={() => setSelectedBus(null)}
+          />
+        )}
+
         {/* ── Pressed pin card ── */}
         {pressedPin && !isSearchActive && (
           <View style={styles.pinCard}>

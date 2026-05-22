@@ -1,8 +1,15 @@
 import React, { useState, useCallback, useEffect, useRef, memo } from "react";
-import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  ActivityIndicator,
+  TouchableOpacity,
+} from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 import Svg, { Circle as SvgCircle, Path, Text as SvgText } from "react-native-svg";
-import { Marker, Callout } from "react-native-maps";
+import { Marker } from "react-native-maps";
+import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
 import type {
@@ -33,24 +40,137 @@ interface TripStop {
 
 export interface PooledBusMarkerProps {
   vehicle: VehiclePosition | null;
+  onPress?: (vehicleId: string, routeId: string, tripId: string) => void;
 }
 
-// Inactive slots park here — off-screen enough to never clutter the map,
-// but a valid coordinate so the native layer doesn't choke.
 const DUMMY_COORD = { latitude: 51.070664, longitude: -114.059263 };
 
-// ─── Component ────────────────────────────────────────────────────────────────
+// ─── BusDetailsPanel ─────────────────────────────────────────────────────────
+// Rendered as a normal React View in map.tsx's bottom sheet.
+// Equivalent to StopDetailsPanel but shows the bus trip stop list.
 
-function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
+interface BusDetailsPanelProps {
+  vehicleId: string;
+  routeId: string;
+  tripId: string;
+  onClose: () => void;
+}
+
+export function BusDetailsPanel({
+  routeId,
+  tripId,
+  onClose,
+}: BusDetailsPanelProps) {
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
-  const [loading, setLoading] = useState(false);
-  // tracksViewChanges is only briefly true when bearing changes so the arrow redraws.
-  const [tracksViewChanges, setTracksViewChanges] = useState(false);
+  const [loading, setLoading] = useState(true);
 
-  const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const calloutOpenRef = useRef(false);
-  const prevBearingRef = useRef(vehicle?.bearing ?? 0);
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      setLoading(true);
+      const now = Math.floor(Date.now() / 1000);
+
+      const [stopTimes, routeRows] = await Promise.all([
+        middlewareQuery<StopTimeUpdate>("stop_time_updates", {
+          trip_id: tripId,
+          order_by: "stop_sequence",
+          order: "ASC",
+        }),
+        middlewareQuery<CalgaryTransitRoute>("calgary_transit_routes", {
+          route_short_name: routeId,
+          limit: 1,
+        }),
+      ]);
+
+      if (cancelled) return;
+      if (routeRows[0]?.route_long_name) setRouteName(routeRows[0].route_long_name);
+
+      const numericIds = stopTimes
+        .map((s) => parseInt(s.stop_id ?? "", 10))
+        .filter((n) => !isNaN(n));
+
+      const nameMap = await getStopNamesByTelerideNumbers(numericIds);
+      if (cancelled) return;
+
+      setTripStops(
+        stopTimes.map((s) => ({
+          stop_sequence: s.stop_sequence,
+          stop_id: s.stop_id ?? "",
+          stop_name: nameMap.get(s.stop_id ?? "") ?? `Stop ${s.stop_id}`,
+          arrival_time: s.arrival_time ?? 0,
+          passed: (s.arrival_time ?? 0) < now,
+        })),
+      );
+      setLoading(false);
+    })();
+
+    return () => { cancelled = true; };
+  }, [tripId, routeId]);
+
+  const isEmpty = !loading && tripStops.length === 0;
+
+  return (
+    <View style={s.panel}>
+      <View style={s.panelHeader}>
+        <View style={s.panelHeaderLeft}>
+          <View style={s.panelIconBox}>
+            <Ionicons name="bus" size={16} color={theme.colors.primary} />
+          </View>
+          <View style={s.panelTitleBlock}>
+            <Text style={s.panelTitle}>Bus {routeId}</Text>
+            {routeName ? (
+              <Text style={s.panelSub} numberOfLines={1}>{routeName}</Text>
+            ) : null}
+          </View>
+        </View>
+        <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+          <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+        </TouchableOpacity>
+      </View>
+
+      <View style={s.panelContent}>
+        {loading ? (
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+        ) : isEmpty ? (
+          <Text style={s.empty}>No schedule data</Text>
+        ) : (
+          <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
+            {tripStops.map((stop) => (
+              <View
+                key={stop.stop_sequence}
+                style={[s.stopRow, stop.passed && s.stopRowPassed]}
+              >
+                <View style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]} />
+                <View style={s.stopInfo}>
+                  <Text style={[s.stopName, stop.passed && s.passedText]} numberOfLines={1}>
+                    {stop.stop_name}
+                  </Text>
+                  <Text style={[s.stopTime, stop.passed && s.passedText]}>
+                    {fmtEpoch(stop.arrival_time)}
+                  </Text>
+                </View>
+                {stop.passed && (
+                  <View style={s.passedPill}>
+                    <Text style={s.passedPillText}>Passed</Text>
+                  </View>
+                )}
+              </View>
+            ))}
+          </ScrollView>
+        )}
+      </View>
+    </View>
+  );
+}
+
+// ─── PooledBusMarker ─────────────────────────────────────────────────────────
+
+function PooledBusMarkerComponent({ vehicle, onPress }: PooledBusMarkerProps) {
+  // tracksViewChanges briefly flips true when bearing changes so the native
+  // layer re-snapshots the arrow + route label.
+  const [tracksViewChanges, setTracksViewChanges] = useState(false);
 
   const vehicleId = vehicle?.vehicle_id ?? null;
   const tripId    = vehicle?.trip_id    ?? null;
@@ -59,24 +179,20 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
   const latitude  = vehicle?.latitude   ?? DUMMY_COORD.latitude;
   const longitude = vehicle?.longitude  ?? DUMMY_COORD.longitude;
 
-  // When this slot is reassigned to a different vehicle, wipe stale state
-  // and stop any open polling so the old trip data doesn't bleed through.
+  // -1 is the sentinel that forces a flip on the first render of a new vehicle.
+  const prevBearingRef = useRef(-1);
+
+  // When this slot is reassigned to a different vehicle, reset prevBearing to -1
+  // so the bearing effect below always fires a re-snapshot for the new vehicle,
+  // regardless of whether the new bearing happens to equal the previous one.
   useEffect(() => {
-    setTripStops([]);
-    setRouteName("");
-    setLoading(false);
-    calloutOpenRef.current = false;
-    if (pollingRef.current !== null) {
-      clearInterval(pollingRef.current);
-      pollingRef.current = null;
-    }
+    prevBearingRef.current = -1;
   }, [vehicleId]);
 
-  // Briefly flip tracksViewChanges to let the native layer re-snapshot
-  // the bearing arrow — only when the callout is not open (re-snapshotting
-  // while the callout is open forces it to close).
+  // Re-snapshot the marker (arrow direction + route label) whenever bearing changes.
+  // No callout-open guard needed — Callout has been removed from this marker.
   useEffect(() => {
-    if (!vehicle || calloutOpenRef.current) return;
+    if (!vehicle) return;
     if (prevBearingRef.current === bearing) return;
     prevBearingRef.current = bearing;
     setTracksViewChanges(true);
@@ -84,58 +200,6 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
     return () => clearTimeout(t);
   }, [bearing, vehicle]);
 
-  // Stop polling on unmount
-  useEffect(
-    () => () => {
-      if (pollingRef.current !== null) clearInterval(pollingRef.current);
-    },
-    [],
-  );
-
-  // ── Trip fetch ────────────────────────────────────────────────────────────
-  const fetchTripDetails = useCallback(async () => {
-    if (!tripId || !routeId) return;
-    setLoading(true);
-    const now = Math.floor(Date.now() / 1000);
-
-    const [stopTimes, routeRows] = await Promise.all([
-      middlewareQuery<StopTimeUpdate>("stop_time_updates", {
-        trip_id: tripId,
-        order_by: "stop_sequence",
-        order: "ASC",
-      }),
-      middlewareQuery<CalgaryTransitRoute>("calgary_transit_routes", {
-        route_short_name: routeId,
-        limit: 1,
-      }),
-    ]);
-
-    if (routeRows[0]?.route_long_name) setRouteName(routeRows[0].route_long_name);
-
-    if (!stopTimes.length) {
-      setLoading(false);
-      return;
-    }
-
-    const numericIds = stopTimes
-      .map((s) => parseInt(s.stop_id ?? "", 10))
-      .filter((n) => !isNaN(n));
-
-    const nameMap = await getStopNamesByTelerideNumbers(numericIds);
-
-    setTripStops(
-      stopTimes.map((s) => ({
-        stop_sequence: s.stop_sequence,
-        stop_id:       s.stop_id ?? "",
-        stop_name:     nameMap.get(s.stop_id ?? "") ?? `Stop ${s.stop_id}`,
-        arrival_time:  s.arrival_time ?? 0,
-        passed:        (s.arrival_time ?? 0) < now,
-      })),
-    );
-    setLoading(false);
-  }, [tripId, routeId]);
-
-  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <Marker
       coordinate={{ latitude, longitude }}
@@ -143,25 +207,12 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
       tracksViewChanges={tracksViewChanges}
       opacity={vehicle ? 1 : 0}
       onPress={
-        vehicle
-          ? () => {
-              calloutOpenRef.current = true;
-              fetchTripDetails();
-              if (pollingRef.current === null) {
-                pollingRef.current = setInterval(fetchTripDetails, 60_000);
-              }
-            }
+        vehicle && onPress && vehicleId && routeId && tripId
+          ? () => onPress(vehicleId, routeId, tripId)
           : undefined
       }
-      onDeselect={() => {
-        calloutOpenRef.current = false;
-        if (pollingRef.current !== null) {
-          clearInterval(pollingRef.current);
-          pollingRef.current = null;
-        }
-      }}
     >
-      {/* Three layered SVGs so arrow rotates while route label stays upright */}
+      {/* Three layered SVGs — arrow rotates, route label stays upright */}
       <View style={s.markerContainer}>
         <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
           <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
@@ -189,73 +240,6 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
           </SvgText>
         </Svg>
       </View>
-
-      {/*
-        Callout is ALWAYS present as a child of this Marker — removing it would
-        change the Marker's child count and risk another AIRMap index crash.
-        For inactive slots the callout body is a zero-size view.
-      */}
-      <Callout tooltip>
-        {vehicle ? (
-          <View style={s.callout}>
-            <Text style={s.calloutTitle}>Bus {routeId}</Text>
-            {routeName ? (
-              <Text style={s.destination} numberOfLines={1}>
-                {routeName}
-              </Text>
-            ) : null}
-
-            <View style={s.contentArea}>
-            {loading ? (
-              <ActivityIndicator
-                size="small"
-                color={theme.colors.primary}
-              />
-            ) : tripStops.length === 0 ? (
-              <Text style={s.empty}>No schedule data</Text>
-            ) : (
-              <ScrollView
-                style={s.scroll}
-                showsVerticalScrollIndicator={false}
-              >
-                {tripStops.map((stop) => (
-                  <View
-                    key={stop.stop_sequence}
-                    style={[s.stopRow, stop.passed && s.stopRowPassed]}
-                  >
-                    <View
-                      style={[
-                        s.sequenceDot,
-                        stop.passed && s.sequenceDotPassed,
-                      ]}
-                    />
-                    <View style={s.stopInfo}>
-                      <Text
-                        style={[s.stopName, stop.passed && s.passedText]}
-                        numberOfLines={1}
-                      >
-                        {stop.stop_name}
-                      </Text>
-                      <Text style={[s.stopTime, stop.passed && s.passedText]}>
-                        {fmtEpoch(stop.arrival_time)}
-                      </Text>
-                    </View>
-                    {stop.passed && (
-                      <View style={s.passedPill}>
-                        <Text style={s.passedPillText}>Passed</Text>
-                      </View>
-                    )}
-                  </View>
-                ))}
-              </ScrollView>
-            )}
-            </View>
-          </View>
-        ) : (
-          // Zero-size placeholder keeps the Callout child stable in the tree
-          <View style={{ width: 0, height: 0 }} />
-        )}
-      </Callout>
     </Marker>
   );
 }
@@ -269,40 +253,66 @@ const s = StyleSheet.create({
     width: 36,
     height: 36,
   },
-  callout: {
-    width: 270,
-    padding: 13,
+
+  // ── Panel shell (matches StopDetailsPanel style) ──
+  panel: {
+    marginHorizontal: theme.spacing.screen,
+    marginBottom: 12,
     backgroundColor: "white",
-    borderRadius: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    overflow: "hidden",
   },
-  calloutTitle: {
-    fontSize: theme.fontSize.subtitle,
+  panelHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    padding: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: theme.colors.border,
+  },
+  panelHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
+  panelIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: theme.colors.primary + "15",
+    justifyContent: "center",
+    alignItems: "center",
+    flexShrink: 0,
+  },
+  panelTitleBlock: { flex: 1 },
+  panelTitle: {
+    fontSize: theme.fontSize.body,
     fontWeight: "700",
     color: "#1A1C1F",
   },
-  destination: {
+  panelSub: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
-    marginTop: 2,
-    marginBottom: 10,
+    marginTop: 1,
   },
+  panelContent: {
+    height: 180,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    justifyContent: "center",
+  },
+
   empty: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
     textAlign: "center",
     paddingVertical: 8,
   },
-  contentArea: {
-    height: 180,
-    justifyContent: "center" as const,
-    marginTop: 4,
-  },
   scroll: { flex: 1 },
+
   stopRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -311,9 +321,7 @@ const s = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: theme.colors.border,
   },
-  stopRowPassed: {
-    opacity: 0.45,
-  },
+  stopRowPassed: { opacity: 0.45 },
   sequenceDot: {
     width: 8,
     height: 8,
@@ -321,25 +329,15 @@ const s = StyleSheet.create({
     backgroundColor: theme.colors.primary,
     flexShrink: 0,
   },
-  sequenceDotPassed: {
-    backgroundColor: theme.colors.text,
-  },
-  stopInfo: {
-    flex: 1,
-    gap: 1,
-  },
+  sequenceDotPassed: { backgroundColor: theme.colors.text },
+  stopInfo: { flex: 1, gap: 1 },
   stopName: {
     fontSize: theme.fontSize.caption,
     fontWeight: "600",
     color: "#1A1C1F",
   },
-  stopTime: {
-    fontSize: 11,
-    color: theme.colors.text,
-  },
-  passedText: {
-    color: theme.colors.text,
-  },
+  stopTime: { fontSize: 11, color: theme.colors.text },
+  passedText: { color: theme.colors.text },
   passedPill: {
     backgroundColor: theme.colors.muted,
     paddingHorizontal: 6,

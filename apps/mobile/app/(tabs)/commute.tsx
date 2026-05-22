@@ -370,12 +370,14 @@ export default function CommuteScreen() {
   }, [route]);
 
   // ── Filter live vehicles from the shared SSE feed by active route IDs ──────────
+  // useVehicleSSE() returns (VehiclePosition | null)[] — null = empty pool slot.
   const routeVehicles = useMemo(
     () =>
       transitRouteIds.length === 0
         ? []
         : allVehicles.filter(
-            (v) => v.route_id != null && transitRouteIds.includes(v.route_id),
+            (v): v is NonNullable<typeof v> =>
+              v !== null && v.route_id != null && transitRouteIds.includes(v.route_id),
           ),
     [allVehicles, transitRouteIds],
   );
@@ -398,29 +400,23 @@ export default function CommuteScreen() {
     const fifteenMinAgo = now - 900;
 
     (async () => {
-      // Ensure stops cache is warm before we try to resolve names + coordinates.
+      // Ensure stops cache is warm before we try to resolve coordinates.
       await loadAndCacheStops();
 
-      // Fetch stop_time_updates for each active trip in parallel.
-      const allStopTimes = await Promise.all(
-        tripIds.map((id) =>
-          middlewareQuery<{ stop_id: string | null; arrival_time: number | null; schedule_relationship: string | null }>(
-            "stop_time_updates",
-            { trip_id: id, limit: 200 },
-          ),
-        ),
+      // Single request: all trip_ids via IN, server-side schedule + time filters.
+      const rawStopTimes = await middlewareQuery<{ stop_id: string | null }>(
+        "stop_time_updates",
+        {
+          trip_id: `in.(${tripIds.join(",")})`,
+          schedule_relationship: "neq.NO_DATA",
+          or: `(arrival_time.gte.${fifteenMinAgo},arrival_time.eq.-1)`,
+          limit: 500,
+        },
       );
 
       const stopIds = [
         ...new Set(
-          allStopTimes
-            .flat()
-            .filter(
-              (s) =>
-                s.schedule_relationship !== "NO_DATA" &&
-                (s.arrival_time === -1 ||
-                  (s.arrival_time != null && s.arrival_time >= fifteenMinAgo)),
-            )
+          rawStopTimes
             .map((s) => parseInt(s.stop_id ?? "", 10))
             .filter((n) => !isNaN(n)),
         ),
