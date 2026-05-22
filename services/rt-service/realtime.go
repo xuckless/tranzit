@@ -16,6 +16,11 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+type prevPos struct {
+	lat, lon float64
+	ts       int64
+}
+
 func getRTFeed(appToken, url string, retries int) (*gtfs.FeedMessage, []byte) {
 	for attempt := 1; attempt <= retries; attempt++ {
 		req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -85,7 +90,6 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 	}
 	defer conn.Release()
 
-	// Pre-fetch previous positions and dwell history before overwriting.
 	prevPositions := make(map[string]prevPos)
 	rows, err := conn.Query(ctx, "SELECT vehicle_id, latitude, longitude, timestamp FROM vehicle_positions")
 	if err == nil {
@@ -97,19 +101,6 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 			}
 		}
 		rows.Close()
-	}
-
-	dwellMap := make(map[[2]string]float64)
-	drows, err := conn.Query(ctx, "SELECT stop_id, route_id, avg_dwell_seconds FROM stop_analytics WHERE avg_dwell_seconds > 0")
-	if err == nil {
-		for drows.Next() {
-			var sid, rid string
-			var avg float64
-			if err := drows.Scan(&sid, &rid, &avg); err == nil {
-				dwellMap[[2]string{sid, rid}] = avg
-			}
-		}
-		drows.Close()
 	}
 
 	// --- Vehicle Positions ---
@@ -264,88 +255,6 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 			return fmt.Errorf("impute route_id: %w", err)
 		}
 
-		// Incremental stop_analytics from scheduled GTFS data.
-		if _, err := conn.Exec(ctx, `
-			WITH batch AS (
-				SELECT
-					stu.stop_id,
-					tu.route_id,
-					COUNT(*)                                              AS batch_count,
-					AVG(COALESCE(stu.arrival_delay, 0))                   AS batch_avg_delay,
-					AVG(CASE WHEN stu.departure_time IS NOT NULL
-					          AND stu.arrival_time  IS NOT NULL
-					          AND stu.departure_time > stu.arrival_time
-					         THEN (stu.departure_time - stu.arrival_time)::REAL
-					         ELSE 0 END)                                  AS batch_avg_dwell,
-					MAX(stu.arrival_delay)                                AS last_delay,
-					MAX(CASE WHEN stu.departure_time IS NOT NULL
-					          AND stu.arrival_time  IS NOT NULL
-					          AND stu.departure_time > stu.arrival_time
-					         THEN (stu.departure_time - stu.arrival_time)::INTEGER END) AS last_dwell
-				FROM stop_time_updates stu
-				JOIN trip_updates tu ON stu.trip_id = tu.trip_id
-				WHERE tu.route_id IS NOT NULL
-				  AND stu.arrival_delay IS NOT NULL
-				GROUP BY stu.stop_id, tu.route_id
-			)
-			INSERT INTO stop_analytics
-				(stop_id, route_id, sample_count,
-				 avg_delay_seconds, avg_dwell_seconds, congestion_score,
-				 last_delay_seconds, last_dwell_seconds, last_updated)
-			SELECT
-				stop_id, route_id, batch_count,
-				batch_avg_delay, batch_avg_dwell,
-				LEAST(100, GREATEST(0, batch_avg_delay / 6.0)),
-				last_delay, last_dwell,
-				EXTRACT(EPOCH FROM NOW())::BIGINT
-			FROM batch
-			ON CONFLICT (stop_id, route_id) DO UPDATE SET
-				sample_count       = stop_analytics.sample_count + EXCLUDED.sample_count,
-				avg_delay_seconds  = (stop_analytics.avg_delay_seconds * stop_analytics.sample_count
-				                      + EXCLUDED.avg_delay_seconds      * EXCLUDED.sample_count)
-				                     / (stop_analytics.sample_count + EXCLUDED.sample_count),
-				avg_dwell_seconds  = (stop_analytics.avg_dwell_seconds * stop_analytics.sample_count
-				                      + EXCLUDED.avg_dwell_seconds      * EXCLUDED.sample_count)
-				                     / (stop_analytics.sample_count + EXCLUDED.sample_count),
-				congestion_score   = LEAST(100, GREATEST(0,
-				                       (stop_analytics.avg_delay_seconds * stop_analytics.sample_count
-				                        + EXCLUDED.avg_delay_seconds      * EXCLUDED.sample_count)
-				                       / (stop_analytics.sample_count + EXCLUDED.sample_count) / 6.0
-				                     )),
-				last_delay_seconds = EXCLUDED.last_delay_seconds,
-				last_dwell_seconds = EXCLUDED.last_dwell_seconds,
-				last_updated       = EXCLUDED.last_updated`); err != nil {
-			return fmt.Errorf("stop_analytics update: %w", err)
-		}
-
-		// Seed new trip_stop_delays rows; ON CONFLICT DO NOTHING preserves geospatial state.
-		if _, err := conn.Exec(ctx, `
-			INSERT INTO trip_stop_delays
-				(trip_id, stop_sequence, stop_id, route_id,
-				 delay_seconds, historical_avg_delay, historical_avg_dwell,
-				 congestion_score, dwell_seconds, transit_state)
-			SELECT
-				stu.trip_id, stu.stop_sequence, stu.stop_id, tu.route_id,
-				stu.arrival_delay,
-				sa.avg_delay_seconds, sa.avg_dwell_seconds, sa.congestion_score,
-				CASE WHEN stu.departure_time IS NOT NULL AND stu.arrival_time IS NOT NULL
-				          AND stu.departure_time > stu.arrival_time
-				     THEN (stu.departure_time - stu.arrival_time)::INTEGER END,
-				'APPROACHING'
-			FROM stop_time_updates stu
-			LEFT JOIN trip_updates tu ON stu.trip_id = tu.trip_id
-			LEFT JOIN stop_analytics sa
-				   ON stu.stop_id = sa.stop_id
-				  AND tu.route_id = sa.route_id
-			ON CONFLICT (trip_id, stop_sequence) DO NOTHING`); err != nil {
-			return fmt.Errorf("seed trip_stop_delays: %w", err)
-		}
-	}
-
-	// --- Geospatial engine ---
-	fmt.Println("Running geospatial observation engine...")
-	if err := updateGeospatialObservations(ctx, pool, prevPositions, dwellMap); err != nil {
-		return fmt.Errorf("geospatial: %w", err)
 	}
 
 	// --- Alerts ---

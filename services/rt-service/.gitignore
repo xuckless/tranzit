@@ -6,7 +6,6 @@
 go.sum
 
 
-Dockerfile
 .dockerignore
 
 hidden.md
