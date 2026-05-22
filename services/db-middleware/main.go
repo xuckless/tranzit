@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
@@ -34,6 +35,190 @@ var allowedTables = map[string]struct{}{
 	"stop_analytics":         {},
 }
 
+// ── SSE for vehicle_positions ─────────────────────────────────────────────────
+
+type vehicleHub struct {
+	mu         sync.RWMutex
+	snapshot   []map[string]any
+	prevHashes map[string]string // vehicle_id → json(row) used for change detection
+	subs       map[chan []byte]struct{}
+}
+
+type vehicleDiff struct {
+	Added   []map[string]any `json:"added"`
+	Updated []map[string]any `json:"updated"`
+	Removed []string         `json:"removed"`
+}
+
+var vHub = &vehicleHub{
+	prevHashes: make(map[string]string),
+	subs:       make(map[chan []byte]struct{}),
+}
+
+func startVehiclePoller(ctx context.Context) {
+	t := time.NewTicker(30 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			if err := refreshVehicleCache(ctx); err != nil {
+				log.Printf("vehicle poller: %v", err)
+			}
+		}
+	}
+}
+
+func refreshVehicleCache(ctx context.Context) error {
+	rows, err := db.Query(ctx, "SELECT * FROM vehicle_positions")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	fds := rows.FieldDescriptions()
+	colNames := make([]string, len(fds))
+	for i, fd := range fds {
+		colNames[i] = string(fd.Name)
+	}
+
+	newRows := make([]map[string]any, 0)
+	for rows.Next() {
+		vals, err := rows.Values()
+		if err != nil {
+			return err
+		}
+		row := make(map[string]any, len(colNames))
+		for i, name := range colNames {
+			row[name] = vals[i]
+		}
+		newRows = append(newRows, row)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+
+	vHub.mu.RLock()
+	prevHashes := vHub.prevHashes
+	vHub.mu.RUnlock()
+
+	diff, newHashes := computeVehicleDiff(prevHashes, newRows)
+
+	vHub.mu.Lock()
+	vHub.snapshot = newRows
+	vHub.prevHashes = newHashes
+	subs := make([]chan []byte, 0, len(vHub.subs))
+	for ch := range vHub.subs {
+		subs = append(subs, ch)
+	}
+	vHub.mu.Unlock()
+
+	if len(subs) == 0 {
+		return nil
+	}
+
+	// nil msg = heartbeat (no changes); non-nil = diff payload
+	var msg []byte
+	if len(diff.Added)+len(diff.Updated)+len(diff.Removed) > 0 {
+		msg, err = json.Marshal(diff)
+		if err != nil {
+			return err
+		}
+	}
+
+	for _, ch := range subs {
+		select {
+		case ch <- msg:
+		default: // slow subscriber; skip this tick
+		}
+	}
+	return nil
+}
+
+// computeVehicleDiff compares prev hashes against the new row set and returns
+// a diff plus the updated hash map.
+func computeVehicleDiff(prev map[string]string, newRows []map[string]any) (vehicleDiff, map[string]string) {
+	diff := vehicleDiff{
+		Added:   []map[string]any{},
+		Updated: []map[string]any{},
+		Removed: []string{},
+	}
+	newHashes := make(map[string]string, len(newRows))
+
+	for _, row := range newRows {
+		vid := fmt.Sprintf("%v", row["vehicle_id"])
+		b, _ := json.Marshal(row) // map keys are sorted by json.Marshal
+		h := string(b)
+		newHashes[vid] = h
+
+		if oldH, exists := prev[vid]; !exists {
+			diff.Added = append(diff.Added, row)
+		} else if oldH != h {
+			diff.Updated = append(diff.Updated, row)
+		}
+	}
+
+	for vid := range prev {
+		if _, exists := newHashes[vid]; !exists {
+			diff.Removed = append(diff.Removed, vid)
+		}
+	}
+
+	return diff, newHashes
+}
+
+func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	ch := make(chan []byte, 8)
+
+	vHub.mu.Lock()
+	vHub.subs[ch] = struct{}{}
+	snapshot := vHub.snapshot
+	vHub.mu.Unlock()
+
+	defer func() {
+		vHub.mu.Lock()
+		delete(vHub.subs, ch)
+		vHub.mu.Unlock()
+	}()
+
+	// Send current snapshot immediately on connect.
+	if b, err := json.Marshal(map[string]any{"count": len(snapshot), "data": snapshot}); err == nil {
+		fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case msg := <-ch:
+			if msg == nil {
+				fmt.Fprintf(w, ": ping\n\n")
+			} else {
+				fmt.Fprintf(w, "event: update\ndata: %s\n\n", msg)
+			}
+			flusher.Flush()
+		}
+	}
+}
+
+// ── REST handlers ─────────────────────────────────────────────────────────────
+
 func main() {
 	_ = godotenv.Load()
 
@@ -54,8 +239,16 @@ func main() {
 	}
 	log.Println("connected to database")
 
+	// Warm the vehicle cache before accepting connections.
+	if err := refreshVehicleCache(context.Background()); err != nil {
+		log.Fatalf("initial vehicle cache load: %v", err)
+	}
+	go startVehiclePoller(context.Background())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
+	// Exact match takes precedence over the /api/v1/ prefix match.
+	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
 	mux.HandleFunc("/api/v1/", withCORS(handleQuery))
 
 	port := os.Getenv("PORT")
