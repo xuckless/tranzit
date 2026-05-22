@@ -217,6 +217,80 @@ func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ── Query filter helpers ──────────────────────────────────────────────────────
+
+// postgrestOps maps PostgREST operator names to their SQL equivalents.
+var postgrestOps = map[string]string{
+	"eq":    "=",
+	"neq":   "!=",
+	"gt":    ">",
+	"gte":   ">=",
+	"lt":    "<",
+	"lte":   "<=",
+	"like":  "LIKE",
+	"ilike": "ILIKE",
+}
+
+type parsedFilter struct {
+	sqlOp  string
+	values []string
+	isIN   bool
+}
+
+// parseFilterValue handles PostgREST value prefixes:
+//   - "in.(1,2,3)"   → IN with multiple bind params
+//   - "gte.val"      → >= with one bind param
+//   - "val"          → = with one bind param (plain exact-match)
+func parseFilterValue(raw string) parsedFilter {
+	if strings.HasPrefix(raw, "in.(") && strings.HasSuffix(raw, ")") {
+		inner := raw[len("in.(") : len(raw)-1]
+		vals := strings.Split(inner, ",")
+		return parsedFilter{sqlOp: "IN", values: vals, isIN: true}
+	}
+	if dot := strings.Index(raw, "."); dot > 0 {
+		if sqlOp, ok := postgrestOps[raw[:dot]]; ok {
+			return parsedFilter{sqlOp: sqlOp, values: []string{raw[dot+1:]}}
+		}
+	}
+	return parsedFilter{sqlOp: "=", values: []string{raw}}
+}
+
+type orTerm struct {
+	col   string
+	sqlOp string
+	val   string
+}
+
+// parseORTerms parses ?or=(col.op.val,col.op.val,...).
+// Unknown columns and operators are silently skipped.
+func parseORTerms(orParam string, colSet map[string]struct{}) []orTerm {
+	s := strings.TrimSpace(orParam)
+	if !strings.HasPrefix(s, "(") || !strings.HasSuffix(s, ")") {
+		return nil
+	}
+	s = s[1 : len(s)-1]
+
+	var terms []orTerm
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		// SplitN(..., 3) keeps dots inside the value intact.
+		seg := strings.SplitN(part, ".", 3)
+		if len(seg) != 3 {
+			continue
+		}
+		col, op, val := seg[0], seg[1], seg[2]
+		if _, ok := colSet[col]; !ok {
+			continue
+		}
+		sqlOp, ok := postgrestOps[op]
+		if !ok {
+			continue
+		}
+		terms = append(terms, orTerm{col: col, sqlOp: sqlOp, val: val})
+	}
+	return terms
+}
+
 // ── REST handlers ─────────────────────────────────────────────────────────────
 
 func main() {
@@ -342,20 +416,48 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build parameterised WHERE from remaining query params that match column names.
+	// Supports PostgREST-style operators: ?col=gte.val, ?col=in.(1,2,3), ?or=(col.op.val,...)
 	var conds []string
 	var args []any
 	idx := 1
+
 	for key, vals := range q {
 		switch key {
-		case "limit", "offset", "order_by", "order":
+		case "limit", "offset", "order_by", "order", "or":
 			continue
 		}
 		if _, ok := colSet[key]; !ok {
 			continue
 		}
-		conds = append(conds, fmt.Sprintf("%s = $%d", key, idx))
-		args = append(args, vals[0])
-		idx++
+		pf := parseFilterValue(vals[0])
+		if pf.isIN {
+			if len(pf.values) == 0 {
+				continue
+			}
+			placeholders := make([]string, len(pf.values))
+			for i, v := range pf.values {
+				placeholders[i] = fmt.Sprintf("$%d", idx)
+				args = append(args, strings.TrimSpace(v))
+				idx++
+			}
+			conds = append(conds, fmt.Sprintf("%s IN (%s)", key, strings.Join(placeholders, ", ")))
+		} else {
+			conds = append(conds, fmt.Sprintf("%s %s $%d", key, pf.sqlOp, idx))
+			args = append(args, pf.values[0])
+			idx++
+		}
+	}
+
+	if orVal := q.Get("or"); orVal != "" {
+		if terms := parseORTerms(orVal, colSet); len(terms) > 0 {
+			orParts := make([]string, len(terms))
+			for i, t := range terms {
+				orParts[i] = fmt.Sprintf("%s %s $%d", t.col, t.sqlOp, idx)
+				args = append(args, t.val)
+				idx++
+			}
+			conds = append(conds, "("+strings.Join(orParts, " OR ")+")")
+		}
 	}
 
 	query := "SELECT * FROM " + table
