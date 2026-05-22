@@ -1,4 +1,5 @@
 import * as SQLite from "expo-sqlite";
+import type { CalgaryTransitStop } from "@/types/database";
 
 // ─── Public Types ─────────────────────────────────────────────────────────────
 
@@ -73,6 +74,21 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE UNIQUE INDEX IF NOT EXISTS uq_one_default_per_category
       ON category_places (categoryID)
       WHERE is_default = 1
+  `);
+
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS transit_stops_cache (
+      globalid        TEXT    PRIMARY KEY,
+      teleride_number INTEGER,
+      stop_name       TEXT,
+      status          TEXT,
+      point           TEXT,
+      cached_at       INTEGER NOT NULL
+    )
+  `);
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_stops_teleride
+      ON transit_stops_cache (teleride_number)
   `);
 }
 
@@ -248,4 +264,80 @@ export async function removePlaceFromCategory(
     categoryId,
     placeId
   );
+}
+
+// ─── Transit Stops Cache ──────────────────────────────────────────────────────
+
+const STOPS_TTL_SECONDS = 24 * 60 * 60;
+
+export async function getCachedTransitStops(): Promise<CalgaryTransitStop[] | null> {
+  const db = await getDb();
+  const meta = await db.getFirstAsync<{ oldest: number | null }>(
+    "SELECT MIN(cached_at) AS oldest FROM transit_stops_cache"
+  );
+  if (!meta?.oldest) return null;
+  if (Math.floor(Date.now() / 1000) - meta.oldest > STOPS_TTL_SECONDS) return null;
+  const rows = await db.getAllAsync<{
+    globalid: string;
+    teleride_number: number | null;
+    stop_name: string | null;
+    status: string | null;
+    point: string | null;
+  }>("SELECT globalid, teleride_number, stop_name, status, point FROM transit_stops_cache");
+  return rows.map((r) => ({ ...r, create_dt_utc: null, mod_dt_utc: null }));
+}
+
+export async function cacheTransitStops(stops: CalgaryTransitStop[]): Promise<void> {
+  const db = await getDb();
+  const now = Math.floor(Date.now() / 1000);
+  await db.withTransactionAsync(async () => {
+    await db.runAsync("DELETE FROM transit_stops_cache");
+    for (const s of stops) {
+      await db.runAsync(
+        `INSERT OR REPLACE INTO transit_stops_cache
+           (globalid, teleride_number, stop_name, status, point, cached_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        s.globalid,
+        s.teleride_number ?? null,
+        s.stop_name ?? null,
+        s.status ?? null,
+        s.point ?? null,
+        now,
+      );
+    }
+  });
+}
+
+export async function getStopNamesByTelerideNumbers(
+  ids: number[]
+): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map();
+  const db = await getDb();
+  const ph = ids.map(() => "?").join(",");
+  const rows = await db.getAllAsync<{ teleride_number: number; stop_name: string | null }>(
+    `SELECT teleride_number, stop_name FROM transit_stops_cache WHERE teleride_number IN (${ph})`,
+    ...ids
+  );
+  return new Map(rows.map((r) => [String(r.teleride_number), r.stop_name ?? `Stop ${r.teleride_number}`]));
+}
+
+export async function getStopsByTelerideNumbers(
+  ids: number[]
+): Promise<CalgaryTransitStop[]> {
+  if (ids.length === 0) return [];
+  const db = await getDb();
+  const ph = ids.map(() => "?").join(",");
+  const rows = await db.getAllAsync<{
+    globalid: string;
+    teleride_number: number | null;
+    stop_name: string | null;
+    status: string | null;
+    point: string | null;
+  }>(
+    `SELECT globalid, teleride_number, stop_name, status, point
+       FROM transit_stops_cache
+      WHERE teleride_number IN (${ph})`,
+    ...ids
+  );
+  return rows.map((r) => ({ ...r, create_dt_utc: null, mod_dt_utc: null }));
 }

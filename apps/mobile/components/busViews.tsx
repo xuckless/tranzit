@@ -3,11 +3,11 @@ import { View, Text, StyleSheet, ActivityIndicator } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 import Svg, { Circle as SvgCircle, Path, Text as SvgText } from "react-native-svg";
 import { Marker, Callout } from "react-native-maps";
-import { supabase } from "@/lib/supabase";
+import { middlewareQuery } from "@/lib/middleware";
+import { getStopNamesByTelerideNumbers } from "@/lib/db";
 import type {
   StopTimeUpdate,
   CalgaryTransitRoute,
-  CalgaryTransitStop,
   VehiclePosition,
 } from "@/types/database";
 import { theme } from "@/styles/theme";
@@ -98,25 +98,21 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
     setLoading(true);
     const now = Math.floor(Date.now() / 1000);
 
-    const [{ data: rawStopTimes }, { data: rawRouteRow }] = await Promise.all([
-      supabase
-        .from("stop_time_updates")
-        .select("*")
-        .eq("trip_id", tripId)
-        .order("stop_sequence"),
-      supabase
-        .from("calgary_transit_routes")
-        .select("*")
-        .eq("route_short_name", routeId)
-        .limit(1)
-        .maybeSingle(),
+    const [stopTimes, routeRows] = await Promise.all([
+      middlewareQuery<StopTimeUpdate>("stop_time_updates", {
+        trip_id: tripId,
+        order_by: "stop_sequence",
+        order: "ASC",
+      }),
+      middlewareQuery<CalgaryTransitRoute>("calgary_transit_routes", {
+        route_short_name: routeId,
+        limit: 1,
+      }),
     ]);
-    const stopTimes = rawStopTimes as StopTimeUpdate[] | null;
-    const routeRow  = rawRouteRow  as CalgaryTransitRoute | null;
 
-    if (routeRow?.route_long_name) setRouteName(routeRow.route_long_name);
+    if (routeRows[0]?.route_long_name) setRouteName(routeRows[0].route_long_name);
 
-    if (!stopTimes?.length) {
+    if (!stopTimes.length) {
       setLoading(false);
       return;
     }
@@ -125,15 +121,7 @@ function PooledBusMarkerComponent({ vehicle }: PooledBusMarkerProps) {
       .map((s) => parseInt(s.stop_id ?? "", 10))
       .filter((n) => !isNaN(n));
 
-    const { data: rawStopRows } = await supabase
-      .from("calgary_transit_stops")
-      .select("*")
-      .in("teleride_number", numericIds);
-    const stopRows = rawStopRows as CalgaryTransitStop[] | null;
-
-    const nameMap = new Map(
-      stopRows?.map((r) => [String(r.teleride_number), r.stop_name]) ?? [],
-    );
+    const nameMap = await getStopNamesByTelerideNumbers(numericIds);
 
     setTripStops(
       stopTimes.map((s) => ({

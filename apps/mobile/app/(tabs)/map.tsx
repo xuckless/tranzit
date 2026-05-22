@@ -14,11 +14,12 @@ import { SearchSheet } from "@/components/search/SearchSheet";
 import { StopMarker, parseWKTPoint } from "@/components/stopViews";
 import { PooledBusMarker } from "@/components/busViews";
 import type { SelectedDestination } from "@/types/places";
-import type { CalgaryTransitStop, VehiclePosition } from "@/types/database";
+import type { CalgaryTransitStop } from "@/types/database";
 import MapView, { Marker, Region } from "react-native-maps";
 import mapStyle from "@/assets/map-style.json";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { supabase } from "@/lib/supabase";
+import { useVehicleSSE } from "@/lib/vehicleSSE";
+import { loadAndCacheStops } from "@/lib/transitStopsCache";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
@@ -49,7 +50,8 @@ const DELTA = { latitudeDelta: 0.01, longitudeDelta: 0.01 };
 // Fixed pool of bus marker slots — count NEVER changes after first mount.
 // Active vehicles fill slots; idle slots park at DUMMY_COORD with opacity=0.
 // This prevents AIRMap insertReactSubview:atIndex: crashes from vehicle churn.
-const BUS_POOL_SIZE = 200;
+// 400 slots accommodate the ~300-350 filtered vehicles typical at peak hours.
+const BUS_POOL_SIZE = 400;
 
 // Hardcoded — this is a deployed service URL, not a secret.
 // Do not move to env: EXPO_PUBLIC_ vars are bundled into the binary and
@@ -207,7 +209,7 @@ export default function MapScreen() {
   } | null>(null);
 
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
-  const [vehicles, setVehicles] = useState<VehiclePosition[]>([]);
+  const vehicles = useVehicleSSE();
   // Tracked after first pan/animate — null means map hasn't settled yet (safe: no markers)
   const [mapRegion, setMapRegion] = useState<Region | null>(null);
 
@@ -218,49 +220,20 @@ export default function MapScreen() {
   const [busesEnabled, setBusesEnabled] = useState(false);
   const mapInitRef = useRef(false);
 
-  // Fetch active stops that currently have scheduled arrivals.
-  // A stop renders if it is active AND has at least one stop_time_update where
-  // schedule_relationship != NO_DATA and the bus is upcoming or already at the stop.
+  // Load active transit stops — SQLite cache first, middleware on cold start.
+  // All active stops are shown; the callout shows "No service data" if there are
+  // no current arrivals (simpler than the old arrival-join filter and avoids the
+  // complex OR that the middleware's equality-only API cannot express).
   useEffect(() => {
-    const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
-    Promise.all([
-      supabase
-        .from("calgary_transit_stops")
-        .select("*")
-        .ilike("status", "active"),
-      supabase
-        .from("stop_time_updates")
-        .select("stop_id")
-        .neq("schedule_relationship", "NO_DATA")
-        // upcoming arrivals OR bus currently at stop (arrival=-1, departure is still a valid future ts)
-        .or(`arrival_time.gte.${fiveMinAgo},and(arrival_time.eq.-1,departure_time.gt.0)`)
-        .limit(5000),
-    ]).then(([{ data: stops }, { data: rawStus }]) => {
-      if (!stops) return;
-      const stus = rawStus as Array<{ stop_id: string | null }> | null;
-      const scheduled = new Set(stus?.map((s) => s.stop_id) ?? []);
+    loadAndCacheStops().then((stops) => {
       setTransitStops(
-        (stops as CalgaryTransitStop[]).filter(
+        stops.filter(
           (s) =>
             s.teleride_number != null &&
-            scheduled.has(String(s.teleride_number))
-        )
+            s.status?.toLowerCase() === "active",
+        ),
       );
     });
-  }, []);
-
-  // Poll live vehicle positions every 60s (halved from 30s to reduce CPU/network load).
-  useEffect(() => {
-    const fetchVehicles = () =>
-      supabase
-        .from("vehicle_positions")
-        .select("*")
-        .then(({ data }) => {
-          if (data) setVehicles(data as VehiclePosition[]);
-        });
-    fetchVehicles();
-    const id = setInterval(fetchVehicles, 60_000);
-    return () => clearInterval(id);
   }, []);
 
   // Once the map is ready AND has a region, enable stops immediately then buses

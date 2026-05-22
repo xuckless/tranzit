@@ -7,7 +7,7 @@ import {
 } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
 import { Marker, Callout } from "react-native-maps";
-import { supabase } from "@/lib/supabase";
+import { middlewareQuery } from "@/lib/middleware";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
 import { theme } from "@/styles/theme";
 
@@ -164,32 +164,34 @@ function StopMarkerComponent({
     const fifteenMinAgo = now - 900;
     const fiveMinAgo = now - 300;
 
-    const { data: rawStus } = await supabase
-      .from("stop_time_updates")
-      .select("*")
-      .eq("stop_id", String(teleride_number))
-      .neq("schedule_relationship", "NO_DATA")
-      .limit(50);
+    const rawStus = await middlewareQuery<StopTimeUpdate>("stop_time_updates", {
+      stop_id: String(teleride_number),
+      limit: 50,
+    });
+    const stus = rawStus.filter((s) => s.schedule_relationship !== "NO_DATA");
 
-    const stus = rawStus as StopTimeUpdate[] | null;
-
-    if (!stus?.length) {
+    if (!stus.length) {
       setUpcoming([]);
       setPast([]);
       setLoading(false);
       return;
     }
 
-    // Join trip_updates to resolve route_id (bus number)
-    const { data: rawTrips } = await supabase
-      .from("trip_updates")
-      .select("trip_id, route_id")
-      .in(
-        "trip_id",
-        stus.map((s) => s.trip_id),
-      );
-    const trips = rawTrips as Pick<TripUpdate, "trip_id" | "route_id">[] | null;
-    const routeMap = new Map(trips?.map((t) => [t.trip_id, t.route_id]) ?? []);
+    // Join trip_updates to resolve route_id — parallel fetches per unique trip_id
+    const uniqueTripIds = [...new Set(stus.map((s) => s.trip_id))];
+    const tripRows = await Promise.all(
+      uniqueTripIds.map((id) =>
+        middlewareQuery<Pick<TripUpdate, "trip_id" | "route_id">>("trip_updates", {
+          trip_id: id,
+          limit: 1,
+        }),
+      ),
+    );
+    const routeMap = new Map(
+      tripRows.flatMap((rows, i) =>
+        rows.length ? [[uniqueTripIds[i], rows[0].route_id]] : [],
+      ),
+    );
 
     const upcomingEntries: BusEntry[] = [];
     const pastEntries: BusEntry[] = [];

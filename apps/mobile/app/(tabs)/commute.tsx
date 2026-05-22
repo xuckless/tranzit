@@ -13,10 +13,13 @@ import {
   TouchableOpacity,
 } from "react-native";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
-import { supabase } from "@/lib/supabase";
+import { useVehicleSSE } from "@/lib/vehicleSSE";
+import { middlewareQuery } from "@/lib/middleware";
+import { loadAndCacheStops } from "@/lib/transitStopsCache";
+import { getStopsByTelerideNumbers } from "@/lib/db";
 import { PooledBusMarker } from "@/components/busViews";
 import { StopMarker } from "@/components/stopViews";
-import type { VehiclePosition, CalgaryTransitStop } from "@/types/database";
+import type { CalgaryTransitStop } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
@@ -246,7 +249,7 @@ export default function CommuteScreen() {
 
   const [rawStops, setRawStops] = useState<CommuteStop[]>([]);
   const [currentStopIndex, setCurrentStopIndex] = useState(1); // start at first transit stop
-  const [routeVehicles, setRouteVehicles] = useState<VehiclePosition[]>([]);
+  const allVehicles = useVehicleSSE();
   const [routeStops, setRouteStops] = useState<CalgaryTransitStop[]>([]);
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
@@ -366,68 +369,66 @@ export default function CommuteScreen() {
     return [...new Set(ids)];
   }, [route]);
 
-  // ── Fetch live vehicles for the route, poll every 30s ─────────────────────────
-  useEffect(() => {
-    if (transitRouteIds.length === 0) {
-      setRouteVehicles([]);
-      return;
-    }
+  // ── Filter live vehicles from the shared SSE feed by active route IDs ──────────
+  const routeVehicles = useMemo(
+    () =>
+      transitRouteIds.length === 0
+        ? []
+        : allVehicles.filter(
+            (v) => v.route_id != null && transitRouteIds.includes(v.route_id),
+          ),
+    [allVehicles, transitRouteIds],
+  );
 
-    const fetchVehicles = () =>
-      supabase
-        .from("vehicle_positions")
-        .select("*")
-        .in("route_id", transitRouteIds)
-        .then(({ data }) => {
-          if (data) setRouteVehicles(data as VehiclePosition[]);
-        });
-
-    fetchVehicles();
-    const id = setInterval(fetchVehicles, 30_000);
-    return () => clearInterval(id);
-  }, [transitRouteIds]);
-
-  // ── Fetch all stops for those trips whenever vehicles update ──────────────────
+  // ── Fetch route stops from cache whenever active vehicles change ──────────────
   useEffect(() => {
     if (routeVehicles.length === 0) {
       setRouteStops([]);
       return;
     }
 
-    const tripIds = routeVehicles
-      .map((v) => v.trip_id)
-      .filter((id): id is string => Boolean(id));
+    const tripIds = [
+      ...new Set(
+        routeVehicles.map((v) => v.trip_id).filter((id): id is string => Boolean(id)),
+      ),
+    ];
     if (tripIds.length === 0) return;
 
     const now = Math.floor(Date.now() / 1000);
     const fifteenMinAgo = now - 900;
 
-    supabase
-      .from("stop_time_updates")
-      .select("stop_id")
-      .in("trip_id", tripIds)
-      .neq("schedule_relationship", "NO_DATA")
-      .or(`arrival_time.gte.${fifteenMinAgo},arrival_time.eq.-1`)
-      .limit(500)
-      .then(async ({ data: rawStus }) => {
-        const stus = rawStus as Array<{ stop_id: string | null }> | null;
-        if (!stus?.length) return;
+    (async () => {
+      // Ensure stops cache is warm before we try to resolve names + coordinates.
+      await loadAndCacheStops();
 
-        const stopIds = [
-          ...new Set(
-            stus
-              .map((s) => parseInt(s.stop_id ?? "", 10))
-              .filter((n) => !isNaN(n)),
+      // Fetch stop_time_updates for each active trip in parallel.
+      const allStopTimes = await Promise.all(
+        tripIds.map((id) =>
+          middlewareQuery<{ stop_id: string | null; arrival_time: number | null; schedule_relationship: string | null }>(
+            "stop_time_updates",
+            { trip_id: id, limit: 200 },
           ),
-        ];
+        ),
+      );
 
-        const { data: stops } = await supabase
-          .from("calgary_transit_stops")
-          .select("*")
-          .in("teleride_number", stopIds);
+      const stopIds = [
+        ...new Set(
+          allStopTimes
+            .flat()
+            .filter(
+              (s) =>
+                s.schedule_relationship !== "NO_DATA" &&
+                (s.arrival_time === -1 ||
+                  (s.arrival_time != null && s.arrival_time >= fifteenMinAgo)),
+            )
+            .map((s) => parseInt(s.stop_id ?? "", 10))
+            .filter((n) => !isNaN(n)),
+        ),
+      ];
 
-        if (stops) setRouteStops(stops as CalgaryTransitStop[]);
-      });
+      const stops = await getStopsByTelerideNumbers(stopIds);
+      setRouteStops(stops);
+    })();
   }, [routeVehicles]);
 
   // ── Fit map to route ──────────────────────────────────────────────────────────
