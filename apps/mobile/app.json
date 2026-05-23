@@ -1,16 +1,16 @@
 {
   "expo": {
-    "name": "transit-app",
-    "slug": "transit-app",
+    "name": "Tranzit",
+    "slug": "tranzit",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "transitapp",
+    "scheme": "tranzit",
     "userInterfaceStyle": "automatic",
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.anonymous.transitapp"
+      "bundleIdentifier": "com.anonymous.tranzit"
     },
     "android": {
       "adaptiveIcon": {
@@ -25,7 +25,7 @@
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ],
-      "package": "com.anonymous.transitapp"
+      "package": "com.anonymous.tranzit"
     },
     "web": {
       "output": "static",
