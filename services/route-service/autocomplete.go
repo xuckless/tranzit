@@ -10,7 +10,13 @@ import (
 
 func FetchAutocomplete(queryString string) ([]byte, error) {
 	apiKey := os.Getenv("GMAPS_API_KEY")
-	url := fmt.Sprintf("https://maps.googleapis.com/maps/api/place/autocomplete/json?%s&key=%s", queryString, apiKey)
+
+	params, _ := url.ParseQuery(queryString)
+	if input := params.Get("input"); input != "" {
+		params.Set("input", input+" calgary")
+	}
+
+	url := fmt.Sprintf("https://maps.googleapis.com/maps/api/place/autocomplete/json?%s&key=%s", params.Encode(), apiKey)
 
 	resp, err := http.Get(url)
 	if err != nil {

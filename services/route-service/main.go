@@ -11,12 +11,12 @@ import (
 )
 
 type RateLimitCalculator struct {
-	RouteCalls          int
-	PlacesCalls         int
-	AutocompleteCalls   int
-	DetailsCalls        int
-	SearchNearbyCalls   int
-	MaxCalls            int
+	RouteCalls        int
+	PlacesCalls       int
+	AutocompleteCalls int
+	DetailsCalls      int
+	SearchNearbyCalls int
+	MaxCalls          int
 }
 
 var tracker = RateLimitCalculator{MaxCalls: 4000}
@@ -37,9 +37,9 @@ func main() {
 		if tracker.PlacesCalls >= tracker.MaxCalls {
 			log.Printf("[/search] Quota exceeded: %d/%d Places calls used\n", tracker.PlacesCalls, tracker.MaxCalls)
 			return c.Status(429).JSON(fiber.Map{
-				"error":      "Places API quota exceeded for this test environment",
-				"used":       tracker.PlacesCalls,
-				"max":        tracker.MaxCalls,
+				"error": "Places API quota exceeded for this test environment",
+				"used":  tracker.PlacesCalls,
+				"max":   tracker.MaxCalls,
 			})
 		}
 
@@ -186,19 +186,19 @@ func main() {
 		tracker.SearchNearbyCalls++
 		log.Printf("[/searchnearby] SearchNearby call %d/%d — lat=%.6f lng=%.6f\n", tracker.SearchNearbyCalls, tracker.MaxCalls, lat, lng)
 
-		place, err := FetchNearbyPlace(lat, lng)
+		places, err := FetchNearbyPlaces(lat, lng)
 		if err != nil {
-			log.Printf("[/searchnearby] FetchNearbyPlace error: %v\n", err)
+			log.Printf("[/searchnearby] FetchNearbyPlaces error: %v\n", err)
 			return c.Status(502).JSON(fiber.Map{"error": "API unreachable"})
 		}
-		if place == nil {
+		if len(places) == 0 {
 			return c.Status(404).JSON(fiber.Map{"error": "No establishment found near that location"})
 		}
 
-		prettyJSON, _ := json.MarshalIndent(place, "", "  ")
+		prettyJSON, _ := json.MarshalIndent(places, "", "  ")
 		log.Println("SearchNearby Response:\n", string(prettyJSON))
 
-		return c.JSON(place)
+		return c.JSON(fiber.Map{"places": places})
 	})
 
 	// GET: Quota usage
