@@ -769,11 +769,12 @@ export default function CommuteScreen() {
                 minzoom={MIN_MARKER_ZOOM}
                 layout={{
                   "icon-image": "tranzitBus",
-                  "icon-size": 0.08,
+                  "icon-size": 0.12,
                   "icon-rotate": ["get", "bearing"],
                   "icon-rotation-alignment": "map",
                   "icon-allow-overlap": true,
                   "icon-ignore-placement": true,
+                  "symbol-z-order": "source",
                 }}
               />
               <Layer

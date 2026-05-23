@@ -20,23 +20,27 @@ let _snapshot: VehiclePosition[] = [];
 type Setter = React.Dispatch<React.SetStateAction<VehiclePosition[]>>;
 const _subs = new Set<Setter>();
 
+// Only require fields needed to render a marker. Per the middleware spec,
+// `route_id` is nullable for vehicles between trips (deadheading, layover, etc.)
+// and `trip_id` may also be absent in some states. Tracking these as invalid
+// would drop ~90% of the live fleet from the map.
 function isValidVehicle(v: VehiclePosition): boolean {
-  return (
-    !!v.vehicle_id &&
-    v.latitude != null &&
-    v.longitude != null &&
-    v.trip_id != null &&
-    v.route_id != null &&
-    v.route_id !== ""
-  );
+  return !!v.vehicle_id && v.latitude != null && v.longitude != null;
 }
 
 function rebuildSnapshot(): void {
   const next: VehiclePosition[] = [];
+  let invalidCount = 0;
   for (const v of _vehicleMap.values()) {
     if (isValidVehicle(v)) next.push(v);
+    else invalidCount++;
   }
   _snapshot = next;
+  if (__DEV__) {
+    console.log(
+      `[vehicleSSE] snapshot rebuilt → ${next.length} valid, ${invalidCount} filtered, ${_vehicleMap.size} total in map`,
+    );
+  }
 }
 
 function broadcast(): void {
@@ -135,8 +139,8 @@ export function useVehicles(): VehiclePosition[] {
 
 export interface VehicleFeatureProps {
   vehicle_id: string;
-  trip_id: string;
-  route_id: string;
+  trip_id: string;       // empty string for vehicles between trips
+  route_id: string;      // empty string for vehicles not currently on a route
   bearing: number;
 }
 
@@ -158,8 +162,8 @@ export function vehiclesToGeoJSON(
       type: "Feature",
       properties: {
         vehicle_id: v.vehicle_id!,
-        trip_id: v.trip_id!,
-        route_id: v.route_id!,
+        trip_id: v.trip_id ?? "",
+        route_id: v.route_id ?? "",
         bearing: v.bearing ?? 0,
       },
       geometry: {
