@@ -44,7 +44,6 @@ func getRTFeed(appToken, url string, retries int) (*gtfs.FeedMessage, []byte) {
 			continue
 		}
 
-		// Try raw, then gzip, then zlib.
 		decoders := []func([]byte) ([]byte, error){
 			func(c []byte) ([]byte, error) { return c, nil },
 			func(c []byte) ([]byte, error) {
@@ -90,6 +89,85 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 	}
 	defer conn.Release()
 
+	// --- 1. Trip Updates + Stop Time Updates (PARENTS) ---
+	fmt.Println("Updating trip updates...")
+	feed, raw := getRTFeed(appToken, urlRTTrips, 3)
+	if feed != nil {
+		hub.broadcast("trips", raw)
+
+		tripBatch := &pgx.Batch{}
+		stuBatch := &pgx.Batch{}
+		tripCount, stuCount := 0, 0
+
+		for _, entity := range feed.Entity {
+			if entity.TripUpdate == nil {
+				continue
+			}
+			tu := entity.TripUpdate
+			schedRel := enumStr(tripScheduleRel, int(tu.Trip.GetScheduleRelationship()), "SCHEDULED")
+			tripBatch.Queue(`
+             INSERT INTO trip_updates (trip_id, route_id, schedule_relationship, timestamp)
+             VALUES ($1,$2,$3,$4)
+             ON CONFLICT (trip_id) DO UPDATE SET
+                route_id              = COALESCE(EXCLUDED.route_id, trip_updates.route_id),
+                schedule_relationship = EXCLUDED.schedule_relationship,
+                timestamp             = EXCLUDED.timestamp`,
+				tu.Trip.GetTripId(),
+				nullStr(tu.Trip.GetRouteId()),
+				schedRel,
+				int64(feed.Header.GetTimestamp()),
+			)
+			tripCount++
+
+			for _, stu := range tu.StopTimeUpdate {
+				var arrTime, depTime *int64
+				var arrDelay, depDelay *int32
+				if stu.Arrival != nil {
+					t := stu.Arrival.GetTime()
+					arrTime = &t
+					d := stu.Arrival.GetDelay()
+					arrDelay = &d
+				}
+				if stu.Departure != nil {
+					t := stu.Departure.GetTime()
+					depTime = &t
+					d := stu.Departure.GetDelay()
+					depDelay = &d
+				}
+				rel := enumStr(stopScheduleRel, int(stu.GetScheduleRelationship()), "SCHEDULED")
+				stuBatch.Queue(`
+                INSERT INTO stop_time_updates
+                   (trip_id, stop_sequence, stop_id,
+                    arrival_time, departure_time,
+                    arrival_delay, departure_delay,
+                    schedule_relationship)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                ON CONFLICT (trip_id, stop_sequence) DO UPDATE SET
+                   stop_id               = COALESCE(EXCLUDED.stop_id, stop_time_updates.stop_id),
+                   arrival_time          = COALESCE(EXCLUDED.arrival_time, stop_time_updates.arrival_time),
+                   departure_time        = COALESCE(EXCLUDED.departure_time, stop_time_updates.departure_time),
+                   arrival_delay         = COALESCE(EXCLUDED.arrival_delay, stop_time_updates.arrival_delay),
+                   departure_delay       = COALESCE(EXCLUDED.departure_delay, stop_time_updates.departure_delay),
+                   schedule_relationship = EXCLUDED.schedule_relationship`,
+					tu.Trip.GetTripId(),
+					int(stu.GetStopSequence()),
+					stu.GetStopId(),
+					arrTime, depTime, arrDelay, depDelay, rel,
+				)
+				stuCount++
+			}
+		}
+
+		if err := conn.SendBatch(ctx, tripBatch).Close(); err != nil {
+			return fmt.Errorf("trip_updates upsert: %w", err)
+		}
+		if err := conn.SendBatch(ctx, stuBatch).Close(); err != nil {
+			return fmt.Errorf("stop_time_updates upsert: %w", err)
+		}
+		fmt.Printf("  %d trips, %d stop time updates.\n", tripCount, stuCount)
+	}
+
+	// --- 2. Vehicle Positions (CHILDREN) ---
 	prevPositions := make(map[string]prevPos)
 	rows, err := conn.Query(ctx, "SELECT vehicle_id, latitude, longitude, timestamp FROM vehicle_positions")
 	if err == nil {
@@ -103,9 +181,8 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 		rows.Close()
 	}
 
-	// --- Vehicle Positions ---
 	fmt.Println("Updating vehicle positions...")
-	feed, raw := getRTFeed(appToken, urlRTVehicles, 3)
+	feed, raw = getRTFeed(appToken, urlRTVehicles, 3)
 	if feed != nil {
 		hub.broadcast("vehicles", raw)
 
@@ -142,22 +219,27 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 			congestion := enumStr(congestionLevel, int(v.GetCongestionLevel()), "UNKNOWN_CONGESTION_LEVEL")
 			occupancy := enumStr(occupancyStatus, int(v.GetOccupancyStatus()), "UNKNOWN")
 
+			// Ensure the trip_id exists to satisfy the foreign key constraint
+			if tripID != "" {
+				batch.Queue(`INSERT INTO trip_updates (trip_id) VALUES ($1) ON CONFLICT (trip_id) DO NOTHING`, tripID)
+			}
+
 			batch.Queue(`
-				INSERT INTO vehicle_positions
-					(vehicle_id, trip_id, route_id, latitude, longitude,
-					 bearing, speed, timestamp, congestion_level, occupancy_status)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
-				ON CONFLICT (vehicle_id) DO UPDATE SET
-					trip_id          = EXCLUDED.trip_id,
-					route_id         = EXCLUDED.route_id,
-					latitude         = EXCLUDED.latitude,
-					longitude        = EXCLUDED.longitude,
-					bearing          = EXCLUDED.bearing,
-					speed            = EXCLUDED.speed,
-					timestamp        = EXCLUDED.timestamp,
-					congestion_level = EXCLUDED.congestion_level,
-					occupancy_status = EXCLUDED.occupancy_status`,
-				vid, tripID, nullStr(routeID), lat, lon,
+             INSERT INTO vehicle_positions
+                (vehicle_id, trip_id, route_id, latitude, longitude,
+                 bearing, speed, timestamp, congestion_level, occupancy_status)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+             ON CONFLICT (vehicle_id) DO UPDATE SET
+                trip_id          = COALESCE(EXCLUDED.trip_id, vehicle_positions.trip_id),
+                route_id         = COALESCE(EXCLUDED.route_id, vehicle_positions.route_id),
+                latitude         = EXCLUDED.latitude,
+                longitude        = EXCLUDED.longitude,
+                bearing          = COALESCE(EXCLUDED.bearing, vehicle_positions.bearing),
+                speed            = COALESCE(EXCLUDED.speed, vehicle_positions.speed),
+                timestamp        = EXCLUDED.timestamp,
+                congestion_level = COALESCE(EXCLUDED.congestion_level, vehicle_positions.congestion_level),
+                occupancy_status = COALESCE(EXCLUDED.occupancy_status, vehicle_positions.occupancy_status)`,
+				vid, nullStr(tripID), nullStr(routeID), lat, lon,
 				bearing, speed, ts, congestion, occupancy,
 			)
 			count++
@@ -168,96 +250,18 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 		fmt.Printf("  %d vehicle positions updated.\n", count)
 	}
 
-	// --- Trip Updates + Stop Time Updates ---
-	fmt.Println("Updating trip updates...")
-	feed, raw = getRTFeed(appToken, urlRTTrips, 3)
-	if feed != nil {
-		hub.broadcast("trips", raw)
-
-		tripBatch := &pgx.Batch{}
-		stuBatch := &pgx.Batch{}
-		tripCount, stuCount := 0, 0
-
-		for _, entity := range feed.Entity {
-			if entity.TripUpdate == nil {
-				continue
-			}
-			tu := entity.TripUpdate
-			schedRel := enumStr(tripScheduleRel, int(tu.Trip.GetScheduleRelationship()), "SCHEDULED")
-			tripBatch.Queue(`
-				INSERT INTO trip_updates (trip_id, route_id, schedule_relationship, timestamp)
-				VALUES ($1,$2,$3,$4)
-				ON CONFLICT (trip_id) DO UPDATE SET
-					route_id              = EXCLUDED.route_id,
-					schedule_relationship = EXCLUDED.schedule_relationship,
-					timestamp             = EXCLUDED.timestamp`,
-				tu.Trip.GetTripId(),
-				nullStr(tu.Trip.GetRouteId()),
-				schedRel,
-				int64(feed.Header.GetTimestamp()),
-			)
-			tripCount++
-
-			for _, stu := range tu.StopTimeUpdate {
-				var arrTime, depTime *int64
-				var arrDelay, depDelay *int32
-				if stu.Arrival != nil {
-					t := stu.Arrival.GetTime()
-					arrTime = &t
-					d := stu.Arrival.GetDelay()
-					arrDelay = &d
-				}
-				if stu.Departure != nil {
-					t := stu.Departure.GetTime()
-					depTime = &t
-					d := stu.Departure.GetDelay()
-					depDelay = &d
-				}
-				rel := enumStr(stopScheduleRel, int(stu.GetScheduleRelationship()), "SCHEDULED")
-				stuBatch.Queue(`
-					INSERT INTO stop_time_updates
-						(trip_id, stop_sequence, stop_id,
-						 arrival_time, departure_time,
-						 arrival_delay, departure_delay,
-						 schedule_relationship)
-					VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-					ON CONFLICT (trip_id, stop_sequence) DO UPDATE SET
-						stop_id               = EXCLUDED.stop_id,
-						arrival_time          = EXCLUDED.arrival_time,
-						departure_time        = EXCLUDED.departure_time,
-						arrival_delay         = EXCLUDED.arrival_delay,
-						departure_delay       = EXCLUDED.departure_delay,
-						schedule_relationship = EXCLUDED.schedule_relationship`,
-					tu.Trip.GetTripId(),
-					int(stu.GetStopSequence()),
-					stu.GetStopId(),
-					arrTime, depTime, arrDelay, depDelay, rel,
-				)
-				stuCount++
-			}
-		}
-
-		if err := conn.SendBatch(ctx, tripBatch).Close(); err != nil {
-			return fmt.Errorf("trip_updates upsert: %w", err)
-		}
-		if err := conn.SendBatch(ctx, stuBatch).Close(); err != nil {
-			return fmt.Errorf("stop_time_updates upsert: %w", err)
-		}
-		fmt.Printf("  %d trips, %d stop time updates.\n", tripCount, stuCount)
-
-		// Impute route_id into vehicle_positions.
-		if _, err := conn.Exec(ctx, `
-			UPDATE vehicle_positions vp
-			SET route_id = tu.route_id
-			FROM trip_updates tu
-			WHERE vp.trip_id = tu.trip_id
-			  AND tu.route_id IS NOT NULL`); err != nil {
-			return fmt.Errorf("impute route_id: %w", err)
-		}
-
+	// --- 3. Impute route_id into vehicle_positions ---
+	if _, err := conn.Exec(ctx, `
+          UPDATE vehicle_positions vp
+          SET route_id = tu.route_id
+          FROM trip_updates tu
+          WHERE vp.trip_id = tu.trip_id
+            AND vp.route_id IS NULL
+            AND tu.route_id IS NOT NULL`); err != nil {
+		return fmt.Errorf("impute route_id: %w", err)
 	}
 
-	// --- Alerts ---
+	// --- 4. Alerts ---
 	fmt.Println("Updating alerts...")
 	feed, raw = getRTFeed(appToken, urlRTAlerts, 3)
 	if feed != nil {
@@ -293,23 +297,23 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 			severity := enumStr(alertSeverity, int(a.GetSeverityLevel()), "")
 
 			batch.Queue(`
-				INSERT INTO alerts
-					(alert_id, active_period_start, active_period_end,
-					 informed_agency_id, informed_route_id, informed_stop_id,
-					 header_text, description_text, cause, effect, url, severity_level)
-				VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-				ON CONFLICT (alert_id) DO UPDATE SET
-					active_period_start = EXCLUDED.active_period_start,
-					active_period_end   = EXCLUDED.active_period_end,
-					informed_agency_id  = EXCLUDED.informed_agency_id,
-					informed_route_id   = EXCLUDED.informed_route_id,
-					informed_stop_id    = EXCLUDED.informed_stop_id,
-					header_text         = EXCLUDED.header_text,
-					description_text    = EXCLUDED.description_text,
-					cause               = EXCLUDED.cause,
-					effect              = EXCLUDED.effect,
-					url                 = EXCLUDED.url,
-					severity_level      = EXCLUDED.severity_level`,
+             INSERT INTO alerts
+                (alert_id, active_period_start, active_period_end,
+                 informed_agency_id, informed_route_id, informed_stop_id,
+                 header_text, description_text, cause, effect, url, severity_level)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+             ON CONFLICT (alert_id) DO UPDATE SET
+                active_period_start = COALESCE(EXCLUDED.active_period_start, alerts.active_period_start),
+                active_period_end   = COALESCE(EXCLUDED.active_period_end, alerts.active_period_end),
+                informed_agency_id  = COALESCE(EXCLUDED.informed_agency_id, alerts.informed_agency_id),
+                informed_route_id   = COALESCE(EXCLUDED.informed_route_id, alerts.informed_route_id),
+                informed_stop_id    = COALESCE(EXCLUDED.informed_stop_id, alerts.informed_stop_id),
+                header_text         = COALESCE(EXCLUDED.header_text, alerts.header_text),
+                description_text    = COALESCE(EXCLUDED.description_text, alerts.description_text),
+                cause               = COALESCE(EXCLUDED.cause, alerts.cause),
+                effect              = COALESCE(EXCLUDED.effect, alerts.effect),
+                url                 = COALESCE(EXCLUDED.url, alerts.url),
+                severity_level      = COALESCE(EXCLUDED.severity_level, alerts.severity_level)`,
 				entity.GetId(),
 				periodStart, periodEnd,
 				agencyID, routeID, stopID,
