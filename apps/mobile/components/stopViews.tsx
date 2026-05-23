@@ -46,6 +46,7 @@ const isValidEpoch = (t: number | null | undefined): t is number =>
 
 interface BusEntry {
   key: string;
+  trip_id: string;
   route_id: string;
   arrival_time: number | null;
   departure_time: number | null;
@@ -55,7 +56,15 @@ interface BusEntry {
 
 // ─── BusRow ───────────────────────────────────────────────────────────────────
 
-function BusRow({ bus, dimmed }: { bus: BusEntry; dimmed: boolean }) {
+function BusRow({
+  bus,
+  dimmed,
+  onPress,
+}: {
+  bus: BusEntry;
+  dimmed: boolean;
+  onPress?: () => void;
+}) {
   const now = Math.floor(Date.now() / 1000);
 
   let arrLine: string;
@@ -88,7 +97,12 @@ function BusRow({ bus, dimmed }: { bus: BusEntry; dimmed: boolean }) {
     isValidEpoch(bus.departure_time) && bus.departure_time < now;
 
   return (
-    <View style={s.busRow}>
+    <TouchableOpacity
+      style={s.busRow}
+      onPress={onPress}
+      disabled={!onPress}
+      activeOpacity={onPress ? 0.65 : 1}
+    >
       <View style={[s.routeBadge, dimmed && s.routeBadgeDimmed]}>
         <Text style={s.routeLabel} numberOfLines={1}>
           {bus.route_id}
@@ -117,7 +131,7 @@ function BusRow({ bus, dimmed }: { bus: BusEntry; dimmed: boolean }) {
           <Text style={s.pastPillText}>Past</Text>
         </View>
       )}
-    </View>
+    </TouchableOpacity>
   );
 }
 
@@ -156,6 +170,7 @@ async function fetchStopSchedule(
     const dep = s.departure_time;
     const entry: BusEntry = {
       key: `${s.trip_id}-${s.stop_sequence}`,
+      trip_id: s.trip_id,
       route_id: routeMap.get(s.trip_id) ?? "—",
       arrival_time: arr,
       departure_time: dep,
@@ -203,12 +218,14 @@ interface StopDetailsPanelProps {
   teleride_number: number;
   stop_name: string;
   onClose: () => void;
+  onBusTap?: (tripId: string) => void;
 }
 
 export function StopDetailsPanel({
   teleride_number,
   stop_name,
   onClose,
+  onBusTap,
 }: StopDetailsPanelProps) {
   const [upcoming, setUpcoming] = useState<BusEntry[]>([]);
   const [past, setPast] = useState<BusEntry[]>([]);
@@ -261,7 +278,12 @@ export function StopDetailsPanel({
               <>
                 <Text style={s.sectionLabel}>Upcoming</Text>
                 {upcoming.map((bus) => (
-                  <BusRow key={bus.key} bus={bus} dimmed={false} />
+                  <BusRow
+                    key={bus.key}
+                    bus={bus}
+                    dimmed={false}
+                    onPress={onBusTap ? () => onBusTap(bus.trip_id) : undefined}
+                  />
                 ))}
               </>
             )}

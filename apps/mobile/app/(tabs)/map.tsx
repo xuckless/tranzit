@@ -56,7 +56,7 @@ const CALGARY_CENTER: [number, number] = [-114.059263, 51.070664];
 // MapLibre's minZoomLevel is enforced in the shader — no React unmount cost.
 const MIN_MARKER_ZOOM = 12;
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -150,6 +150,17 @@ export default function MapScreen() {
   const [nearbyState, setNearbyState] = useState<NearbyState | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
 
+  // Refs to track current selected state inside memoized callbacks (avoids
+  // stale closures without adding them to every useCallback dep array).
+  const selectedStopRef = useRef<typeof selectedStop>(null);
+  const selectedBusRef = useRef<typeof selectedBus>(null);
+  useEffect(() => { selectedStopRef.current = selectedStop; }, [selectedStop]);
+  useEffect(() => { selectedBusRef.current = selectedBus; }, [selectedBus]);
+
+  // Set to true in layer-press handlers; onMapPress checks and skips deselect.
+  // Prevents the double-fire (layer press + map press same event) toggle loop.
+  const layerTappedRef = useRef(false);
+
   // ── Load active transit stops with imminent-arrival filter ───────────────────
   // Same filtering logic as before — keeps stop set to ~500-800 instead of ~3000.
   useEffect(() => {
@@ -239,9 +250,17 @@ export default function MapScreen() {
   // properties off the first hit and delegate to the existing state setters.
 
   const handleStopLayerPress = useCallback((event: any) => {
+    layerTappedRef.current = true;
     const feature = event?.nativeEvent?.features?.[0];
     const props = feature?.properties;
     if (!props || props.teleride_number == null) return;
+
+    // Toggle: tapping the already-selected stop deselects it.
+    if (selectedStopRef.current?.teleride_number === props.teleride_number) {
+      setSelectedStop(null);
+      return;
+    }
+
     setNearbyState(null);
     setPlaceDetails(null);
     setSelectedBus(null);
@@ -249,12 +268,25 @@ export default function MapScreen() {
       teleride_number: props.teleride_number,
       stop_name: props.stop_name ?? "Unknown Stop",
     });
-  }, []);
+
+    const coords = feature?.geometry?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      flyTo({ longitude: coords[0], latitude: coords[1] }, 16, 600);
+    }
+  }, [flyTo]);
 
   const handleBusLayerPress = useCallback((event: any) => {
+    layerTappedRef.current = true;
     const feature = event?.nativeEvent?.features?.[0];
     const props = feature?.properties;
     if (!props?.vehicle_id || !props?.route_id || !props?.trip_id) return;
+
+    // Toggle: tapping the already-selected bus deselects it.
+    if (selectedBusRef.current?.vehicleId === props.vehicle_id) {
+      setSelectedBus(null);
+      return;
+    }
+
     setNearbyState(null);
     setPlaceDetails(null);
     setSelectedStop(null);
@@ -263,7 +295,12 @@ export default function MapScreen() {
       routeId: props.route_id,
       tripId: props.trip_id,
     });
-  }, []);
+
+    const coords = feature?.geometry?.coordinates;
+    if (Array.isArray(coords) && coords.length >= 2) {
+      flyTo({ longitude: coords[0], latitude: coords[1] }, 16, 600);
+    }
+  }, [flyTo]);
 
   // ── Sheet snap ───────────────────────────────────────────────────────────────
   const snapTo = useCallback(
@@ -446,6 +483,11 @@ export default function MapScreen() {
   // taps (conservative behavior per user choice).
   const onMapPress = useCallback(
     (e: any) => {
+      // A layer-press (stop or bus) already fired — don't also deselect.
+      if (layerTappedRef.current) {
+        layerTappedRef.current = false;
+        return;
+      }
       if (isSearchActive) return;
       if (nearbyState || placeDetails || selectedStop || selectedBus) {
         pressAbortRef.current?.abort();
@@ -468,6 +510,47 @@ export default function MapScreen() {
     },
     [handleMapPress],
   );
+
+  // ── Cross-panel navigation ───────────────────────────────────────────────────
+
+  // Called when the user taps an arrival row in StopDetailsPanel.
+  // Finds the live vehicle by trip_id and flies the camera to it.
+  const handleBusTapFromStop = useCallback((tripId: string) => {
+    const vehicle = vehicles.find((v) => v.trip_id === tripId);
+    if (!vehicle || vehicle.latitude == null || vehicle.longitude == null) {
+      setErrorMsg("Bus is not currently visible on the map.");
+      setTimeout(() => setErrorMsg(null), 3000);
+      return;
+    }
+    setSelectedStop(null);
+    setSelectedBus({
+      vehicleId: vehicle.vehicle_id!,
+      routeId: vehicle.route_id ?? "",
+      tripId,
+    });
+    flyTo({ latitude: vehicle.latitude, longitude: vehicle.longitude }, 16, 600);
+  }, [vehicles, flyTo]);
+
+  // Called when the user taps a stop row in BusDetailsPanel.
+  // Switches to the stop panel and flies the camera to that stop.
+  const handleStopTapFromBus = useCallback(async (telerideNumber: number, stopName: string) => {
+    setSelectedBus(null);
+    setSelectedStop({ teleride_number: telerideNumber, stop_name: stopName });
+
+    const active = transitStops.find((s) => s.teleride_number === telerideNumber);
+    if (active?.point) {
+      const coord = parseWKTPoint(active.point);
+      if (coord) { flyTo(coord, 16, 600); return; }
+    }
+
+    // Stop not in the filtered active set — look it up in the full cache.
+    const allStops = await loadAndCacheStops();
+    const stop = allStops.find((s) => s.teleride_number === telerideNumber);
+    if (stop?.point) {
+      const coord = parseWKTPoint(stop.point);
+      if (coord) flyTo(coord, 16, 600);
+    }
+  }, [transitStops, flyTo]);
 
   // ── GPS watch (position only — UserLocation handles heading natively) ────────
   useEffect(() => {
@@ -642,6 +725,7 @@ export default function MapScreen() {
             teleride_number={selectedStop.teleride_number}
             stop_name={selectedStop.stop_name}
             onClose={() => setSelectedStop(null)}
+            onBusTap={handleBusTapFromStop}
           />
         )}
 
@@ -651,6 +735,7 @@ export default function MapScreen() {
             routeId={selectedBus.routeId}
             tripId={selectedBus.tripId}
             onClose={() => setSelectedBus(null)}
+            onStopTap={handleStopTapFromBus}
           />
         )}
 

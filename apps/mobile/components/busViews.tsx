@@ -39,12 +39,14 @@ interface BusDetailsPanelProps {
   routeId: string;
   tripId: string;
   onClose: () => void;
+  onStopTap?: (telerideNumber: number, stopName: string) => void;
 }
 
 export function BusDetailsPanel({
   routeId,
   tripId,
   onClose,
+  onStopTap,
 }: BusDetailsPanelProps) {
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
@@ -122,27 +124,34 @@ export function BusDetailsPanel({
           <Text style={s.empty}>No schedule data</Text>
         ) : (
           <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
-            {tripStops.map((stop) => (
-              <View
-                key={stop.stop_sequence}
-                style={[s.stopRow, stop.passed && s.stopRowPassed]}
-              >
-                <View style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]} />
-                <View style={s.stopInfo}>
-                  <Text style={[s.stopName, stop.passed && s.passedText]} numberOfLines={1}>
-                    {stop.stop_name}
-                  </Text>
-                  <Text style={[s.stopTime, stop.passed && s.passedText]}>
-                    {fmtEpoch(stop.arrival_time)}
-                  </Text>
-                </View>
-                {stop.passed && (
-                  <View style={s.passedPill}>
-                    <Text style={s.passedPillText}>Passed</Text>
+            {tripStops.map((stop) => {
+              const telerideNum = parseInt(stop.stop_id, 10);
+              const tappable = onStopTap && !isNaN(telerideNum);
+              return (
+                <TouchableOpacity
+                  key={stop.stop_sequence}
+                  style={[s.stopRow, stop.passed && s.stopRowPassed]}
+                  onPress={tappable ? () => onStopTap!(telerideNum, stop.stop_name) : undefined}
+                  disabled={!tappable}
+                  activeOpacity={tappable ? 0.65 : 1}
+                >
+                  <View style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]} />
+                  <View style={s.stopInfo}>
+                    <Text style={[s.stopName, stop.passed && s.passedText]} numberOfLines={1}>
+                      {stop.stop_name}
+                    </Text>
+                    <Text style={[s.stopTime, stop.passed && s.passedText]}>
+                      {fmtEpoch(stop.arrival_time)}
+                    </Text>
                   </View>
-                )}
-              </View>
-            ))}
+                  {stop.passed && (
+                    <View style={s.passedPill}>
+                      <Text style={s.passedPillText}>Passed</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
+              );
+            })}
           </ScrollView>
         )}
       </View>
