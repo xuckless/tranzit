@@ -52,6 +52,10 @@ const SNAP_FULL      = SCREEN_HEIGHT * 0.79;
 // Calgary downtown — used as the initial camera anchor before GPS resolves.
 const CALGARY_CENTER: [number, number] = [-114.059263, 51.070664];
 
+// 100 km bounding box around Calgary (LngLatBounds: [west, south, east, north]).
+// Prevents tile requests — and panning — outside the service area.
+const CALGARY_MAX_BOUNDS: [number, number, number, number] = [-115.5, 50.147, -112.645, 51.943];
+
 // Zoom-level threshold below which stops and buses are hidden by the GPU.
 // MapLibre's minZoomLevel is enforced in the shader — no React unmount cost.
 const MIN_MARKER_ZOOM = 12;
@@ -245,6 +249,15 @@ export default function MapScreen() {
       .slice(0, 20);
   }, [transitStops, userLocation]);
 
+  // ── Camera helpers ───────────────────────────────────────────────────────────
+  const flyTo = useCallback((coord: Coordinate, zoom = 14, duration = 800) => {
+    cameraRef.current?.flyTo({
+      center: [coord.longitude, coord.latitude],
+      zoom,
+      duration,
+    });
+  }, []);
+
   // ── Tap handlers on ShapeSources ─────────────────────────────────────────────
   // Mapbox/MapLibre returns matched features as event.features[]. We pull
   // properties off the first hit and delegate to the existing state setters.
@@ -350,15 +363,6 @@ export default function MapScreen() {
       },
     }),
   ).current;
-
-  // ── Camera helpers ───────────────────────────────────────────────────────────
-  const flyTo = useCallback((coord: Coordinate, zoom = 14, duration = 800) => {
-    cameraRef.current?.flyTo({
-      center: [coord.longitude, coord.latitude],
-      zoom,
-      duration,
-    });
-  }, []);
 
   // ── SearchSheet callbacks ────────────────────────────────────────────────────
   const handleDestinationSelected = useCallback(
@@ -603,6 +607,7 @@ export default function MapScreen() {
             center: CALGARY_CENTER,
             zoom: 13,
           }}
+          maxBounds={CALGARY_MAX_BOUNDS}
         />
 
         {/* Native blue-dot + heading indicator. Replaces DirectionMarker. */}
