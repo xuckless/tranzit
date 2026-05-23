@@ -45,8 +45,8 @@ app/
   settings/index.tsx — Settings screen
 
 components/
-  stopViews.tsx      — StopMarker, StopDetailsPanel (transit stop callouts)
-  busViews.tsx       — PooledBusMarker, BusDetailsPanel (live bus callouts)
+  stopViews.tsx      — StopDetailsPanel (transit stop bottom-sheet panel)
+  busViews.tsx       — BusDetailsPanel (live bus bottom-sheet panel)
   horizontalView.tsx — Horizontal scroll row utility
   SavePlaceModal.tsx — Modal for saving a place to a category
   routes/
@@ -60,7 +60,7 @@ components/
 lib/
   supabase.ts        — Supabase client singleton (typed against Database)
   middleware.ts      — Typed REST client for the DB middleware service
-  vehicleSSE.ts      — Singleton SSE hook for live bus positions
+  vehicleSSE.ts      — Singleton SSE hook for live bus positions + GeoJSON helpers
   transitStopsCache.ts — Orchestrates middleware fetch → SQLite write
   routeStore.ts      — In-memory session store for the active journey
   db.ts              — SQLite schema, saved places CRUD, stops cache CRUD
@@ -72,10 +72,10 @@ hooks/
   useMapPressHandler.ts    — Map long-press → reverse geocode handler
 
 services/
-  TranzitApiService.ts     — All calls to the route service (search, details, route)
+  TranzitApiService.ts     — All calls to the route service (search, details, route, nearby)
 
 types/
-  places.ts    — SearchSuggestion, PlaceResult, Route, RouteStep, etc.
+  places.ts    — SearchSuggestion, PlaceResult, Route, RouteStep, AutocompletePrediction, etc.
   database.ts  — All PostgreSQL table interfaces + Supabase Database generic
 
 utils/
@@ -104,6 +104,7 @@ All calls go through `services/TranzitApiService.ts`.
 | `POST` | `/details` | Full place details (address, rating, opening hours) for a given `place_id`. |
 | `GET` | `/autocomplete/json?input=` | Google Places Autocomplete predictions. Covers street addresses that `/search` misses. |
 | `POST` | `/route` | Computes the top 2 transit routes. Body: `{ origin: {lat, lng}, destination_id: string }`. Returns `204` when no transit route exists. |
+| `GET` | `/searchnearby?lat=&lng=` | Returns the single nearest POI/business to the given coordinates. Returns `404` when nothing is found nearby. Used by the map long-press flow. |
 
 **Important:** `/route` takes a Google Place ID in `destination_id`, never a text address. The Place ID comes from `/search` or `/autocomplete` → `/details`. Do not persist Place IDs — they are session-state only (Google TOS).
 
@@ -203,24 +204,30 @@ Filter syntax mirrors PostgREST: `{ field: 'operator.value' }`, e.g. `{ status: 
 
 ### `lib/vehicleSSE.ts`
 
-Singleton SSE connection to the vehicle positions stream. Designed to be shared across `map.tsx` and `commute.tsx` without opening two connections.
+Singleton SSE connection to the vehicle positions stream. Shared across `map.tsx` and `commute.tsx` without opening two connections.
 
 **Architecture:**
 - Module-level `_es` holds the single `EventSource`.
 - `_refCount` tracks how many React components are subscribed. The connection opens on first subscribe and closes when `_refCount` drops to zero.
-- Vehicles are stored in a **fixed-size pool** (`BUS_POOL_SIZE = 400`). Each `vehicle_id` is permanently assigned a slot index that never changes. SSE delta updates (`added`, `updated`, `removed`) patch only affected slots.
-- All subscribing components call `setPool` with the same pre-built array — React only diffs props, no native tree insertion/removal.
+- Vehicles are stored in a `Map<string, VehiclePosition>` keyed by `vehicle_id`. SSE delta events patch only affected entries. A `_snapshot` array is rebuilt on every event and broadcast to all subscribers as a fresh reference.
+- `isValidVehicle()` only requires `vehicle_id`, `latitude`, and `longitude` — `route_id` and `trip_id` may be absent for vehicles between trips (deadheading, layover). Filtering on those would drop ~90% of the live fleet.
 
 **Events:**
-- `snapshot` — full vehicle list on connect. Resets the pool.
+- `snapshot` — full vehicle list on connect. Resets the map.
 - `update` — delta with `added`, `updated`, `removed` arrays.
 
-**Usage:**
+**Exported API:**
 ```typescript
-const pool = useVehicleSSE(); // (VehiclePosition | null)[]
+// Subscribe to live vehicle positions. Returns a fresh VehiclePosition[] on every SSE event.
+const vehicles = useVehicles();
+
+// Convert the vehicle array to a GeoJSON FeatureCollection for a MapLibre GeoJSONSource.
+const geoJSON = vehiclesToGeoJSON(vehicles);
 ```
 
-Do not call `useVehicleSSE()` conditionally — the ref count management requires symmetric mount/unmount.
+`vehiclesToGeoJSON` produces features with properties `{ vehicle_id, trip_id, route_id, bearing }` and `Point` geometry. The map's symbol layer reads `bearing` for icon rotation and `route_id` for the text label.
+
+Do not call `useVehicles()` conditionally — the ref count management requires symmetric mount/unmount.
 
 ---
 
@@ -262,7 +269,7 @@ Key functions:
 | `linkPlaceToCategory()` | Atomic: clear old default if `isDefault=true`, then upsert `category_places`. |
 | `getCachedTransitStops()` | Returns `null` if cache is empty or older than 24 hours. |
 | `cacheTransitStops()` | Full replace inside a transaction (DELETE + INSERT). |
-| `getStopNamesByTelerideNumbers()` | Map lookup from teleride numbers to stop names. Used in bus callout to resolve stop names. |
+| `getStopNamesByTelerideNumbers()` | Map lookup from teleride numbers to stop names. Used in `BusDetailsPanel` to resolve stop names for a trip sequence. |
 
 ---
 
@@ -270,24 +277,52 @@ Key functions:
 
 ### `app/(tabs)/map.tsx` — Map Screen
 
-The most complex screen. Responsibilities:
-- Renders the Google Maps base layer with a custom style (`assets/map-style.json`).
-- Renders transit stop markers (`StopMarker`) and live bus markers (`PooledBusMarker`).
-- Handles user location + heading with a `DirectionMarker` SVG (dot + radial arc).
-- Bottom sheet (two snap points: collapsed = 28% height, expanded = 62%) with a `PanResponder`.
+The most complex screen. Built on **`@maplibre/maplibre-react-native`** (MapLibre). All map rendering — tiles, stops, buses — goes through MapLibre's GPU pipeline, not through React Native's view tree.
+
+**Responsibilities:**
+- Renders the MapTiler Positron base layer (`STYLE_URL` constructed from `EXPO_PUBLIC_MAPTILER_KEY`).
+- Renders transit stop markers as a GPU-rendered `<GeoJSONSource>` + `<Layer type="circle">`.
+- Renders live bus positions as a `<GeoJSONSource>` + `<Layer type="symbol">` with a custom `tranzitBus` PNG icon + route-number text label.
+- Native blue-dot + heading indicator via `<UserLocation heading={true} animated={true} />`.
+- Bottom sheet with **three** snap points: collapsed (28% height), expanded (62%), full (79%).
 - `SearchSheet` overlay for destination search.
 - Quick Access chips from SQLite (user's saved default places).
-- Pressed-pin flow (long press → search nearby business → show place card or raw coordinate pin).
-- POI tap flow (native Google Maps markers → optimistic card → fetch `/details`).
+- Long-press flow → `/searchnearby` → show place card or "No places found nearby".
+- Nearby Stops section (visible in expanded/full sheet) — tile-filtered list of up to 20 stops near the user's current location.
+- Cross-panel navigation: stop panel → tap arrival row → fly to bus; bus panel → tap stop row → fly to stop.
 
-**Marker stagger pattern (critical for stability):**
-Stops and buses are enabled in separate `useEffect` passes after `mapReady` is true: stops immediately, buses 200 ms later. This prevents the Fabric interop crash (`AIRMap insertReactSubview:atIndex:` with nil).
+**Map bounds / zoom:**
+
+```typescript
+const CALGARY_MAX_BOUNDS: [number, number, number, number] = [-115.5, 50.147, -112.645, 51.943];
+const MIN_MARKER_ZOOM = 12; // stops and buses hidden below this zoom (GPU minzoom)
+```
+
+**Stop rendering (GeoJSON):**
+`stopsGeoJSON` is a `useMemo` that converts `transitStops` to a `FeatureCollection`. WKT validation happens here — bad rows return `null` and are filtered out before the GeoJSON is handed to the `GeoJSONSource`. The `Layer` has `minzoom={MIN_MARKER_ZOOM}` so the GPU discards circles below zoom 12 at zero JS cost.
 
 **Stop filtering:**
-Only stops with a scheduled arrival in the last 5 minutes or `arrival_time = -1` (no data) are shown. This caps the active marker count to ~500-800 from the full ~3000 active stops.
+Only stops with a scheduled arrival in the last 5 minutes or `arrival_time = -1` (no data) are shown. This caps the active stop count to ~500–800 from the full ~3000 active stops.
 
-**Bus pool:**
-`useVehicleSSE()` returns a fixed-size `(VehiclePosition | null)[]`. `busPool` maps this to `<PooledBusMarker key="bus-slot-{i}">` — key is the slot index, not the vehicle ID, so React never inserts or removes native children.
+**Bus rendering (GeoJSON + symbol layer):**
+`vehiclesGeoJSON` is built from `useVehicles()` via `vehiclesToGeoJSON()` inside a `useMemo`. The symbol layer reads `bearing` for icon rotation (`"icon-rotation-alignment": "map"`) and `route_id` for the overlaid text label. MapLibre diffs the `FeatureCollection` natively on the C++ side — no React unmount/remount on vehicle updates.
+
+**Layer-press handlers:**
+`handleStopLayerPress` and `handleBusLayerPress` receive MapLibre feature events from `GeoJSONSource.onPress`. They pull properties from `event.nativeEvent.features[0]` and call the existing state setters. A `layerTappedRef` flag prevents the subsequent `onMapPress` event (same touch) from immediately deselecting the item that was just selected.
+
+**Nearby Stops (tile math):**
+`nearbyTransitStops` is a `useMemo` that computes the user's slippy-map tile at zoom 15, builds a 3×3 tile grid, and filters `transitStops` to those whose WKT coordinate falls in that grid (up to 20). Pure math — no network call. Displayed in the expanded/full bottom sheet under "Nearby Stops".
+
+**Cross-panel navigation:**
+- `handleBusTapFromStop(tripId)` — called from `StopDetailsPanel` when the user taps an arrival row. Finds the live vehicle in the `vehicles` array by `trip_id` and flies the camera to it.
+- `handleStopTapFromBus(telerideNumber, stopName)` — called from `BusDetailsPanel` when the user taps a stop row. Looks up the stop coordinate first in the filtered active set, then falls back to the full SQLite cache, and flies the camera.
+
+**Map gestures:**
+- `onMapPress` — deselects active panels on empty-space taps. Skipped if `layerTappedRef` is set.
+- `onMapLongPress` — fires the `/searchnearby` lookup and drops a pin at the tapped coordinate.
+
+**Camera:**
+Uses `CameraRef` + `cameraRef.current?.flyTo({ center, zoom, duration })`. The `flyTo` callback is defined before the layer-press handlers to avoid a temporal dead zone error (TDZ — `const flyTo` would not be hoisted).
 
 ---
 
@@ -317,7 +352,7 @@ Reads from `routeStore` via `useFocusEffect` — called unconditionally so that 
 
 Features:
 - Route polyline rendered on a small map using the route-level encoded polyline.
-- Live bus markers via `useVehicleSSE()` (shared connection with map).
+- Live bus markers via `useVehicles()` (shared SSE connection with map).
 - `CommuteStop` list built from `route.legs[].steps[]` — walk steps and transit steps are mapped to a timeline with `departed | current | upcoming | destination` status.
 - `haversineMeters()` is used for proximity detection (determine "current" stop).
 - Crowd report UI (`packed | clearing | null`) — UI only, not yet wired to a backend.
@@ -335,21 +370,31 @@ Renders saved places grouped by category, sourced from SQLite via `useSavedPlace
 
 ### `components/stopViews.tsx`
 
-**`parseWKTPoint(wkt: string)`** — Exported. Parses `POINT(lng lat)` and returns `{ latitude, longitude }` or `null`. Longitude is the first token (PostGIS standard). Call this in `map.tsx` to pre-validate stops before creating markers — returning `null` from a MapView child crashes under Fabric interop.
+**`parseWKTPoint(wkt: string)`** — Exported. Parses `POINT(lng lat)` and returns `{ latitude, longitude }` or `null`. Longitude is the first token (PostGIS standard). Called in `map.tsx` when building `stopsGeoJSON` to filter out malformed WKT rows before they reach the GPU layer.
 
-**`StopMarker`** — 10 px blue dot. `tracksViewChanges={false}` (stops never move). Lazy-fetches schedule on first tap, polls every 30 s while callout is open. Closes polling when callout closes.
+**`StopDetailsPanel`** — Rendered as a plain React `View` inside `map.tsx`'s bottom sheet (not a map Callout). Shows upcoming and past arrivals for a stop, queried by `teleride_number`. Polls every 30 s while open. Accepts an `onBusTap(tripId)` callback — tapping an arrival row triggers cross-panel navigation to that bus.
 
-**`StopDetailsPanel`** — Bottom sheet panel (not a Callout). Shows upcoming arrivals for a stop, queried by `teleride_number` from `stop_time_updates` joined to `trip_updates` for route names.
+There is no longer a `StopMarker` component. Stop dots are rendered as a MapLibre GPU circle layer.
 
 ---
 
 ### `components/busViews.tsx`
 
-**`PooledBusMarker`** — Accepts `vehicle: VehiclePosition | null`. When `null`, renders `opacity={0}` at a dummy coordinate. This keeps the native child count constant. `tracksViewChanges` is `true` for 500 ms after mount, then frozen.
+**`BusDetailsPanel`** — Rendered as a plain React `View` inside `map.tsx`'s bottom sheet. Accepts `vehicleId`, `routeId`, `tripId` props (sourced from the MapLibre feature properties when the user taps the bus symbol layer). Fetches the full trip stop sequence and the route long name. Shows passed stops as dimmed rows with a "Passed" pill. Accepts an `onStopTap(telerideNumber, stopName)` callback for cross-panel navigation to a stop.
 
-The marker is a 30×30 SVG circle with a north-pointing chevron. `rotation={bearing}` on the `<Marker>` rotates the whole SVG natively — no JS re-render on bearing change.
+There is no longer a `PooledBusMarker` component. Bus icons are rendered as a MapLibre GPU symbol layer.
 
-**`BusDetailsPanel`** — Fetches full trip stop sequence and route name. Shows passed stops as dimmed rows with a "Passed" pill. Bearing updates are guarded by `calloutOpenRef` so the panel stays stable during live refreshes.
+---
+
+### `components/SavePlaceModal.tsx`
+
+Two-phase bottom-sheet modal for saving a place to a category.
+
+**Phase 1 — Search:** Uses `TranzitApiService.getAutocompletePredictions()` (debounced 400 ms) to populate a `FlatList` of `AutocompletePrediction` results. Displays `structured_formatting.main_text` / `secondary_text`. Tapping a result fetches `/details` with a loading spinner (`isResolvingSelection`). Selection errors are shown inline below the list.
+
+**Phase 2 — Details:** Shows a place card, an optional label input, a category chip picker (with a "+ New" chip to create a new category inline), a default toggle ("Set as default for this category"), and a Save button.
+
+If `preselectedPlace` is passed (e.g., when saving from a place card already shown on the map), the modal opens directly in Phase 2.
 
 ---
 
@@ -405,12 +450,16 @@ Core contract types for search and routing:
 
 | Type | Purpose |
 |------|---------|
+| `AutocompletePrediction` | Shape from `GET /autocomplete/json`. Has `place_id`, `description`, and `structured_formatting.{ main_text, secondary_text }`. Used directly by `SavePlaceModal`. |
 | `SearchSuggestion` | Unified shape from both `/search` and `/autocomplete/json`. |
 | `PlaceResult` | Single result from `GET /search`. |
 | `PlaceDetails` | Extends `PlaceResult` with optional rating, hours, phone, etc. from `POST /details`. |
 | `SelectedDestination` | What gets passed to the map after a search selection: `placeId`, `displayText`, `coordinate`. |
 | `Route` | Top-level route object from `POST /route`. Always has `polyline.encodedPolyline`. |
+| `RouteLeg` | One leg of a route. Contains `steps: RouteStep[]`. |
 | `RouteStep` | Single step with `travelMode: "WALK" | "TRANSIT"`. Walk steps have no `transitDetails`. |
+| `RouteTransitLine` | Transit line metadata: `name`, `nameShort`, `color`, `textColor`, `vehicle`, `agencies`. |
+| `RouteStop` | Named stop with optional `location.latLng`. |
 
 **Do not use step-level polylines for map rendering.** They are not always present in the API response. Use `route.polyline.encodedPolyline` (route-level) instead.
 
@@ -424,17 +473,21 @@ The `Relationships: []` field is required on every table entry — without it, s
 
 ## 10. Critical Constraints & Known Gotchas
 
+### MapLibre vs. react-native-maps
+
+The map layer was migrated from `react-native-maps` to `@maplibre/maplibre-react-native`. The old Fabric interop crash rules (nil child insertion, stagger pattern, constant native child count) **no longer apply** to stop and bus markers — those are now GPU-rendered GeoJSON layers. The `PooledBusMarker` and `StopMarker` React components no longer exist. However, `<Marker>` is still used for the single destination pin (one instance is cheap).
+
 ### WKT coordinate order
 
-PostGIS stores `POINT(lng lat)` — longitude first. `parseWKTPoint` in `stopViews.tsx` is correct. Do not invert the tokens.
+PostGIS stores `POINT(lng lat)` — longitude first. `parseWKTPoint` in `stopViews.tsx` is correct. Do not invert the tokens. When converting to GeoJSON geometry, coordinates must be `[longitude, latitude]` (GeoJSON spec, same as MapLibre).
 
-### Fabric interop crash (`AIRMap insertReactSubview:atIndex:`)
+### `layerTappedRef` double-fire guard
 
-`react-native-maps` runs in Fabric legacy interop mode. Three rules that must never be broken:
+MapLibre fires both a `GeoJSONSource.onPress` and a `Map.onPress` for the same touch. Without the `layerTappedRef` flag, pressing a stop or bus would select it and immediately deselect it (via `onMapPress`). `handleStopLayerPress` / `handleBusLayerPress` set `layerTappedRef.current = true`; `onMapPress` checks it and skips deselection, then resets the flag.
 
-1. **Never return `null` from a direct child of `MapView`.** Pre-validate WKT in the parent before creating a `<StopMarker>`.
-2. **Never bulk-insert two large marker arrays in the same commit frame.** Use the stagger pattern: enable stops, wait 200 ms, enable buses.
-3. **Keep the native child count constant.** Use `opacity={0}` and dummy coordinates for invisible markers rather than conditional rendering.
+### `flyTo` must be declared before layer-press handlers
+
+`flyTo` is a `useCallback` with an empty dependency array. Both `handleStopLayerPress` and `handleBusLayerPress` close over `flyTo`. Because `const` declarations are not hoisted, `flyTo` must appear in the source file *above* any callback that references it. Moving `flyTo` below its dependents causes a TypeScript TS2448/TS2454 temporal dead zone error.
 
 ### `vehicle_positions.route_id`
 
@@ -460,6 +513,10 @@ iOS enforces a 2 KB value size limit per key. Supabase session tokens can approa
 
 `POST /route` does not guarantee step-level polylines. Only `route.polyline.encodedPolyline` is always present. Both `routes.tsx` and `commute.tsx` use the route-level polyline for all map rendering.
 
+### `SavePlaceModal` search uses autocomplete, not `/search`
+
+`SavePlaceModal` calls `getAutocompletePredictions()` (not `searchPlaces()`). This intentionally covers street addresses, which `/search` misses. The raw prediction has no coordinates — a `/details` fetch is required on selection before advancing to Phase 2. The `isResolvingSelection` spinner covers this latency.
+
 ---
 
 ## Appendix: Environment Variables
@@ -469,5 +526,6 @@ iOS enforces a 2 KB value size limit per key. Supabase session tokens can approa
 | `EXPO_PUBLIC_SUPABASE_URL` | `lib/supabase.ts` | Supabase project URL |
 | `EXPO_PUBLIC_SUPABASE_ANON_KEY` | `lib/supabase.ts` | Supabase anon key (safe to bundle; RLS enforces access) |
 | `EXPO_PUBLIC_USE_LOCAL` | `services/TranzitApiService.ts` | Set to `"true"` to target `localhost:3100` |
+| `EXPO_PUBLIC_MAPTILER_KEY` | `app/(tabs)/map.tsx` | MapTiler API key for the Positron tile style. Without this, `STYLE_URL` is undefined and the map renders blank. |
 
 Never commit `.env.local`. Never expose the Supabase Service Role key in the RN bundle.

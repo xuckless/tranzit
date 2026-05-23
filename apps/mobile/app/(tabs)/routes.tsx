@@ -41,7 +41,7 @@ import { routeStore } from "@/lib/routeStore";
 import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
 const CALGARY_CENTER: [number, number] = [-114.058, 51.044];
 
 // ─── Types ────────────────────────────────────────────────────────────────────

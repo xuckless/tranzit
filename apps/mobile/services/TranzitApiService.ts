@@ -76,13 +76,14 @@ export const TranzitApiService = {
     lat: number,
     lng: number,
     signal?: AbortSignal,
-  ): Promise<PlaceResult | null> {
+  ): Promise<PlaceResult[]> {
     const res = await fetch(
       `${BASE_URL}/searchnearby?lat=${lat}&lng=${lng}`,
       { signal },
     );
-    if (res.status === 404) return null;
+    if (res.status === 404) return [];
     if (!res.ok) throw new Error(`Nearby search failed: ${res.status}`);
-    return res.json() as Promise<PlaceResult>;
+    const data = await res.json();
+    return data.places ?? [];
   },
 };

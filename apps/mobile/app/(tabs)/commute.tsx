@@ -39,7 +39,7 @@ import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
 import type { Route } from "@/types/places";
 
-const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
 const CALGARY_CENTER: [number, number] = [-114.0719, 51.0447];
 const MIN_MARKER_ZOOM = 12;
 

@@ -23,6 +23,7 @@ import {
 import { SearchSheet } from "@/components/search/SearchSheet";
 import { StopDetailsPanel, parseWKTPoint } from "@/components/stopViews";
 import { BusDetailsPanel } from "@/components/busViews";
+import { PlaceDetailsPanel } from "@/components/placeViews";
 import type { SelectedDestination, PlaceResult } from "@/types/places";
 import type { CalgaryTransitStop } from "@/types/database";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
@@ -136,6 +137,7 @@ export default function MapScreen() {
   const [placeDetails, setPlaceDetails] = useState<{
     place: PlaceDetails;
     isFetching: boolean;
+    fromNearby?: boolean;
   } | null>(null);
 
   const [transitStops, setTransitStops] = useState<CalgaryTransitStop[]>([]);
@@ -453,17 +455,13 @@ export default function MapScreen() {
       flyTo(coord, 15, 500);
 
       try {
-        const place = await TranzitApiService.searchNearby(
+        const places = await TranzitApiService.searchNearby(
           coord.latitude,
           coord.longitude,
           controller.signal,
         );
         if (!controller.signal.aborted) {
-          setNearbyState({
-            coordinate: coord,
-            places: place ? [place] : [],
-            loading: false,
-          });
+          setNearbyState({ coordinate: coord, places, loading: false });
         }
       } catch (err: unknown) {
         if ((err as Error).name === "AbortError") return;
@@ -479,6 +477,28 @@ export default function MapScreen() {
     pressAbortRef.current?.abort();
     setNearbyState(null);
     setDestination(null);
+  }, []);
+
+  // Opens PlaceDetailsPanel from a nearby result without clearing nearbyState,
+  // so the back button can restore the nearby list.
+  const handleNearbyPlaceTap = useCallback(async (place: PlaceResult) => {
+    setPlaceDetails({
+      place: {
+        id: place.id,
+        displayName: place.displayName,
+        formattedAddress: place.formattedAddress,
+        location: place.location,
+      },
+      isFetching: true,
+      fromNearby: true,
+    });
+
+    try {
+      const full = await TranzitApiService.getPlaceDetails(place.id);
+      setPlaceDetails({ place: full, isFetching: false, fromNearby: true });
+    } catch {
+      setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+    }
   }, []);
 
   // ── Map gestures (MapLibre) ──────────────────────────────────────────────────
@@ -744,7 +764,7 @@ export default function MapScreen() {
           />
         )}
 
-        {nearbyState && !isSearchActive && (
+        {nearbyState && !isSearchActive && !placeDetails?.fromNearby && (
           <View style={styles.nearbyPlacesPanel}>
             <View style={styles.nearbyPlacesHeader}>
               <View style={styles.nearbyPlacesTitleRow}>
@@ -775,17 +795,23 @@ export default function MapScreen() {
                     i === nearbyState.places.length - 1 && { borderBottomWidth: 0 },
                   ]}
                 >
-                  <View style={styles.nearbyPlaceIconBox}>
-                    <Ionicons name="storefront-outline" size={14} color={theme.colors.primary} />
-                  </View>
-                  <View style={styles.nearbyPlaceInfo}>
-                    <Text style={styles.nearbyPlaceName} numberOfLines={1}>
-                      {place.displayName.text}
-                    </Text>
-                    <Text style={styles.nearbyPlaceAddress} numberOfLines={1}>
-                      {place.formattedAddress}
-                    </Text>
-                  </View>
+                  <TouchableOpacity
+                    style={styles.nearbyPlaceInfo}
+                    activeOpacity={0.7}
+                    onPress={() => handleNearbyPlaceTap(place)}
+                  >
+                    <View style={styles.nearbyPlaceIconBox}>
+                      <Ionicons name="storefront-outline" size={14} color={theme.colors.primary} />
+                    </View>
+                    <View style={styles.nearbyPlaceText}>
+                      <Text style={styles.nearbyPlaceName} numberOfLines={1}>
+                        {place.displayName.text}
+                      </Text>
+                      <Text style={styles.nearbyPlaceAddress} numberOfLines={1}>
+                        {place.formattedAddress}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.nearbyPlaceGo}
                     activeOpacity={0.85}
@@ -811,70 +837,27 @@ export default function MapScreen() {
         )}
 
         {placeDetails && !isSearchActive && (
-          <View style={styles.placeCard}>
-            <View style={styles.placeCardLeft}>
-              <View style={styles.placeIconBox}>
-                <Ionicons name="location" size={18} color={theme.colors.primary} />
-              </View>
-              <View style={styles.placeTextBlock}>
-                <Text style={styles.placeName} numberOfLines={1}>
-                  {placeDetails.place.displayName.text}
-                </Text>
-                {placeDetails.isFetching ? (
-                  <ActivityIndicator size="small" color={theme.colors.primary} />
-                ) : (
-                  <>
-                    <Text style={styles.placeAddress} numberOfLines={1}>
-                      {placeDetails.place.formattedAddress || "Calgary, AB"}
-                    </Text>
-                    {placeDetails.place.rating != null && (
-                      <Text style={styles.placeRating}>
-                        {"★ "}
-                        {placeDetails.place.rating.toFixed(1)}
-                        {placeDetails.place.userRatingCount != null
-                          ? ` (${placeDetails.place.userRatingCount.toLocaleString()})`
-                          : ""}
-                        {placeDetails.place.regularOpeningHours?.openNow != null
-                          ? placeDetails.place.regularOpeningHours.openNow
-                            ? "  ·  Open"
-                            : "  ·  Closed"
-                          : ""}
-                      </Text>
-                    )}
-                  </>
-                )}
-              </View>
-            </View>
-            <View style={styles.placeActions}>
-              <TouchableOpacity
-                style={styles.placeDirectionsCta}
-                activeOpacity={0.85}
-                onPress={() => {
-                  router.navigate({
-                    pathname: "/(tabs)/routes",
-                    params: {
-                      destinationId: placeDetails.place.id,
-                      destinationLat: String(placeDetails.place.location.latitude),
-                      destinationLng: String(placeDetails.place.location.longitude),
-                      destinationName: placeDetails.place.displayName.text,
-                    },
-                  } as never);
-                }}
-              >
-                <Ionicons name="navigate" size={15} color="white" />
-                <Text style={styles.placeDirectionsText}>Directions</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={() => {
-                  setPlaceDetails(null);
-                  setDestination(null);
-                }}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="close-circle" size={22} color={theme.colors.text} />
-              </TouchableOpacity>
-            </View>
-          </View>
+          <PlaceDetailsPanel
+            place={placeDetails.place}
+            isFetching={placeDetails.isFetching}
+            onBack={placeDetails.fromNearby ? () => setPlaceDetails(null) : undefined}
+            onClose={() => {
+              setPlaceDetails(null);
+              setDestination(null);
+              if (placeDetails.fromNearby) setNearbyState(null);
+            }}
+            onDirections={() => {
+              router.navigate({
+                pathname: "/(tabs)/routes",
+                params: {
+                  destinationId: placeDetails.place.id,
+                  destinationLat: String(placeDetails.place.location.latitude),
+                  destinationLng: String(placeDetails.place.location.longitude),
+                  destinationName: placeDetails.place.displayName.text,
+                },
+              } as never);
+            }}
+          />
         )}
 
         <SearchSheet
@@ -1217,6 +1200,12 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: theme.colors.border,
   },
+  nearbyPlaceInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    flex: 1,
+  },
   nearbyPlaceIconBox: {
     width: 32,
     height: 32,
@@ -1226,7 +1215,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     flexShrink: 0,
   },
-  nearbyPlaceInfo: { flex: 1, gap: 2 },
+  nearbyPlaceText: { flex: 1, gap: 2 },
   nearbyPlaceName: {
     fontSize: theme.fontSize.body,
     fontWeight: "700",
@@ -1253,67 +1242,4 @@ const styles = StyleSheet.create({
     color: "white",
   },
 
-  placeCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginHorizontal: theme.spacing.screen,
-    marginBottom: 12,
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: theme.colors.primary + "08",
-    borderWidth: 1.5,
-    borderColor: theme.colors.primary + "30",
-  },
-  placeCardLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flex: 1,
-  },
-  placeIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: theme.colors.primary + "15",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  placeTextBlock: { flex: 1, gap: 2 },
-  placeName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: "#1A1C1F",
-  },
-  placeAddress: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "500",
-    color: theme.colors.text,
-  },
-  placeRating: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "#775A00",
-  },
-  placeActions: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flexShrink: 0,
-  },
-  placeDirectionsCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: theme.colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-  placeDirectionsText: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: "white",
-  },
 });
