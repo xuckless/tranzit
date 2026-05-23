@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useMemo, useRef, memo } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -7,7 +7,6 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
-import { Marker } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
@@ -52,13 +51,6 @@ interface BusEntry {
   departure_time: number | null;
   arrival_delay: number | null;
   departure_delay: number | null;
-}
-
-export interface StopMarkerProps {
-  teleride_number: number;
-  stop_name: string;
-  point: string;
-  onPress?: (teleride_number: number, stop_name: string) => void;
 }
 
 // ─── BusRow ───────────────────────────────────────────────────────────────────
@@ -289,46 +281,9 @@ export function StopDetailsPanel({
   );
 }
 
-// ─── StopMarker ───────────────────────────────────────────────────────────────
-// Simple dot marker — no Callout. Tapping fires onPress to the parent (map.tsx)
-// which renders StopDetailsPanel as a normal reactive View in its bottom sheet.
-
-function StopMarkerComponent({
-  teleride_number,
-  stop_name,
-  point,
-  onPress,
-}: StopMarkerProps) {
-  const coordinate = useMemo(() => parseWKTPoint(point), [point]);
-
-  if (!coordinate) return null;
-
-  return (
-    <Marker
-      coordinate={coordinate}
-      anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={false}
-      onPress={onPress ? () => onPress(teleride_number, stop_name) : undefined}
-    >
-      <View style={s.dot} />
-    </Marker>
-  );
-}
-
-export const StopMarker = memo(StopMarkerComponent);
-
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  dot: {
-    width: 10,
-    height: 10,
-    borderRadius: 5,
-    backgroundColor: theme.colors.primary,
-    borderWidth: 2,
-    borderColor: "white",
-  },
-
   // ── Panel shell ──
   panel: {
     marginHorizontal: theme.spacing.screen,

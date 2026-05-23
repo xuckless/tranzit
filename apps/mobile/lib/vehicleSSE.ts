@@ -5,24 +5,20 @@ import type { VehiclePosition } from "@/types/database";
 const SSE_URL =
   "https://tranzit-db-middleware-000000000000.us-central1.run.app/api/v1/vehicle_positions";
 
-export const BUS_POOL_SIZE = 400;
-
-// ─── Stable in-memory state ───────────────────────────────────────────────────
-// Each vehicle_id is permanently assigned a pool slot index that never changes.
-// SSE delta updates patch only the affected vehicles — no array reshuffling,
-// no slot reassignment, no index-driven flicker.
-// Freed slots are recycled via _freeSlots to prevent unbounded growth.
+// ─── Module-level connection state ────────────────────────────────────────────
+// Single shared EventSource across all subscribers. The pool/slot pattern is
+// gone — Mapbox/MapLibre ShapeSources are diffed natively against the previous
+// FeatureCollection, so there is no native-tree-stability requirement on our
+// side. Subscribers receive a fresh VehiclePosition[] reference on every event.
 
 let _es: EventSource<"snapshot" | "update"> | null = null;
 let _refCount = 0;
 
 const _vehicleMap = new Map<string, VehiclePosition>();
-const _slotMap    = new Map<string, number>();
-const _freeSlots: number[] = [];
-let   _nextSlot = 0;
+let _snapshot: VehiclePosition[] = [];
 
-type PoolSetter = React.Dispatch<React.SetStateAction<(VehiclePosition | null)[]>>;
-const _subs = new Set<PoolSetter>();
+type Setter = React.Dispatch<React.SetStateAction<VehiclePosition[]>>;
+const _subs = new Set<Setter>();
 
 function isValidVehicle(v: VehiclePosition): boolean {
   return (
@@ -35,41 +31,23 @@ function isValidVehicle(v: VehiclePosition): boolean {
   );
 }
 
-function assignSlot(vehicleId: string): void {
-  if (_slotMap.has(vehicleId)) return;
-  const slot = _freeSlots.length > 0 ? _freeSlots.pop()! : _nextSlot++;
-  if (slot < BUS_POOL_SIZE) _slotMap.set(vehicleId, slot);
-}
-
-function releaseSlot(vehicleId: string): void {
-  const slot = _slotMap.get(vehicleId);
-  if (slot !== undefined) _freeSlots.push(slot);
-  _slotMap.delete(vehicleId);
-  _vehicleMap.delete(vehicleId);
-}
-
-function getPool(): (VehiclePosition | null)[] {
-  const pool = new Array<VehiclePosition | null>(BUS_POOL_SIZE).fill(null);
-  for (const [vid, v] of _vehicleMap) {
-    const slot = _slotMap.get(vid);
-    if (slot !== undefined) pool[slot] = v;
+function rebuildSnapshot(): void {
+  const next: VehiclePosition[] = [];
+  for (const v of _vehicleMap.values()) {
+    if (isValidVehicle(v)) next.push(v);
   }
-  return pool;
+  _snapshot = next;
 }
 
 function broadcast(): void {
-  const pool = getPool();
-  _subs.forEach((set) => set(pool));
+  rebuildSnapshot();
+  _subs.forEach((set) => set(_snapshot));
 }
 
 function applySnapshot(vehicles: VehiclePosition[]): void {
   _vehicleMap.clear();
-  _slotMap.clear();
-  _freeSlots.length = 0;
-  _nextSlot = 0;
   for (const v of vehicles) {
     if (!isValidVehicle(v)) continue;
-    assignSlot(v.vehicle_id!);
     _vehicleMap.set(v.vehicle_id!, v);
   }
 }
@@ -79,13 +57,14 @@ function applyUpdate(
   updated?: VehiclePosition[],
   removed?: string[],
 ): void {
-  for (const vid of removed ?? []) releaseSlot(vid);
+  for (const vid of removed ?? []) _vehicleMap.delete(vid);
   for (const v of updated ?? []) {
-    if (v.vehicle_id && _vehicleMap.has(v.vehicle_id)) _vehicleMap.set(v.vehicle_id, v);
+    if (v.vehicle_id && _vehicleMap.has(v.vehicle_id)) {
+      _vehicleMap.set(v.vehicle_id, v);
+    }
   }
   for (const v of added ?? []) {
     if (!isValidVehicle(v)) continue;
-    assignSlot(v.vehicle_id!);
     _vehicleMap.set(v.vehicle_id!, v);
   }
 }
@@ -93,11 +72,11 @@ function applyUpdate(
 function openSSE(): void {
   if (_es) return;
   const es = new EventSource<"snapshot" | "update">(SSE_URL, {
-    pollingInterval: 3000, // wait 3 s before reconnecting after a drop
+    pollingInterval: 3000,
   });
   _es = es;
 
-  es.addEventListener("open",  () => console.log("[vehicleSSE] connected"));
+  es.addEventListener("open", () => console.log("[vehicleSSE] connected"));
   es.addEventListener("error", (e) => console.warn("[vehicleSSE] error", e));
 
   es.addEventListener("snapshot", (e) => {
@@ -122,29 +101,71 @@ function openSSE(): void {
 function closeSSE(): void {
   _es?.close();
   _es = null;
-  // Intentionally NOT clearing _vehicleMap/_slotMap here.
-  // React Strict Mode temporarily drops _refCount to 0 during dev remounts.
-  // Clearing would wipe all vehicle state; buses would vanish until the next
-  // SSE snapshot (~30 s). State is only reset inside applySnapshot().
+  // Intentionally NOT clearing _vehicleMap — React Strict Mode briefly drops
+  // _refCount to 0 during dev remounts. State is only reset by applySnapshot().
 }
 
 // ─── Hook ────────────────────────────────────────────────────────────────────
 
-export function useVehicleSSE(): (VehiclePosition | null)[] {
-  const [pool, setPool] = useState<(VehiclePosition | null)[]>(() => getPool());
+/**
+ * Subscribe to the live vehicle stream. Returns the current vehicle snapshot
+ * as a fresh array reference on every SSE event. Convert to GeoJSON in the
+ * consumer via useMemo.
+ */
+export function useVehicles(): VehiclePosition[] {
+  const [vehicles, setVehicles] = useState<VehiclePosition[]>(() => _snapshot);
 
   useEffect(() => {
     _refCount++;
-    _subs.add(setPool);
+    _subs.add(setVehicles);
     openSSE();
-    setPool(getPool()); // deliver current state immediately if already connected
+    setVehicles(_snapshot);
 
     return () => {
-      _subs.delete(setPool);
+      _subs.delete(setVehicles);
       _refCount--;
       if (_refCount === 0) closeSSE();
     };
   }, []);
 
-  return pool;
+  return vehicles;
+}
+
+// ─── GeoJSON conversion helper ────────────────────────────────────────────────
+
+export interface VehicleFeatureProps {
+  vehicle_id: string;
+  trip_id: string;
+  route_id: string;
+  bearing: number;
+}
+
+export interface VehicleFeatureCollection {
+  type: "FeatureCollection";
+  features: Array<{
+    type: "Feature";
+    properties: VehicleFeatureProps;
+    geometry: { type: "Point"; coordinates: [number, number] };
+  }>;
+}
+
+export function vehiclesToGeoJSON(
+  vehicles: VehiclePosition[],
+): VehicleFeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: vehicles.map((v) => ({
+      type: "Feature",
+      properties: {
+        vehicle_id: v.vehicle_id!,
+        trip_id: v.trip_id!,
+        route_id: v.route_id!,
+        bearing: v.bearing ?? 0,
+      },
+      geometry: {
+        type: "Point",
+        coordinates: [v.longitude!, v.latitude!],
+      },
+    })),
+  };
 }

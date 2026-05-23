@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useEffect, useRef, memo } from "react";
+import { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -7,16 +7,10 @@ import {
   TouchableOpacity,
 } from "react-native";
 import { ScrollView } from "react-native-gesture-handler";
-import Svg, { Circle as SvgCircle, Path, Text as SvgText } from "react-native-svg";
-import { Marker } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
-import type {
-  StopTimeUpdate,
-  CalgaryTransitRoute,
-  VehiclePosition,
-} from "@/types/database";
+import type { StopTimeUpdate, CalgaryTransitRoute } from "@/types/database";
 import { theme } from "@/styles/theme";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -28,8 +22,6 @@ function fmtEpoch(epoch: number): string {
   });
 }
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-
 interface TripStop {
   stop_sequence: number;
   stop_id: string;
@@ -38,16 +30,9 @@ interface TripStop {
   passed: boolean;
 }
 
-export interface PooledBusMarkerProps {
-  vehicle: VehiclePosition | null;
-  onPress?: (vehicleId: string, routeId: string, tripId: string) => void;
-}
-
-const DUMMY_COORD = { latitude: 51.070664, longitude: -114.059263 };
-
 // ─── BusDetailsPanel ─────────────────────────────────────────────────────────
-// Rendered as a normal React View in map.tsx's bottom sheet.
-// Equivalent to StopDetailsPanel but shows the bus trip stop list.
+// Rendered as a normal React View in map.tsx's bottom sheet, triggered by a
+// MapLibre ShapeSource onPress event that hands us vehicleId, routeId, tripId.
 
 interface BusDetailsPanelProps {
   vehicleId: string;
@@ -165,96 +150,9 @@ export function BusDetailsPanel({
   );
 }
 
-// ─── PooledBusMarker ─────────────────────────────────────────────────────────
-
-function PooledBusMarkerComponent({ vehicle, onPress }: PooledBusMarkerProps) {
-  // tracksViewChanges briefly flips true when bearing changes so the native
-  // layer re-snapshots the arrow + route label.
-  const [tracksViewChanges, setTracksViewChanges] = useState(false);
-
-  const vehicleId = vehicle?.vehicle_id ?? null;
-  const tripId    = vehicle?.trip_id    ?? null;
-  const routeId   = vehicle?.route_id   ?? null;
-  const bearing   = vehicle?.bearing    ?? 0;
-  const latitude  = vehicle?.latitude   ?? DUMMY_COORD.latitude;
-  const longitude = vehicle?.longitude  ?? DUMMY_COORD.longitude;
-
-  // -1 is the sentinel that forces a flip on the first render of a new vehicle.
-  const prevBearingRef = useRef(-1);
-
-  // When this slot is reassigned to a different vehicle, reset prevBearing to -1
-  // so the bearing effect below always fires a re-snapshot for the new vehicle,
-  // regardless of whether the new bearing happens to equal the previous one.
-  useEffect(() => {
-    prevBearingRef.current = -1;
-  }, [vehicleId]);
-
-  // Re-snapshot the marker (arrow direction + route label) whenever bearing changes.
-  // No callout-open guard needed — Callout has been removed from this marker.
-  useEffect(() => {
-    if (!vehicle) return;
-    if (prevBearingRef.current === bearing) return;
-    prevBearingRef.current = bearing;
-    setTracksViewChanges(true);
-    const t = setTimeout(() => setTracksViewChanges(false), 150);
-    return () => clearTimeout(t);
-  }, [bearing, vehicle]);
-
-  return (
-    <Marker
-      coordinate={{ latitude, longitude }}
-      anchor={{ x: 0.5, y: 0.5 }}
-      tracksViewChanges={tracksViewChanges}
-      opacity={vehicle ? 1 : 0}
-      onPress={
-        vehicle && onPress && vehicleId && routeId && tripId
-          ? () => onPress(vehicleId, routeId, tripId)
-          : undefined
-      }
-    >
-      {/* Three layered SVGs — arrow rotates, route label stays upright */}
-      <View style={s.markerContainer}>
-        <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
-          <SvgCircle cx="18" cy="18" r="16" fill="#0058BC" stroke="white" strokeWidth="2" />
-        </Svg>
-        <View
-          style={[
-            StyleSheet.absoluteFill,
-            { transform: [{ rotate: `${bearing}deg` }] },
-          ]}
-        >
-          <Svg width={36} height={36} viewBox="0 0 36 36">
-            <Path d="M18 4 L13 15 L18 12 L23 15 Z" fill="white" opacity={0.9} />
-          </Svg>
-        </View>
-        <Svg width={36} height={36} viewBox="0 0 36 36" style={StyleSheet.absoluteFill}>
-          <SvgText
-            x="18"
-            y="26"
-            textAnchor="middle"
-            fill="white"
-            fontSize="9"
-            fontWeight="bold"
-          >
-            {routeId ?? ""}
-          </SvgText>
-        </Svg>
-      </View>
-    </Marker>
-  );
-}
-
-export const PooledBusMarker = memo(PooledBusMarkerComponent);
-
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const s = StyleSheet.create({
-  markerContainer: {
-    width: 36,
-    height: 36,
-  },
-
-  // ── Panel shell (matches StopDetailsPanel style) ──
   panel: {
     marginHorizontal: theme.spacing.screen,
     marginBottom: 12,

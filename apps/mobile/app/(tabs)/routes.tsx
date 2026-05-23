@@ -1,4 +1,4 @@
-import React, {
+import {
   useState,
   useEffect,
   useRef,
@@ -14,7 +14,14 @@ import {
   ActivityIndicator,
   Keyboard,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
+import {
+  Map,
+  Camera,
+  GeoJSONSource,
+  Layer,
+  Marker,
+  type CameraRef,
+} from "@maplibre/maplibre-react-native";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import AntDesign from "@expo/vector-icons/AntDesign";
@@ -33,6 +40,9 @@ import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
 import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
+
+const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const CALGARY_CENTER: [number, number] = [-114.058, 51.044];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -70,7 +80,7 @@ export default function RouteScreen() {
     destinationName?: string;
   }>();
 
-  const mapRef = useRef<MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
   const originInputRef = useRef<TextInput>(null);
   const destInputRef = useRef<TextInput>(null);
   const routeAbortRef = useRef<AbortController | null>(null);
@@ -110,7 +120,7 @@ export default function RouteScreen() {
     })();
   }, []);
 
-  // ── Restore cached routes when local state is empty (e.g. after exit from commute) ──
+  // ── Restore cached routes when local state is empty ──────────────────────────
   useFocusEffect(
     useCallback(() => {
       if (routes.length > 0) return;
@@ -142,7 +152,6 @@ export default function RouteScreen() {
     }, [routes.length]),
   );
 
-  // ── Init destination from navigation params ──────────────────────────────────
   useEffect(() => {
     if (!destinationId || !destinationLat || !destinationLng || !destNameParam)
       return;
@@ -154,14 +163,12 @@ export default function RouteScreen() {
     setDestinationLabel(destNameParam);
   }, [destinationId, destinationLat, destinationLng, destNameParam]);
 
-  // ── Abort in-flight route request on unmount ──────────────────────────────────
   useEffect(() => {
     return () => {
       routeAbortRef.current?.abort();
     };
   }, []);
 
-  // ── Clear routes when destination is removed ──────────────────────────────────
   useEffect(() => {
     if (!destination) {
       setRoutes([]);
@@ -171,7 +178,7 @@ export default function RouteScreen() {
     }
   }, [destination]);
 
-  // ── Route fetch (manual) ──────────────────────────────────────────────────────
+  // ── Route fetch ───────────────────────────────────────────────────────────────
   const handleFindRoutes = useCallback(() => {
     const effectiveOrigin =
       origin ??
@@ -205,7 +212,6 @@ export default function RouteScreen() {
         setSelectedRoute(firstRoute);
         setIsLoadingRoutes(false);
 
-        // Cache for restoration after commute exit
         routeStore.setRoutes(fetchedRoutes);
         routeStore.setSelectedRoute(firstRoute);
         routeStore.setOrigin({
@@ -222,14 +228,19 @@ export default function RouteScreen() {
         });
 
         if (fetchedRoutes.length > 0) {
-          const fitCoords = [
-            { latitude: effectiveOrigin.lat, longitude: effectiveOrigin.lng },
-            { latitude: destination.lat, longitude: destination.lng },
+          // v11 fitBounds: ([west, south, east, north], options)
+          const lats = [effectiveOrigin.lat, destination.lat];
+          const lngs = [effectiveOrigin.lng, destination.lng];
+          const bounds: [number, number, number, number] = [
+            Math.min(...lngs),
+            Math.min(...lats),
+            Math.max(...lngs),
+            Math.max(...lats),
           ];
           setTimeout(() => {
-            mapRef.current?.fitToCoordinates(fitCoords, {
-              edgePadding: { top: 50, right: 50, bottom: 50, left: 50 },
-              animated: true,
+            cameraRef.current?.fitBounds(bounds, {
+              duration: 800,
+              padding: { top: 50, right: 50, bottom: 50, left: 50 },
             });
           }, 400);
         }
@@ -241,15 +252,14 @@ export default function RouteScreen() {
         setRouteError(msg);
         setIsLoadingRoutes(false);
       });
-  }, [origin, gpsLocation, destination]);
+  }, [origin, gpsLocation, destination, originLabel, destinationLabel]);
 
-  // ── Polylines ─────────────────────────────────────────────────────────────────
-  // The API does not return step-level polylines — only the route-level polyline
-  // is guaranteed. Each route is rendered as a single line; the selected route
-  // is thicker and uses the first transit line's color (or a palette fallback).
+  // ── Polyline GeoJSON ──────────────────────────────────────────────────────────
+  // One FeatureCollection across all routes. Each feature carries color + width
+  // properties, read by the LineLayer's data-driven expressions.
 
-  const routePolylines = useMemo(() => {
-    return routes.flatMap((r, i) => {
+  const routesGeoJSON = useMemo(() => {
+    const features = routes.flatMap((r, i) => {
       const encoded = r.polyline?.encodedPolyline;
       if (!encoded) return [];
       let coords: { latitude: number; longitude: number }[];
@@ -270,13 +280,21 @@ export default function RouteScreen() {
 
       return [
         {
-          coords,
-          color: isSelected ? lineColor : "#C1C6D7",
-          width: isSelected ? 5 : 3,
-          isDash: !isSelected,
+          type: "Feature" as const,
+          properties: {
+            color: isSelected ? lineColor : "#C1C6D7",
+            width: isSelected ? 5 : 3,
+            isSelected,
+          },
+          geometry: {
+            type: "LineString" as const,
+            coordinates: coords.map((c) => [c.longitude, c.latitude] as [number, number]),
+          },
         },
       ];
     });
+
+    return { type: "FeatureCollection" as const, features };
   }, [routes, selectedRoute]);
 
   // ── Filter ────────────────────────────────────────────────────────────────────
@@ -323,7 +341,6 @@ export default function RouteScreen() {
       originSearch.reset();
       Keyboard.dismiss();
       setOriginLabel(suggestion.mainText);
-      // New origin invalidates any previously fetched routes
       setRoutes([]);
       setSelectedRoute(null);
       setRouteError(null);
@@ -361,15 +378,12 @@ export default function RouteScreen() {
     [destinationSearch],
   );
 
-  // /search results already have coordinates — use them directly.
-  // Autocomplete-only results (no location) require a POST /details call.
   const handleSelectDest = useCallback(
     async (suggestion: SearchSuggestion) => {
       setFocusedField(null);
       destinationSearch.reset();
       Keyboard.dismiss();
       setDestinationLabel(suggestion.mainText);
-      // New destination invalidates any previously fetched routes
       setRoutes([]);
       setSelectedRoute(null);
       setRouteError(null);
@@ -434,37 +448,60 @@ export default function RouteScreen() {
   // ─── Render ──────────────────────────────────────────────────────────────────
   return (
     <View style={styles.screen}>
-      {/* ── Map ── */}
-      <MapView
-        ref={mapRef}
-        provider={PROVIDER_GOOGLE}
+      <Map
         style={styles.map}
-        showsCompass={false}
-        showsMyLocationButton={false}
-        initialRegion={{
-          latitude: 51.044,
-          longitude: -114.058,
-          latitudeDelta: 0.1,
-          longitudeDelta: 0.1,
-        }}
+        mapStyle={STYLE_URL}
+        compass={false}
+        logo={false}
+        attribution={true}
       >
-        {/* All route polylines — selected is thick+colored, others are muted/dashed */}
-        {routePolylines.map((p, i) => (
-          <Polyline
-            key={`route-${i}`}
-            coordinates={p.coords}
-            strokeColor={p.color}
-            strokeWidth={p.width}
-            lineDashPattern={p.isDash ? [6, 4] : undefined}
+        <Camera
+          ref={cameraRef}
+          initialViewState={{
+            center: CALGARY_CENTER,
+            zoom: 11,
+          }}
+        />
+
+        {/* All route polylines — color and width are data-driven per feature.
+            line-dasharray is not data-driven in MapLibre, so we render two
+            separate Layers over the same source, filtered by isSelected. */}
+        <GeoJSONSource id="routes-source" data={routesGeoJSON}>
+          <Layer
+            id="routes-line-selected"
+            type="line"
+            filter={["==", ["get", "isSelected"], true]}
+            paint={{
+              "line-color": ["get", "color"],
+              "line-width": ["get", "width"],
+            }}
+            layout={{
+              "line-cap": "round",
+              "line-join": "round",
+            }}
           />
-        ))}
+          <Layer
+            id="routes-line-unselected"
+            type="line"
+            filter={["==", ["get", "isSelected"], false]}
+            paint={{
+              "line-color": ["get", "color"],
+              "line-width": ["get", "width"],
+              "line-dasharray": [2, 1.5],
+            }}
+            layout={{
+              "line-cap": "round",
+              "line-join": "round",
+            }}
+          />
+        </GeoJSONSource>
 
         {/* Origin dot */}
         {origin && (
           <Marker
-            coordinate={{ latitude: origin.lat, longitude: origin.lng }}
-            anchor={{ x: 0.5, y: 0.5 }}
-            tracksViewChanges={false}
+            id="origin-marker"
+            lngLat={[origin.lng, origin.lat]}
+            anchor="center"
           >
             <View style={styles.originDot} />
           </Marker>
@@ -473,21 +510,18 @@ export default function RouteScreen() {
         {/* Destination pin */}
         {destination && (
           <Marker
-            coordinate={{
-              latitude: destination.lat,
-              longitude: destination.lng,
-            }}
-            anchor={{ x: 0.5, y: 1.0 }}
-            tracksViewChanges={false}
-            pinColor={theme.colors.primary}
-          />
+            id="destination-marker"
+            lngLat={[destination.lng, destination.lat]}
+            anchor="bottom"
+          >
+            <Ionicons name="location" size={32} color={theme.colors.primary} />
+          </Marker>
         )}
-      </MapView>
+      </Map>
 
       {/* ── Search panel ── */}
       <View style={styles.searchPanel}>
         <View style={styles.searchRows}>
-          {/* Origin input */}
           <View style={styles.searchRow}>
             <AntDesign
               name="aim"
@@ -527,7 +561,6 @@ export default function RouteScreen() {
                       : null,
                   );
                   originSearch.reset();
-                  // Origin reset invalidates fetched routes
                   setRoutes([]);
                   setSelectedRoute(null);
                   setRouteError(null);
@@ -545,7 +578,6 @@ export default function RouteScreen() {
 
           <View style={styles.searchDivider} />
 
-          {/* Destination input */}
           <View style={styles.searchRow}>
             <Ionicons
               name="location"
@@ -587,7 +619,6 @@ export default function RouteScreen() {
             )}
           </View>
 
-          {/* Find Routes button — only when not in search mode and destination is entered */}
           {!focusedField && destinationLabel.length > 0 && (
             <>
               <View style={styles.searchDivider} />
@@ -631,7 +662,6 @@ export default function RouteScreen() {
 
       {/* ── Content area ── */}
       {focusedField === "destination" ? (
-        // ── Destination: instant /search + delayed /autocomplete/json merged ──
         <View
           style={[
             styles.searchResultsArea,
@@ -656,7 +686,6 @@ export default function RouteScreen() {
           )}
         </View>
       ) : focusedField === "origin" ? (
-        // ── Origin: same dual-source search as destination ──
         <View
           style={[
             styles.searchResultsArea,
@@ -681,7 +710,6 @@ export default function RouteScreen() {
           )}
         </View>
       ) : (
-        // ── Route results ──
         <View style={styles.routeArea}>
           {isLoadingRoutes && (
             <View style={styles.centerState}>
@@ -719,7 +747,6 @@ export default function RouteScreen() {
 
           {!isLoadingRoutes && !routeError && routes.length > 0 && (
             <>
-              {/* Filter chips */}
               <HorizontalView
                 style={{
                   paddingHorizontal: theme.spacing.screen,
@@ -759,7 +786,6 @@ export default function RouteScreen() {
                 })}
               </HorizontalView>
 
-              {/* Route list using RoutePickerSheet */}
               <View style={styles.routeListWrap}>
                 {filteredRoutes.length > 0 ? (
                   <RoutePickerSheet
@@ -778,7 +804,6 @@ export default function RouteScreen() {
         </View>
       )}
 
-      {/* ── Start Journey button ── */}
       {selectedRoute && !focusedField && (
         <View style={styles.startWrap}>
           <TouchableOpacity
@@ -798,15 +823,8 @@ export default function RouteScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screen: {
-    flex: 1,
-    backgroundColor: "#F9F9FE",
-  },
-
-  // ── Map ──
-  map: {
-    height: 220,
-  },
+  screen: { flex: 1, backgroundColor: "#F9F9FE" },
+  map: { height: 220 },
   originDot: {
     width: 14,
     height: 14,
@@ -816,7 +834,6 @@ const styles = StyleSheet.create({
     borderColor: "white",
   },
 
-  // ── Search panel ──
   searchPanel: {
     backgroundColor: "white",
     marginHorizontal: theme.spacing.screen,
@@ -833,20 +850,14 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 8,
   },
-  searchRows: {
-    flex: 1,
-    gap: 2,
-  },
+  searchRows: { flex: 1, gap: 2 },
   searchRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 8,
     paddingVertical: 6,
   },
-  rowIcon: {
-    width: 22,
-    textAlign: "center",
-  },
+  rowIcon: { width: 22, textAlign: "center" },
   searchInput: {
     flex: 1,
     fontSize: theme.fontSize.body,
@@ -858,9 +869,7 @@ const styles = StyleSheet.create({
     backgroundColor: theme.colors.muted,
     marginLeft: 30,
   },
-  cancelBtn: {
-    paddingLeft: 8,
-  },
+  cancelBtn: { paddingLeft: 8 },
   cancelText: {
     fontSize: theme.fontSize.body,
     fontWeight: "600",
@@ -877,23 +886,15 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     marginTop: 4,
   },
-  findRoutesBtnDisabled: {
-    backgroundColor: theme.colors.muted,
-  },
+  findRoutesBtnDisabled: { backgroundColor: theme.colors.muted },
   findRoutesBtnText: {
     fontSize: theme.fontSize.body,
     fontWeight: "700",
     color: "white",
   },
-  findRoutesBtnTextDisabled: {
-    color: theme.colors.text,
-  },
+  findRoutesBtnTextDisabled: { color: theme.colors.text },
 
-  // ── Search results area ──
-  searchResultsArea: {
-    flex: 1,
-    paddingTop: theme.spacing.element,
-  },
+  searchResultsArea: { flex: 1, paddingTop: theme.spacing.element },
   emptyText: {
     fontSize: theme.fontSize.body,
     color: theme.colors.text,
@@ -901,11 +902,7 @@ const styles = StyleSheet.create({
     marginTop: 24,
   },
 
-  // ── Route area ──
-  routeArea: {
-    flex: 1,
-    paddingTop: theme.spacing.element,
-  },
+  routeArea: { flex: 1, paddingTop: theme.spacing.element },
   centerState: {
     flex: 1,
     justifyContent: "center",
@@ -926,7 +923,6 @@ const styles = StyleSheet.create({
     maxWidth: 260,
   },
 
-  // ── Filter chips ──
   modeChip: {
     backgroundColor: theme.colors.background,
     borderRadius: 30,
@@ -936,25 +932,16 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 4,
   },
-  modeChipActive: {
-    backgroundColor: theme.colors.secondary,
-  },
+  modeChipActive: { backgroundColor: theme.colors.secondary },
   modeChipText: {
     fontSize: theme.fontSize.body,
     fontWeight: "700",
     color: theme.colors.text,
   },
-  modeChipTextActive: {
-    color: theme.colors.selected,
-  },
+  modeChipTextActive: { color: theme.colors.selected },
 
-  // ── Route list ──
-  routeListWrap: {
-    flex: 1,
-    paddingBottom: 80,
-  },
+  routeListWrap: { flex: 1, paddingBottom: 80 },
 
-  // ── Start button ──
   startWrap: {
     position: "absolute",
     bottom: 16,

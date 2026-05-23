@@ -1,4 +1,4 @@
-import React, {
+import {
   useState,
   useEffect,
   useRef,
@@ -12,13 +12,20 @@ import {
   ScrollView,
   TouchableOpacity,
 } from "react-native";
-import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
-import { useVehicleSSE } from "@/lib/vehicleSSE";
+import {
+  Map,
+  Camera,
+  UserLocation,
+  GeoJSONSource,
+  Layer,
+  Images,
+  type CameraRef,
+} from "@maplibre/maplibre-react-native";
+import { useVehicles, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
 import { middlewareQuery } from "@/lib/middleware";
 import { loadAndCacheStops } from "@/lib/transitStopsCache";
 import { getStopsByTelerideNumbers } from "@/lib/db";
-import { PooledBusMarker } from "@/components/busViews";
-import { StopMarker } from "@/components/stopViews";
+import { parseWKTPoint } from "@/components/stopViews";
 import type { CalgaryTransitStop } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
@@ -31,6 +38,10 @@ import { routeStore } from "@/lib/routeStore";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
 import type { Route } from "@/types/places";
+
+const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
+const CALGARY_CENTER: [number, number] = [-114.0719, 51.0447];
+const MIN_MARKER_ZOOM = 12;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -149,7 +160,6 @@ function applyStatuses(
 ): CommuteStop[] {
   return stops.map((s, i) => ({
     ...s,
-    // Destination must win — it should never be overwritten by "current"
     status:
       i === stops.length - 1
         ? "destination"
@@ -233,7 +243,7 @@ function StopItem({ stop }: { stop: CommuteStop }) {
 export default function CommuteScreen() {
   const router = useRouter();
   const [crowdAnswer, setCrowdAnswer] = useState<CrowdAnswer>(null);
-  const mapRef = useRef<MapView>(null);
+  const cameraRef = useRef<CameraRef>(null);
 
   const [route, setRoute] = useState<Route | null>(null);
   const [destinationInfo, setDestinationInfo] = useState<{
@@ -248,8 +258,8 @@ export default function CommuteScreen() {
   } | null>(null);
 
   const [rawStops, setRawStops] = useState<CommuteStop[]>([]);
-  const [currentStopIndex, setCurrentStopIndex] = useState(1); // start at first transit stop
-  const allVehicles = useVehicleSSE();
+  const [currentStopIndex, setCurrentStopIndex] = useState(1);
+  const allVehicles = useVehicles();
   const [routeStops, setRouteStops] = useState<CalgaryTransitStop[]>([]);
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
@@ -266,7 +276,6 @@ export default function CommuteScreen() {
       const storedDest = routeStore.getDestination();
       const storedOrigin = routeStore.getOrigin();
 
-      // Always set — null here means clearJourney was called, showing empty state
       setRoute(storedRoute);
       if (storedRoute) {
         setCurrentStopIndex(1);
@@ -277,7 +286,6 @@ export default function CommuteScreen() {
     }, []),
   );
 
-  // ── Build stops from route ────────────────────────────────────────────────────
   useEffect(() => {
     if (!route) return;
     const originLabel = originInfo?.label ?? "Your location";
@@ -289,8 +297,6 @@ export default function CommuteScreen() {
   // ── GPS subscription ──────────────────────────────────────────────────────────
   useEffect(() => {
     if (!route) return;
-
-    // Guard against unmount happening before the async subscription resolves
     let cancelled = false;
 
     (async () => {
@@ -310,7 +316,7 @@ export default function CommuteScreen() {
               longitude: coords.longitude,
             });
             if (coords.speed != null && coords.speed >= 0) {
-              setCurrentSpeed(Math.round(coords.speed * 3.6)); // m/s → km/h
+              setCurrentSpeed(Math.round(coords.speed * 3.6));
             }
           },
         );
@@ -337,7 +343,7 @@ export default function CommuteScreen() {
     if (!userLocation || rawStops.length === 0) return;
 
     const nextIdx = currentStopIndex + 1;
-    if (nextIdx >= rawStops.length - 1) return; // don't auto-advance past destination
+    if (nextIdx >= rawStops.length - 1) return;
 
     const nextStop = rawStops[nextIdx];
     if (!nextStop?.coordinate) return;
@@ -369,17 +375,21 @@ export default function CommuteScreen() {
     return [...new Set(ids)];
   }, [route]);
 
-  // ── Filter live vehicles from the shared SSE feed by active route IDs ──────────
-  // useVehicleSSE() returns (VehiclePosition | null)[] — null = empty pool slot.
+  // ── Filter live vehicles by active route IDs ─────────────────────────────────
   const routeVehicles = useMemo(
     () =>
       transitRouteIds.length === 0
         ? []
         : allVehicles.filter(
-            (v): v is NonNullable<typeof v> =>
-              v !== null && v.route_id != null && transitRouteIds.includes(v.route_id),
+            (v) => v.route_id != null && transitRouteIds.includes(v.route_id),
           ),
     [allVehicles, transitRouteIds],
+  );
+
+  // ── Convert filtered vehicles to GeoJSON for the SymbolLayer ─────────────────
+  const vehiclesGeoJSON = useMemo(
+    () => vehiclesToGeoJSON(routeVehicles),
+    [routeVehicles],
   );
 
   // ── Fetch route stops from cache whenever active vehicles change ──────────────
@@ -400,10 +410,8 @@ export default function CommuteScreen() {
     const fifteenMinAgo = now - 900;
 
     (async () => {
-      // Ensure stops cache is warm before we try to resolve coordinates.
       await loadAndCacheStops();
 
-      // Single request: all trip_ids via IN, server-side schedule + time filters.
       const rawStopTimes = await middlewareQuery<{ stop_id: string | null }>(
         "stop_time_updates",
         {
@@ -427,30 +435,68 @@ export default function CommuteScreen() {
     })();
   }, [routeVehicles]);
 
-  // ── Fit map to route ──────────────────────────────────────────────────────────
+  // ── Route stops GeoJSON ───────────────────────────────────────────────────────
+  const routeStopsGeoJSON = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: routeStops
+        .map((s) => {
+          const coord = s.point ? parseWKTPoint(s.point) : null;
+          if (!coord || s.teleride_number == null) return null;
+          return {
+            type: "Feature" as const,
+            properties: {
+              teleride_number: s.teleride_number,
+              stop_name: s.stop_name ?? "Unknown Stop",
+            },
+            geometry: {
+              type: "Point" as const,
+              coordinates: [coord.longitude, coord.latitude] as [number, number],
+            },
+          };
+        })
+        .filter((f): f is NonNullable<typeof f> => f !== null),
+    }),
+    [routeStops],
+  );
+
+  // ── Fit map to route polyline ─────────────────────────────────────────────────
   useEffect(() => {
     if (!route?.polyline?.encodedPolyline) return;
     const coords = safeDecodePolyline(route.polyline.encodedPolyline);
     if (coords.length === 0) return;
+
+    const lats = coords.map((c) => c.latitude);
+    const lngs = coords.map((c) => c.longitude);
+    const bounds: [number, number, number, number] = [
+      Math.min(...lngs),
+      Math.min(...lats),
+      Math.max(...lngs),
+      Math.max(...lats),
+    ];
+
     setTimeout(() => {
-      mapRef.current?.fitToCoordinates(coords, {
-        edgePadding: { top: 20, right: 20, bottom: 20, left: 20 },
-        animated: true,
+      cameraRef.current?.fitBounds(bounds, {
+        duration: 800,
+        padding: { top: 20, right: 20, bottom: 20, left: 20 },
       });
     }, 400);
   }, [route]);
-
-  // ── Derived values ────────────────────────────────────────────────────────────
 
   const stops = useMemo(
     () => applyStatuses(rawStops, currentStopIndex),
     [rawStops, currentStopIndex],
   );
 
-  const routePolylines = useMemo(() => {
-    if (!route?.polyline?.encodedPolyline) return [];
+  // ── Polyline GeoJSON: completed (blue) + remaining (line color) ──────────────
+  const routePolylinesGeoJSON = useMemo(() => {
+    if (!route?.polyline?.encodedPolyline) {
+      return { type: "FeatureCollection" as const, features: [] };
+    }
     const allCoords = safeDecodePolyline(route.polyline.encodedPolyline);
-    if (allCoords.length === 0) return [];
+    if (allCoords.length === 0) {
+      return { type: "FeatureCollection" as const, features: [] };
+    }
 
     const currentStop = stops[currentStopIndex];
     let splitIdx = 0;
@@ -481,31 +527,57 @@ export default function CommuteScreen() {
     const completed = allCoords.slice(0, splitIdx + 1);
     const remaining = allCoords.slice(splitIdx);
 
-    const result: {
-      coords: { latitude: number; longitude: number }[];
-      color: string;
-      strokeWidth: number;
-      isDash: boolean;
-    }[] = [];
+    const features: Array<{
+      type: "Feature";
+      properties: { color: string };
+      geometry: { type: "LineString"; coordinates: [number, number][] };
+    }> = [];
 
     if (completed.length > 1) {
-      result.push({
-        coords: completed,
-        color: theme.colors.primary,
-        strokeWidth: 5,
-        isDash: false,
+      features.push({
+        type: "Feature",
+        properties: { color: theme.colors.primary },
+        geometry: {
+          type: "LineString",
+          coordinates: completed.map((c) => [c.longitude, c.latitude]),
+        },
       });
     }
     if (remaining.length > 1) {
-      result.push({
-        coords: remaining,
-        color: lineColor,
-        strokeWidth: 5,
-        isDash: false,
+      features.push({
+        type: "Feature",
+        properties: { color: lineColor },
+        geometry: {
+          type: "LineString",
+          coordinates: remaining.map((c) => [c.longitude, c.latitude]),
+        },
       });
     }
-    return result;
+
+    return { type: "FeatureCollection" as const, features };
   }, [route, currentStopIndex, stops]);
+
+  // ── Route stops markers (the timeline dots on the map) ───────────────────────
+  // These are the Google-route-API stops (origin, transit boundaries, destination)
+  // rendered as colored dots reflecting departed/current/destination state.
+  const timelineStopsGeoJSON = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: stops
+        .filter((s) => s.coordinate)
+        .map((s) => ({
+          type: "Feature" as const,
+          properties: {
+            status: s.status,
+          },
+          geometry: {
+            type: "Point" as const,
+            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [number, number],
+          },
+        })),
+    }),
+    [stops],
+  );
 
   const etaMinutes = useMemo(() => {
     if (!route) return null;
@@ -551,7 +623,6 @@ export default function CommuteScreen() {
   const boardingStep = useMemo(() => {
     if (!route) return null;
     const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
-    // Find the first TRANSIT step that is not yet completed
     const transitStepsWithIndex = allSteps
       .map((s, i) => ({ step: s, i }))
       .filter((x) => x.step.travelMode === "TRANSIT");
@@ -566,7 +637,7 @@ export default function CommuteScreen() {
   const co2Saved = useMemo(() => {
     if (!route?.distanceMeters) return null;
     const km = route.distanceMeters / 1000;
-    return (km * 0.16).toFixed(1); // ~0.16 kg CO₂/km saved vs car
+    return (km * 0.16).toFixed(1);
   }, [route]);
 
   const activeTransitName =
@@ -577,13 +648,11 @@ export default function CommuteScreen() {
 
   const trackDoneHeight = Math.max(0, currentStopIndex * 50);
 
-  // ── Exit journey ─────────────────────────────────────────────────────────────
   const handleExit = useCallback(() => {
     routeStore.clearJourney();
     router.navigate("/(tabs)/routes" as never);
   }, [router]);
 
-  // ── Empty state ───────────────────────────────────────────────────────────────
   if (!route) {
     return (
       <View style={styles.emptyScreen}>
@@ -596,8 +665,6 @@ export default function CommuteScreen() {
     );
   }
 
-  // ─── Render ──────────────────────────────────────────────────────────────────
-
   return (
     <View style={styles.screen}>
       <ScrollView
@@ -607,76 +674,128 @@ export default function CommuteScreen() {
       >
         {/* ── Live Map ── */}
         <View style={styles.mapContainer}>
-          <MapView
-            ref={mapRef}
-            provider={PROVIDER_GOOGLE}
+          <Map
             style={styles.map}
-            showsUserLocation
-            showsCompass={false}
-            showsMyLocationButton={false}
+            mapStyle={STYLE_URL}
+            compass={false}
+            logo={false}
+            attribution={true}
           >
-            {/* Route polylines — completed in blue, remaining in line color */}
-            {routePolylines.map((sp, i) => (
-              <Polyline
-                key={`rp-${i}`}
-                coordinates={sp.coords}
-                strokeColor={sp.color}
-                strokeWidth={sp.strokeWidth}
-                lineDashPattern={sp.isDash ? [8, 6] : undefined}
-              />
-            ))}
+            <Camera
+              ref={cameraRef}
+              initialViewState={{
+                center: CALGARY_CENTER,
+                zoom: 13,
+              }}
+            />
 
-            {/* Stop markers from route API coordinates */}
-            {stops.map((stop) => {
-              const coord = stop.coordinate;
-              if (!coord) return null;
-              return (
-                <Marker
-                  key={stop.id}
-                  coordinate={coord}
-                  anchor={{ x: 0.5, y: 0.5 }}
-                  tracksViewChanges={false}
-                >
-                  <View
-                    style={[
-                      styles.mapDot,
-                      stop.status === "departed" && styles.mapDotDone,
-                      stop.status === "current" && styles.mapDotCurrent,
-                      stop.status === "destination" && styles.mapDotDest,
-                    ]}
-                  />
-                </Marker>
-              );
-            })}
+            <UserLocation heading={true} animated={true} />
+
+            <Images
+              images={{
+                tranzitBus: require("@/assets/images/tranzit_busView.png"),
+              }}
+            />
+
+            {/* Completed + remaining route polylines, data-driven color */}
+            <GeoJSONSource id="commute-route-source" data={routePolylinesGeoJSON}>
+              <Layer
+                id="commute-route-line"
+                type="line"
+                paint={{
+                  "line-color": ["get", "color"],
+                  "line-width": 5,
+                }}
+                layout={{
+                  "line-cap": "round",
+                  "line-join": "round",
+                }}
+              />
+            </GeoJSONSource>
 
             {/* All transit stops along the active route's trips */}
-            {routeStops
-              .filter((s) => s.point != null && s.teleride_number != null)
-              .map((s) => (
-                <StopMarker
-                  key={`commute-stop-${s.teleride_number}`}
-                  teleride_number={s.teleride_number!}
-                  stop_name={s.stop_name ?? "Unknown Stop"}
-                  point={s.point!}
-                />
-              ))}
+            <GeoJSONSource id="commute-stops-source" data={routeStopsGeoJSON}>
+              <Layer
+                id="commute-stops-circle"
+                type="circle"
+                minzoom={MIN_MARKER_ZOOM}
+                paint={{
+                  "circle-radius": 4,
+                  "circle-color": theme.colors.primary,
+                  "circle-stroke-color": "white",
+                  "circle-stroke-width": 1.5,
+                  "circle-opacity": 0.8,
+                }}
+              />
+            </GeoJSONSource>
 
-            {/* Live buses currently on the active route */}
-            {routeVehicles
-              .filter(
-                (v) =>
-                  v.latitude != null &&
-                  v.longitude != null &&
-                  v.trip_id != null &&
-                  v.route_id != null,
-              )
-              .map((v) => (
-                <PooledBusMarker
-                  key={`commute-bus-${v.vehicle_id}`}
-                  vehicle={v}
-                />
-              ))}
-          </MapView>
+            {/* Timeline dots (origin, transit boundaries, destination) — colored
+                by status via Mapbox's match expression. No React per-dot cost. */}
+            <GeoJSONSource id="commute-timeline-source" data={timelineStopsGeoJSON}>
+              <Layer
+                id="commute-timeline-circle"
+                type="circle"
+                paint={{
+                  "circle-radius": [
+                    "match",
+                    ["get", "status"],
+                    "current", 9,
+                    6,
+                  ],
+                  "circle-color": [
+                    "match",
+                    ["get", "status"],
+                    "departed", theme.colors.primary,
+                    "current", theme.colors.primary,
+                    "destination", theme.colors.secondary,
+                    "#C1C6D7",
+                  ],
+                  "circle-stroke-color": "white",
+                  "circle-stroke-width": [
+                    "match",
+                    ["get", "status"],
+                    "current", 4,
+                    2,
+                  ],
+                }}
+              />
+            </GeoJSONSource>
+
+            {/* Live buses for the active route(s) */}
+            <GeoJSONSource id="commute-vehicles-source" data={vehiclesGeoJSON}>
+              <Layer
+                id="commute-vehicles-icon"
+                type="symbol"
+                minzoom={MIN_MARKER_ZOOM}
+                layout={{
+                  "icon-image": "tranzitBus",
+                  "icon-size": 0.08,
+                  "icon-rotate": ["get", "bearing"],
+                  "icon-rotation-alignment": "map",
+                  "icon-allow-overlap": true,
+                  "icon-ignore-placement": true,
+                }}
+              />
+              <Layer
+                id="commute-vehicles-label"
+                type="symbol"
+                minzoom={MIN_MARKER_ZOOM}
+                layout={{
+                  "text-field": ["get", "route_id"],
+                  "text-size": 10,
+                  "text-font": ["Noto Sans Regular"],
+                  "text-rotation-alignment": "viewport",
+                  "text-allow-overlap": true,
+                  "text-ignore-placement": true,
+                }}
+                paint={{
+                  "text-color": "white",
+                  "text-halo-color": "rgba(0,0,0,0.45)",
+                  "text-halo-width": 1,
+                }}
+              />
+            </GeoJSONSource>
+          </Map>
 
           <View style={styles.liveBadge}>
             <View style={styles.liveBadgeDot} />
@@ -685,7 +804,6 @@ export default function CommuteScreen() {
         </View>
 
         <View style={styles.content}>
-          {/* ── Journey Card ── */}
           <View style={styles.journeyCard}>
             <View style={styles.journeyCardTop}>
               <View>
@@ -703,7 +821,6 @@ export default function CommuteScreen() {
               </View>
             </View>
 
-            {/* Progress bar */}
             <View style={styles.progressRow}>
               {progressLabels.map((_, i) => (
                 <View
@@ -737,7 +854,6 @@ export default function CommuteScreen() {
             </View>
           </View>
 
-          {/* ── Route Progress ── */}
           <View style={styles.progressCard}>
             <View style={styles.sectionLabelRow}>
               <Ionicons
@@ -758,7 +874,6 @@ export default function CommuteScreen() {
             </View>
           </View>
 
-          {/* ── Boarding Instruction ── */}
           {boardingStep && (
             <View style={styles.boardingCard}>
               <View style={styles.boardingIcon}>
@@ -791,7 +906,6 @@ export default function CommuteScreen() {
             </View>
           )}
 
-          {/* ── Community Check-in ── */}
           <View style={styles.communityCard}>
             <View style={styles.communityHeader}>
               <MaterialCommunityIcons
@@ -873,7 +987,6 @@ export default function CommuteScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* ── Stats Row ── */}
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
               <Ionicons
@@ -901,7 +1014,6 @@ export default function CommuteScreen() {
         </View>
       </ScrollView>
 
-      {/* ── End Journey bar ── */}
       <View style={styles.exitBar}>
         <TouchableOpacity
           style={styles.exitBtn}
@@ -927,7 +1039,6 @@ const styles = StyleSheet.create({
     flexDirection: "column",
   },
 
-  // ── Empty state ──
   emptyScreen: {
     flex: 1,
     justifyContent: "center",
@@ -948,7 +1059,6 @@ const styles = StyleSheet.create({
     lineHeight: 22,
   },
 
-  // ── Map ──
   mapContainer: {
     height: 240,
     backgroundColor: theme.colors.muted,
@@ -985,26 +1095,7 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     letterSpacing: 0.5,
   },
-  mapDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: "#C1C6D7",
-    borderWidth: 2,
-    borderColor: "white",
-  },
-  mapDotDone: { backgroundColor: theme.colors.primary },
-  mapDotCurrent: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: theme.colors.primary,
-    borderWidth: 4,
-    borderColor: "white",
-  },
-  mapDotDest: { backgroundColor: theme.colors.secondary },
 
-  // ── Journey Card ──
   journeyCard: {
     backgroundColor: "#F9F9FE",
     borderRadius: 24,
@@ -1088,7 +1179,6 @@ const styles = StyleSheet.create({
     color: theme.colors.text,
   },
 
-  // ── Route Progress Card ──
   progressCard: {
     backgroundColor: "#F3F3F8",
     borderRadius: 24,
@@ -1185,7 +1275,6 @@ const styles = StyleSheet.create({
     color: theme.colors.primary,
   },
 
-  // ── Boarding Card ──
   boardingCard: {
     backgroundColor: "#0070EB",
     borderRadius: 24,
@@ -1229,7 +1318,6 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 
-  // ── Community Card ──
   communityCard: {
     backgroundColor: "#F3F3F8",
     borderRadius: 24,
@@ -1296,7 +1384,6 @@ const styles = StyleSheet.create({
     color: theme.colors.selected,
   },
 
-  // ── Exit bar ──
   exitBar: {
     backgroundColor: "#F9F9FE",
     paddingHorizontal: theme.spacing.screen,
@@ -1325,7 +1412,6 @@ const styles = StyleSheet.create({
     color: "white",
   },
 
-  // ── Stats ──
   statsRow: { flexDirection: "row", gap: theme.spacing.element },
   statCard: {
     flex: 1,
