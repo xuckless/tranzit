@@ -4,6 +4,7 @@ import type {
   PlacesSearchResponse,
   RouteResponse,
   RouteRequest,
+  AutocompletePrediction,
 } from "../types/places";
 
 // Set EXPO_PUBLIC_USE_LOCAL=true in .env.local to target localhost:3100
@@ -56,5 +57,32 @@ export const TranzitApiService = {
     if (!res.ok) throw new Error(`Route failed: ${res.status}`);
     const data: RouteResponse = await res.json();
     return { routes: data.routes ?? [] };
+  },
+
+  async getAutocompletePredictions(
+    query: string,
+    signal?: AbortSignal,
+  ): Promise<AutocompletePrediction[]> {
+    const res = await fetch(
+      `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(query)}`,
+      { signal },
+    );
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.predictions ?? [];
+  },
+
+  async searchNearby(
+    lat: number,
+    lng: number,
+    signal?: AbortSignal,
+  ): Promise<PlaceResult | null> {
+    const res = await fetch(
+      `${BASE_URL}/searchnearby?lat=${lat}&lng=${lng}`,
+      { signal },
+    );
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`Nearby search failed: ${res.status}`);
+    return res.json() as Promise<PlaceResult>;
   },
 };

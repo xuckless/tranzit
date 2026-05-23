@@ -1,3 +1,14 @@
+// ─── Autocomplete API ─────────────────────────────────────────────────────────
+
+export interface AutocompletePrediction {
+  place_id: string;
+  description: string;
+  structured_formatting: {
+    main_text: string;
+    secondary_text?: string;
+  };
+}
+
 // ─── Unified destination search result ───────────────────────────────────────
 // Normalized shape from both /search (instant) and /autocomplete/json (delayed).
 // location is populated only for /search results; autocomplete results require

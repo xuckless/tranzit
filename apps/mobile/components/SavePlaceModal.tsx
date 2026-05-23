@@ -17,7 +17,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { theme } from "@/styles/theme";
 import { TranzitApiService } from "@/services/TranzitApiService";
-import type { PlaceResult } from "@/types/places";
+import type { AutocompletePrediction } from "@/types/places";
 import {
   getAllCategories,
   insertCategory,
@@ -67,8 +67,10 @@ export function SavePlaceModal({
 
   // ── Search ──
   const [searchQuery, setSearchQuery] = useState("");
-  const [searchResults, setSearchResults] = useState<PlaceResult[]>([]);
+  const [searchResults, setSearchResults] = useState<AutocompletePrediction[]>([]);
   const [isSearching, setIsSearching] = useState(false);
+  const [isResolvingSelection, setIsResolvingSelection] = useState(false);
+  const [selectionError, setSelectionError] = useState<string | null>(null);
   const searchAbort = useRef<AbortController | null>(null);
   const debounceTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -101,6 +103,8 @@ export function SavePlaceModal({
     setChosenPlace(preselectedPlace ?? null);
     setSearchQuery("");
     setSearchResults([]);
+    setIsResolvingSelection(false);
+    setSelectionError(null);
     setLabel("");
     setSelectedCategoryId(null);
     setIsCreatingCategory(false);
@@ -124,12 +128,11 @@ export function SavePlaceModal({
       searchAbort.current = controller;
       setIsSearching(true);
       try {
-        const results = await TranzitApiService.searchPlaces(
+        const predictions = await TranzitApiService.getAutocompletePredictions(
           searchQuery,
-          userLocation,
-          controller.signal
+          controller.signal,
         );
-        setSearchResults(results);
+        setSearchResults(predictions);
       } catch {
         // AbortError is expected on fast typing
       } finally {
@@ -144,17 +147,26 @@ export function SavePlaceModal({
 
   // ─── Handlers ────────────────────────────────────────────────────────────────
 
-  const handleSelectResult = useCallback((result: PlaceResult) => {
-    setChosenPlace({
-      googlePlaceId: result.id,
-      displayName: result.displayName.text,
-      address: result.formattedAddress || result.displayName.text,
-      latitude: result.location.latitude,
-      longitude: result.location.longitude,
-    });
-    setPhase("details");
-    setSearchQuery("");
-    setSearchResults([]);
+  const handleSelectResult = useCallback(async (prediction: AutocompletePrediction) => {
+    setIsResolvingSelection(true);
+    setSelectionError(null);
+    try {
+      const details = await TranzitApiService.getPlaceDetails(prediction.place_id);
+      setChosenPlace({
+        googlePlaceId: details.id,
+        displayName: details.displayName.text,
+        address: details.formattedAddress || details.displayName.text,
+        latitude: details.location.latitude,
+        longitude: details.location.longitude,
+      });
+      setSearchQuery("");
+      setSearchResults([]);
+      setPhase("details");
+    } catch {
+      setSelectionError("Could not load place details. Please try again.");
+    } finally {
+      setIsResolvingSelection(false);
+    }
   }, []);
 
   const handleSelectCategory = useCallback((id: number) => {
@@ -302,40 +314,50 @@ export function SavePlaceModal({
                 </View>
               </View>
 
-              <FlatList
-                data={searchResults}
-                keyExtractor={(r) => r.id}
-                keyboardShouldPersistTaps="handled"
-                style={styles.resultsList}
-                renderItem={({ item }) => (
-                  <TouchableOpacity
-                    style={styles.resultRow}
-                    onPress={() => handleSelectResult(item)}
-                    activeOpacity={0.75}
-                  >
-                    <View style={styles.resultIconBox}>
-                      <Ionicons
-                        name="location-outline"
-                        size={16}
-                        color={theme.colors.primary}
-                      />
-                    </View>
-                    <View style={styles.resultText}>
-                      <Text style={styles.resultName} numberOfLines={1}>
-                        {item.displayName.text}
-                      </Text>
-                      <Text style={styles.resultAddress} numberOfLines={1}>
-                        {item.formattedAddress}
-                      </Text>
-                    </View>
-                  </TouchableOpacity>
-                )}
-                ListEmptyComponent={
-                  searchQuery.length > 0 && !isSearching ? (
-                    <Text style={styles.emptyResults}>No results found.</Text>
-                  ) : null
-                }
-              />
+              {isResolvingSelection ? (
+                <ActivityIndicator
+                  size="small"
+                  color={theme.colors.primary}
+                  style={{ marginTop: 32 }}
+                />
+              ) : (
+                <FlatList
+                  data={searchResults}
+                  keyExtractor={(r) => r.place_id}
+                  keyboardShouldPersistTaps="handled"
+                  style={styles.resultsList}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={styles.resultRow}
+                      onPress={() => handleSelectResult(item)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.resultIconBox}>
+                        <Ionicons
+                          name="location-outline"
+                          size={16}
+                          color={theme.colors.primary}
+                        />
+                      </View>
+                      <View style={styles.resultText}>
+                        <Text style={styles.resultName} numberOfLines={1}>
+                          {item.structured_formatting.main_text}
+                        </Text>
+                        <Text style={styles.resultAddress} numberOfLines={1}>
+                          {item.structured_formatting.secondary_text ?? item.description}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                  ListEmptyComponent={
+                    selectionError ? (
+                      <Text style={styles.emptyResults}>{selectionError}</Text>
+                    ) : searchQuery.length > 0 && !isSearching ? (
+                      <Text style={styles.emptyResults}>No results found.</Text>
+                    ) : null
+                  }
+                />
+              )}
             </>
           )}
 

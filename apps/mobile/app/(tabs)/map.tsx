@@ -23,7 +23,7 @@ import {
 import { SearchSheet } from "@/components/search/SearchSheet";
 import { StopDetailsPanel, parseWKTPoint } from "@/components/stopViews";
 import { BusDetailsPanel } from "@/components/busViews";
-import type { SelectedDestination } from "@/types/places";
+import type { SelectedDestination, PlaceResult } from "@/types/places";
 import type { CalgaryTransitStop } from "@/types/database";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { useVehicles, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
@@ -57,9 +57,6 @@ const MIN_MARKER_ZOOM = 12;
 
 const STYLE_URL = "https://tiles.openfreemap.org/styles/positron";
 
-const TRANZIT_BASE_URL =
-  "https://tranzit-route-service-000000000000.us-central1.run.app";
-
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface Coordinate {
@@ -67,11 +64,10 @@ interface Coordinate {
   longitude: number;
 }
 
-interface PressedPin {
+interface NearbyState {
   coordinate: Coordinate;
-  placeId: string;
-  address: string;
-  isResolving: boolean;
+  places: PlaceResult[];
+  loading: boolean;
 }
 
 // ─── Quick Access icon map ─────────────────────────────────────────────────────
@@ -100,17 +96,18 @@ function quickIcon(categoryName: string) {
   );
 }
 
-const NEARBY_STOPS = [
-  { id: "1", name: "Centre St & 5 Ave N",    route: "CTrain Red",  eta: "2 min",  type: "ctrain" },
-  { id: "2", name: "7 Ave SW Station",       route: "CTrain Blue", eta: "5 min",  type: "ctrain" },
-  { id: "3", name: "4 St SW & 9 Ave SW",     route: "Route 7",     eta: "8 min",  type: "bus" },
-  { id: "4", name: "Macleod Tr & 10 Ave SE", route: "Route 302",   eta: "11 min", type: "bus" },
-];
+// ─── Tile math ─────────────────────────────────────────────────────────────────
+// Converts lat/lng to slippy-map tile indices at a given zoom level.
 
-const STOP_COLOR: Record<string, string> = {
-  ctrain: theme.colors.primary,
-  bus: "#E0A000",
-};
+function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: number } {
+  const x = Math.floor(((lng + 180) / 360) * Math.pow(2, zoom));
+  const latRad = (lat * Math.PI) / 180;
+  const y = Math.floor(
+    ((1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2) *
+      Math.pow(2, zoom),
+  );
+  return { x, y };
+}
 
 // ─── Screen ────────────────────────────────────────────────────────────────────
 
@@ -149,7 +146,7 @@ export default function MapScreen() {
 
   const vehicles = useVehicles();
 
-  const [pressedPin, setPressedPin] = useState<PressedPin | null>(null);
+  const [nearbyState, setNearbyState] = useState<NearbyState | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
 
   // ── Load active transit stops with imminent-arrival filter ───────────────────
@@ -208,6 +205,34 @@ export default function MapScreen() {
   // diffs the source data natively on the C++ side.
   const vehiclesGeoJSON = useMemo(() => vehiclesToGeoJSON(vehicles), [vehicles]);
 
+  // ── Nearby stops (tile-filtered) ─────────────────────────────────────────────
+  // Filters loaded stops to those in the user's z=15 tile + 8 adjacent tiles.
+  // Pure math — no network call.
+  const nearbyTransitStops = useMemo(() => {
+    if (!userLocation) return [];
+    const ZOOM = 15;
+    const { x: ux, y: uy } = latLngToTile(
+      userLocation.latitude,
+      userLocation.longitude,
+      ZOOM,
+    );
+    const tileSet = new Set<string>();
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        tileSet.add(`${ux + dx},${uy + dy}`);
+      }
+    }
+    return transitStops
+      .filter((stop) => {
+        if (!stop.point) return false;
+        const coord = parseWKTPoint(stop.point);
+        if (!coord) return false;
+        const { x, y } = latLngToTile(coord.latitude, coord.longitude, ZOOM);
+        return tileSet.has(`${x},${y}`);
+      })
+      .slice(0, 20);
+  }, [transitStops, userLocation]);
+
   // ── Tap handlers on ShapeSources ─────────────────────────────────────────────
   // Mapbox/MapLibre returns matched features as event.features[]. We pull
   // properties off the first hit and delegate to the existing state setters.
@@ -216,7 +241,7 @@ export default function MapScreen() {
     const feature = event?.nativeEvent?.features?.[0];
     const props = feature?.properties;
     if (!props || props.teleride_number == null) return;
-    setPressedPin(null);
+    setNearbyState(null);
     setPlaceDetails(null);
     setSelectedBus(null);
     setSelectedStop({
@@ -229,7 +254,7 @@ export default function MapScreen() {
     const feature = event?.nativeEvent?.features?.[0];
     const props = feature?.properties;
     if (!props?.vehicle_id || !props?.route_id || !props?.trip_id) return;
-    setPressedPin(null);
+    setNearbyState(null);
     setPlaceDetails(null);
     setSelectedStop(null);
     setSelectedBus({
@@ -287,7 +312,7 @@ export default function MapScreen() {
     async (dest: SelectedDestination) => {
       Keyboard.dismiss();
       setDestination(dest.coordinate);
-      setPressedPin(null);
+      setNearbyState(null);
       pressAbortRef.current?.abort();
 
       flyTo(dest.coordinate, 14, 900);
@@ -314,7 +339,7 @@ export default function MapScreen() {
 
   const handleClear = useCallback(() => {
     setDestination(null);
-    setPressedPin(null);
+    setNearbyState(null);
     setPlaceDetails(null);
     setSelectedStop(null);
     setSelectedBus(null);
@@ -352,9 +377,8 @@ export default function MapScreen() {
     }
   };
 
-  // ── Long-press: coordinate-based POI lookup ──────────────────────────────────
-  // Triggered ONLY by long-press now. Single tap on the basemap dismisses
-  // active cards but does not search (per the conservative tap behavior choice).
+  // ── Long-press: nearby place lookup via /searchnearby ────────────────────────
+  // Triggered ONLY by long-press. Single tap on the basemap dismisses active cards.
   const handleMapPress = useCallback(
     async (coord: Coordinate) => {
       pressAbortRef.current?.abort();
@@ -367,67 +391,36 @@ export default function MapScreen() {
       setSelectedStop(null);
       setSelectedBus(null);
       setDestination(coord);
-      setPressedPin({
-        coordinate: coord,
-        placeId: "",
-        address: `${coord.latitude.toFixed(4)}, ${coord.longitude.toFixed(4)}`,
-        isResolving: true,
-      });
+      setNearbyState({ coordinate: coord, places: [], loading: true });
       snapTo(SNAP_COLLAPSED);
       flyTo(coord, 15, 500);
 
       try {
-        const query = `${coord.latitude.toFixed(5)},${coord.longitude.toFixed(5)}`;
-        const res = await fetch(
-          `${TRANZIT_BASE_URL}/search?q=${encodeURIComponent(query)}&lat=${coord.latitude}&lng=${coord.longitude}`,
-          { signal: controller.signal },
+        const place = await TranzitApiService.searchNearby(
+          coord.latitude,
+          coord.longitude,
+          controller.signal,
         );
-
-        if (res.ok) {
-          const json: {
-            places: Array<{
-              id: string;
-              displayName: { text: string };
-              location: { latitude: number; longitude: number };
-            }>;
-          } = await res.json();
-
-          const place = json.places?.[0];
-          if (place) {
-            setPressedPin(null);
-            setPlaceDetails({
-              place: {
-                id: place.id,
-                displayName: { text: place.displayName.text },
-                formattedAddress: "",
-                location: place.location,
-              },
-              isFetching: true,
-            });
-            try {
-              const full = await TranzitApiService.getPlaceDetails(place.id, controller.signal);
-              if (!controller.signal.aborted) {
-                setPlaceDetails({ place: full, isFetching: false });
-              }
-            } catch (detailsErr: unknown) {
-              if ((detailsErr as Error).name === "AbortError") return;
-              setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
-            }
-            return;
-          }
+        if (!controller.signal.aborted) {
+          setNearbyState({
+            coordinate: coord,
+            places: place ? [place] : [],
+            loading: false,
+          });
         }
       } catch (err: unknown) {
         if ((err as Error).name === "AbortError") return;
+        if (!controller.signal.aborted) {
+          setNearbyState({ coordinate: coord, places: [], loading: false });
+        }
       }
-
-      setPressedPin((prev) => (prev ? { ...prev, isResolving: false } : null));
     },
     [snapTo, flyTo],
   );
 
-  const dismissPressedPin = useCallback(() => {
+  const dismissNearby = useCallback(() => {
     pressAbortRef.current?.abort();
-    setPressedPin(null);
+    setNearbyState(null);
     setDestination(null);
   }, []);
 
@@ -438,16 +431,16 @@ export default function MapScreen() {
   const onMapPress = useCallback(
     (e: any) => {
       if (isSearchActive) return;
-      if (pressedPin || placeDetails || selectedStop || selectedBus) {
+      if (nearbyState || placeDetails || selectedStop || selectedBus) {
         pressAbortRef.current?.abort();
-        setPressedPin(null);
+        setNearbyState(null);
         setPlaceDetails(null);
         setSelectedStop(null);
         setSelectedBus(null);
         setDestination(null);
       }
     },
-    [isSearchActive, pressedPin, placeDetails, selectedStop, selectedBus],
+    [isSearchActive, nearbyState, placeDetails, selectedStop, selectedBus],
   );
 
   const onMapLongPress = useCallback(
@@ -645,54 +638,69 @@ export default function MapScreen() {
           />
         )}
 
-        {pressedPin && !isSearchActive && (
-          <View style={styles.pinCard}>
-            <View style={styles.pinCardLeft}>
-              <View style={styles.pinIconBox}>
-                <Ionicons name="location" size={18} color={theme.colors.primary} />
+        {nearbyState && !isSearchActive && (
+          <View style={styles.nearbyPlacesPanel}>
+            <View style={styles.nearbyPlacesHeader}>
+              <View style={styles.nearbyPlacesTitleRow}>
+                <Ionicons name="location" size={14} color={theme.colors.primary} />
+                <Text style={styles.nearbyPlacesTitle}>Nearby Places</Text>
               </View>
-              <View style={styles.pinTextBlock}>
-                <Text style={styles.pinLabel}>Dropped pin</Text>
-                {pressedPin.isResolving ? (
-                  <View style={styles.pinResolveRow}>
-                    <ActivityIndicator size="small" color={theme.colors.primary} />
-                    <Text style={styles.pinResolving}>Resolving address…</Text>
-                  </View>
-                ) : (
-                  <Text style={styles.pinAddress} numberOfLines={2}>
-                    {pressedPin.address}
-                  </Text>
-                )}
-              </View>
-            </View>
-            <View style={styles.pinActions}>
               <TouchableOpacity
-                style={styles.pinCta}
-                activeOpacity={0.85}
-                disabled={pressedPin.isResolving || !pressedPin.placeId}
-                onPress={() => {
-                  if (!pressedPin.placeId) return;
-                  router.navigate({
-                    pathname: "/(tabs)/routes",
-                    params: {
-                      destinationId: pressedPin.placeId,
-                      destinationLat: String(pressedPin.coordinate.latitude),
-                      destinationLng: String(pressedPin.coordinate.longitude),
-                      destinationName: pressedPin.address,
-                    },
-                  } as never);
-                }}
-              >
-                <Ionicons name="navigate" size={15} color="white" />
-                <Text style={styles.pinCtaText}>Go</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={dismissPressedPin}
+                onPress={dismissNearby}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
                 <Ionicons name="close-circle" size={22} color={theme.colors.text} />
               </TouchableOpacity>
             </View>
+            {nearbyState.loading ? (
+              <ActivityIndicator
+                size="small"
+                color={theme.colors.primary}
+                style={{ marginVertical: 14 }}
+              />
+            ) : nearbyState.places.length === 0 ? (
+              <Text style={styles.nearbyPlacesEmpty}>No places found nearby.</Text>
+            ) : (
+              nearbyState.places.map((place, i) => (
+                <View
+                  key={place.id}
+                  style={[
+                    styles.nearbyPlaceRow,
+                    i === nearbyState.places.length - 1 && { borderBottomWidth: 0 },
+                  ]}
+                >
+                  <View style={styles.nearbyPlaceIconBox}>
+                    <Ionicons name="storefront-outline" size={14} color={theme.colors.primary} />
+                  </View>
+                  <View style={styles.nearbyPlaceInfo}>
+                    <Text style={styles.nearbyPlaceName} numberOfLines={1}>
+                      {place.displayName.text}
+                    </Text>
+                    <Text style={styles.nearbyPlaceAddress} numberOfLines={1}>
+                      {place.formattedAddress}
+                    </Text>
+                  </View>
+                  <TouchableOpacity
+                    style={styles.nearbyPlaceGo}
+                    activeOpacity={0.85}
+                    onPress={() =>
+                      router.navigate({
+                        pathname: "/(tabs)/routes",
+                        params: {
+                          destinationId: place.id,
+                          destinationLat: String(place.location.latitude),
+                          destinationLng: String(place.location.longitude),
+                          destinationName: place.displayName.text,
+                        },
+                      } as never)
+                    }
+                  >
+                    <Ionicons name="navigate" size={13} color="white" />
+                    <Text style={styles.nearbyPlaceGoText}>Go</Text>
+                  </TouchableOpacity>
+                </View>
+              ))
+            )}
           </View>
         )}
 
@@ -844,53 +852,53 @@ export default function MapScreen() {
                 <Ionicons name="radio-button-on" size={14} color={theme.colors.primary} />
                 <Text style={styles.sectionLabel}>Nearby Stops</Text>
               </View>
-              <TouchableOpacity>
-                <Text style={styles.seeAll}>See all</Text>
-              </TouchableOpacity>
             </View>
             <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
-              {NEARBY_STOPS.map((stop, i) => (
-                <TouchableOpacity
-                  key={stop.id}
-                  style={[
-                    styles.stopRow,
-                    i === NEARBY_STOPS.length - 1 && { borderBottomWidth: 0 },
-                  ]}
-                  activeOpacity={0.75}
-                >
-                  <View
-                    style={[
-                      styles.stopIconBox,
-                      { backgroundColor: STOP_COLOR[stop.type] + "15" },
-                    ]}
-                  >
-                    <FontAwesome5
-                      name={stop.type === "bus" ? "bus" : "subway"}
-                      size={13}
-                      color={STOP_COLOR[stop.type]}
-                    />
-                  </View>
-                  <View style={styles.stopInfo}>
-                    <Text style={styles.stopName} numberOfLines={1}>
-                      {stop.name}
-                    </Text>
-                    <Text style={styles.stopRoute}>{stop.route}</Text>
-                  </View>
-                  <View
-                    style={[
-                      styles.etaChip,
-                      { backgroundColor: STOP_COLOR[stop.type] + "15" },
-                    ]}
-                  >
-                    <Text style={[styles.etaText, { color: STOP_COLOR[stop.type] }]}>
-                      {stop.eta}
-                    </Text>
-                  </View>
-                </TouchableOpacity>
-              ))}
+              {nearbyTransitStops.length === 0 ? (
+                <Text style={styles.nearbyStopsEmpty}>No active stops nearby.</Text>
+              ) : (
+                nearbyTransitStops.map((stop, i) => {
+                  const isCTrain = stop.stop_name?.toLowerCase().includes("station") ?? false;
+                  const stopColor = isCTrain ? theme.colors.primary : "#E0A000";
+                  return (
+                    <TouchableOpacity
+                      key={String(stop.teleride_number)}
+                      style={[
+                        styles.stopRow,
+                        i === nearbyTransitStops.length - 1 && { borderBottomWidth: 0 },
+                      ]}
+                      activeOpacity={0.75}
+                      onPress={() => {
+                        if (stop.teleride_number == null) return;
+                        setNearbyState(null);
+                        setPlaceDetails(null);
+                        setSelectedBus(null);
+                        setSelectedStop({
+                          teleride_number: stop.teleride_number,
+                          stop_name: stop.stop_name ?? "Unknown Stop",
+                        });
+                      }}
+                    >
+                      <View style={[styles.stopIconBox, { backgroundColor: stopColor + "15" }]}>
+                        <FontAwesome5
+                          name={isCTrain ? "subway" : "bus"}
+                          size={13}
+                          color={stopColor}
+                        />
+                      </View>
+                      <View style={styles.stopInfo}>
+                        <Text style={styles.stopName} numberOfLines={1}>
+                          {stop.stop_name ?? "Unknown Stop"}
+                        </Text>
+                        <Text style={styles.stopRoute}>Stop #{stop.teleride_number}</Text>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              )}
             </ScrollView>
           </View>
         )}
@@ -1030,10 +1038,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 6,
   },
-  seeAll: {
+  nearbyStopsEmpty: {
     fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.primary,
+    color: theme.colors.text,
+    textAlign: "center",
+    paddingVertical: 12,
   },
   stopRow: {
     flexDirection: "row",
@@ -1061,20 +1070,7 @@ const styles = StyleSheet.create({
     fontWeight: "500",
     color: theme.colors.text,
   },
-  etaChip: {
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    borderRadius: 99,
-  },
-  etaText: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "700",
-  },
-
-  pinCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  nearbyPlacesPanel: {
     marginHorizontal: theme.spacing.screen,
     marginBottom: 12,
     padding: 12,
@@ -1083,60 +1079,70 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.border,
   },
-  pinCardLeft: {
+  nearbyPlacesHeader: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 10,
-    flex: 1,
+    justifyContent: "space-between",
+    marginBottom: 6,
   },
-  pinIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: theme.colors.primary + "15",
-    justifyContent: "center",
+  nearbyPlacesTitleRow: {
+    flexDirection: "row",
     alignItems: "center",
-    flexShrink: 0,
+    gap: 6,
   },
-  pinTextBlock: { flex: 1, gap: 2 },
-  pinLabel: {
+  nearbyPlacesTitle: {
     fontSize: 10,
     fontWeight: "700",
     color: theme.colors.text,
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
-  pinResolveRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  pinResolving: {
+  nearbyPlacesEmpty: {
     fontSize: theme.fontSize.caption,
     color: theme.colors.text,
+    textAlign: "center",
+    paddingVertical: 8,
   },
-  pinAddress: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: "#1A1C1F",
-  },
-  pinActions: {
+  nearbyPlaceRow: {
     flexDirection: "row",
     alignItems: "center",
     gap: 10,
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: theme.colors.border,
+  },
+  nearbyPlaceIconBox: {
+    width: 32,
+    height: 32,
+    borderRadius: 9,
+    backgroundColor: theme.colors.primary + "15",
+    justifyContent: "center",
+    alignItems: "center",
     flexShrink: 0,
   },
-  pinCta: {
+  nearbyPlaceInfo: { flex: 1, gap: 2 },
+  nearbyPlaceName: {
+    fontSize: theme.fontSize.body,
+    fontWeight: "700",
+    color: "#1A1C1F",
+  },
+  nearbyPlaceAddress: {
+    fontSize: theme.fontSize.caption,
+    fontWeight: "500",
+    color: theme.colors.text,
+  },
+  nearbyPlaceGo: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 5,
+    gap: 4,
     backgroundColor: theme.colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 7,
+    borderRadius: 9,
+    flexShrink: 0,
   },
-  pinCtaText: {
-    fontSize: 13,
+  nearbyPlaceGoText: {
+    fontSize: 12,
     fontWeight: "700",
     color: "white",
   },
