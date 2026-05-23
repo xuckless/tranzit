@@ -1,10 +1,4 @@
-import {
-  useState,
-  useEffect,
-  useRef,
-  useCallback,
-  useMemo,
-} from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -401,7 +395,9 @@ export default function CommuteScreen() {
 
     const tripIds = [
       ...new Set(
-        routeVehicles.map((v) => v.trip_id).filter((id): id is string => Boolean(id)),
+        routeVehicles
+          .map((v) => v.trip_id)
+          .filter((id): id is string => Boolean(id)),
       ),
     ];
     if (tripIds.length === 0) return;
@@ -451,7 +447,10 @@ export default function CommuteScreen() {
             },
             geometry: {
               type: "Point" as const,
-              coordinates: [coord.longitude, coord.latitude] as [number, number],
+              coordinates: [coord.longitude, coord.latitude] as [
+                number,
+                number,
+              ],
             },
           };
         })
@@ -572,7 +571,10 @@ export default function CommuteScreen() {
           },
           geometry: {
             type: "Point" as const,
-            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [number, number],
+            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [
+              number,
+              number,
+            ],
           },
         })),
     }),
@@ -698,7 +700,10 @@ export default function CommuteScreen() {
             />
 
             {/* Completed + remaining route polylines, data-driven color */}
-            <GeoJSONSource id="commute-route-source" data={routePolylinesGeoJSON}>
+            <GeoJSONSource
+              id="commute-route-source"
+              data={routePolylinesGeoJSON}
+            >
               <Layer
                 id="commute-route-line"
                 type="line"
@@ -731,7 +736,10 @@ export default function CommuteScreen() {
 
             {/* Timeline dots (origin, transit boundaries, destination) — colored
                 by status via Mapbox's match expression. No React per-dot cost. */}
-            <GeoJSONSource id="commute-timeline-source" data={timelineStopsGeoJSON}>
+            <GeoJSONSource
+              id="commute-timeline-source"
+              data={timelineStopsGeoJSON}
+            >
               <Layer
                 id="commute-timeline-circle"
                 type="circle"
@@ -739,22 +747,27 @@ export default function CommuteScreen() {
                   "circle-radius": [
                     "match",
                     ["get", "status"],
-                    "current", 9,
+                    "current",
+                    9,
                     6,
                   ],
                   "circle-color": [
                     "match",
                     ["get", "status"],
-                    "departed", theme.colors.primary,
-                    "current", theme.colors.primary,
-                    "destination", theme.colors.secondary,
+                    "departed",
+                    theme.colors.primary,
+                    "current",
+                    theme.colors.primary,
+                    "destination",
+                    theme.colors.secondary,
                     "#C1C6D7",
                   ],
                   "circle-stroke-color": "white",
                   "circle-stroke-width": [
                     "match",
                     ["get", "status"],
-                    "current", 4,
+                    "current",
+                    4,
                     2,
                   ],
                 }}
