@@ -37,8 +37,8 @@ function HeaderBar() {
     <View style={[styles.headerContainer, { paddingTop: insets.top + 8 }]}>
       <View style={styles.headerLeft}>
         <TranzitLogoMark size={18} />
-        <Text style={styles.appName}>Tranzit</Text>
       </View>
+      <Text style={styles.appName}>Tranzit</Text>
       <TouchableOpacity
         style={styles.settingsButton}
         onPress={() => navigation.navigate("settings" as never)}
