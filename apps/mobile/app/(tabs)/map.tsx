@@ -46,7 +46,8 @@ import {
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
 const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
-const SNAP_EXPANDED = SCREEN_HEIGHT * 0.62;
+const SNAP_EXPANDED  = SCREEN_HEIGHT * 0.62;
+const SNAP_FULL      = SCREEN_HEIGHT * 0.79;
 
 // Calgary downtown — used as the initial camera anchor before GPS resolves.
 const CALGARY_CENTER: [number, number] = [-114.059263, 51.070664];
@@ -268,7 +269,7 @@ export default function MapScreen() {
   const snapTo = useCallback(
     (target: number) => {
       lastSnap.current = target;
-      setIsExpanded(target === SNAP_EXPANDED);
+      setIsExpanded(target >= SNAP_EXPANDED);
       Animated.spring(sheetAnim, {
         toValue: target,
         useNativeDriver: false,
@@ -286,14 +287,29 @@ export default function MapScreen() {
       onPanResponderMove: (_, g) => {
         const next = Math.max(
           SNAP_COLLAPSED,
-          Math.min(SNAP_EXPANDED, lastSnap.current - g.dy),
+          Math.min(SNAP_FULL, lastSnap.current - g.dy),
         );
         sheetAnim.setValue(next);
       },
       onPanResponderRelease: (_, g) => {
         const projected = lastSnap.current - g.dy;
-        const mid = (SNAP_COLLAPSED + SNAP_EXPANDED) / 2;
-        snapTo(g.vy < -0.4 || projected > mid ? SNAP_EXPANDED : SNAP_COLLAPSED);
+        let target: number;
+        if (g.vy > 0.4) {
+          // fast flick down → next lower snap
+          target = lastSnap.current > SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_COLLAPSED;
+        } else if (g.vy < -0.4) {
+          // fast flick up → next higher snap
+          target = lastSnap.current < SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_FULL;
+        } else {
+          // settle to nearest of the three snap points
+          const dC = Math.abs(projected - SNAP_COLLAPSED);
+          const dE = Math.abs(projected - SNAP_EXPANDED);
+          const dF = Math.abs(projected - SNAP_FULL);
+          if (dC <= dE && dC <= dF) target = SNAP_COLLAPSED;
+          else if (dE <= dF) target = SNAP_EXPANDED;
+          else target = SNAP_FULL;
+        }
+        snapTo(target);
       },
     }),
   ).current;
