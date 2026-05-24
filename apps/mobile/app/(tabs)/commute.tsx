@@ -5,6 +5,7 @@ import {
   StyleSheet,
   ScrollView,
   TouchableOpacity,
+  Animated,
 } from "react-native";
 import {
   Map,
@@ -40,6 +41,7 @@ const MIN_MARKER_ZOOM = 12;
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type CrowdAnswer = "packed" | "clearing" | null;
+type ConnectorType = "solid-gray" | "solid-primary" | "dashed" | "none";
 
 interface CommuteStop {
   id: string;
@@ -167,67 +169,159 @@ function applyStatuses(
 
 // ─── StopItem ─────────────────────────────────────────────────────────────────
 
-function StopItem({ stop }: { stop: CommuteStop }) {
+function StopItem({
+  stop,
+  connectorType,
+}: {
+  stop: CommuteStop;
+  connectorType: ConnectorType;
+}) {
   const isDeparted = stop.status === "departed";
   const isCurrent = stop.status === "current";
   const isDestination = stop.status === "destination";
 
-  const dotBg = isCurrent
-    ? "#F9F9FE"
-    : isDestination
-      ? theme.colors.secondary
-      : isDeparted
-        ? theme.colors.primary
-        : "#C1C6D7";
+  // Pulsing ring animation for the current stop
+  const pulseScale = useRef(new Animated.Value(0.85)).current;
+  const pulseOpacity = useRef(new Animated.Value(0.7)).current;
 
-  const dotBorder = isCurrent ? theme.colors.primary : "#F9F9FE";
+  useEffect(() => {
+    if (!isCurrent) return;
+    const loop = Animated.loop(
+      Animated.parallel([
+        Animated.sequence([
+          Animated.timing(pulseScale, {
+            toValue: 1.6,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseScale, {
+            toValue: 0.85,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ]),
+        Animated.sequence([
+          Animated.timing(pulseOpacity, {
+            toValue: 0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseOpacity, {
+            toValue: 0.7,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+        ]),
+      ]),
+    );
+    loop.start();
+    return () => loop.stop();
+  }, [isCurrent]);
 
   return (
     <View style={styles.stopRow}>
-      <View style={styles.stopDotWrapper}>
-        <View
-          style={[
-            styles.stopDot,
-            { backgroundColor: dotBg, borderColor: dotBorder, borderWidth: 4 },
-            isCurrent && styles.stopDotCurrentRing,
-          ]}
-        >
-          {isDeparted && <Ionicons name="checkmark" size={10} color="white" />}
-          {isDestination && (
-            <Ionicons name="location" size={11} color={theme.colors.selected} />
-          )}
-          {isCurrent && <View style={styles.stopDotCurrentInner} />}
-        </View>
+      {/* ── Timeline column ── */}
+      <View style={styles.stopTimelineCol}>
+        {isCurrent ? (
+          <View style={styles.currentDotContainer}>
+            <Animated.View
+              style={[
+                styles.currentDotRing,
+                {
+                  transform: [{ scale: pulseScale }],
+                  opacity: pulseOpacity,
+                },
+              ]}
+            />
+            <View style={styles.currentDot}>
+              <View style={styles.currentDotCore} />
+            </View>
+          </View>
+        ) : isDeparted ? (
+          <View style={styles.departedDot}>
+            <Ionicons name="checkmark" size={11} color={theme.colors.ink3} />
+          </View>
+        ) : isDestination ? (
+          <View style={styles.destinationDot}>
+            <View style={styles.destinationDotCore} />
+          </View>
+        ) : (
+          <View style={styles.upcomingDot} />
+        )}
+
+        {/* Connector line below dot */}
+        {connectorType !== "none" &&
+          (connectorType === "dashed" ? (
+            <View style={styles.connectorDashed} />
+          ) : (
+            <View
+              style={[
+                styles.connectorSolid,
+                {
+                  backgroundColor:
+                    connectorType === "solid-primary"
+                      ? theme.colors.primary
+                      : "#BBCBB9",
+                },
+              ]}
+            />
+          ))}
       </View>
 
-      {isCurrent ? (
-        <View style={styles.currentStopCard}>
-          <Text style={styles.currentStopName}>{stop.name}</Text>
-          <Text style={styles.currentStopLabel}>
-            {stop.transitName ? `${stop.transitName} · ` : ""}Current Stop
-          </Text>
-        </View>
-      ) : (
-        <View style={styles.stopContent}>
-          <Text
-            style={[styles.stopName, isDeparted && styles.stopNameDeparted]}
-          >
-            {stop.name}
-          </Text>
-          {isDeparted && stop.time && (
-            <Text style={styles.stopMeta}>Departed {stop.time}</Text>
-          )}
-          {stop.status === "upcoming" && stop.time && (
-            <Text style={styles.stopMeta}>{stop.time}</Text>
-          )}
-          {isDestination && stop.time && (
-            <Text style={styles.stopMeta}>Destination · {stop.time}</Text>
-          )}
-          {isDestination && !stop.time && (
-            <Text style={styles.stopMeta}>Destination</Text>
-          )}
-        </View>
-      )}
+      {/* ── Stop content ── */}
+      <View
+        style={[
+          styles.stopContentOuter,
+          isCurrent && styles.stopContentOuterCurrent,
+        ]}
+      >
+        {isCurrent ? (
+          <>
+            <View style={styles.stopRowInner}>
+              <Text style={styles.currentStopName} numberOfLines={1}>
+                {stop.name}
+              </Text>
+              {stop.time && (
+                <Text
+                  style={[styles.stopTimeText, { color: theme.colors.primary }]}
+                >
+                  {stop.time}
+                </Text>
+              )}
+            </View>
+            <View style={styles.currentStopChip}>
+              <Text style={styles.currentStopChipText}>
+                {stop.transitName ? `${stop.transitName} · ` : ""}Current Stop
+              </Text>
+            </View>
+          </>
+        ) : (
+          <>
+            <View style={styles.stopRowInner}>
+              <Text
+                style={[
+                  styles.stopName,
+                  isDeparted && styles.stopNameDeparted,
+                  isDestination && styles.stopNameDestination,
+                ]}
+                numberOfLines={1}
+              >
+                {stop.name}
+              </Text>
+              {stop.time && (
+                <Text
+                  style={[styles.stopTimeText, isDeparted && { opacity: 0.5 }]}
+                >
+                  {stop.time}
+                </Text>
+              )}
+            </View>
+            {isDestination && (
+              <Text style={styles.destinationLabel}>Final Destination</Text>
+            )}
+          </>
+        )}
+      </View>
     </View>
   );
 }
@@ -263,7 +357,7 @@ export default function CommuteScreen() {
 
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
 
-  // ── Load from routeStore on focus ────────────────────────────────────────────
+  // ── Load from routeStore on focus ─────────────────────────────────────────
   useFocusEffect(
     useCallback(() => {
       const storedRoute = routeStore.getSelectedRoute();
@@ -288,7 +382,7 @@ export default function CommuteScreen() {
     setCurrentStopIndex(1);
   }, [route, originInfo?.label, destinationInfo?.label]);
 
-  // ── GPS subscription ──────────────────────────────────────────────────────────
+  // ── GPS subscription ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!route) return;
     let cancelled = false;
@@ -332,7 +426,7 @@ export default function CommuteScreen() {
     };
   }, [route]);
 
-  // ── GPS-based stop advancement ───────────────────────────────────────────────
+  // ── GPS-based stop advancement ────────────────────────────────────────────
   useEffect(() => {
     if (!userLocation || rawStops.length === 0) return;
 
@@ -354,7 +448,7 @@ export default function CommuteScreen() {
     }
   }, [userLocation, rawStops, currentStopIndex]);
 
-  // ── Route IDs extracted from the active route's TRANSIT steps ────────────────
+  // ── Route IDs from active route's TRANSIT steps ───────────────────────────
   const transitRouteIds = useMemo(() => {
     if (!route) return [];
     const ids = (route.legs ?? [])
@@ -369,7 +463,6 @@ export default function CommuteScreen() {
     return [...new Set(ids)];
   }, [route]);
 
-  // ── Filter live vehicles by active route IDs ─────────────────────────────────
   const routeVehicles = useMemo(
     () =>
       transitRouteIds.length === 0
@@ -380,13 +473,12 @@ export default function CommuteScreen() {
     [allVehicles, transitRouteIds],
   );
 
-  // ── Convert filtered vehicles to GeoJSON for the SymbolLayer ─────────────────
   const vehiclesGeoJSON = useMemo(
     () => vehiclesToGeoJSON(routeVehicles),
     [routeVehicles],
   );
 
-  // ── Fetch route stops from cache whenever active vehicles change ──────────────
+  // ── Fetch route stops ─────────────────────────────────────────────────────
   useEffect(() => {
     if (routeVehicles.length === 0) {
       setRouteStops([]);
@@ -431,7 +523,6 @@ export default function CommuteScreen() {
     })();
   }, [routeVehicles]);
 
-  // ── Route stops GeoJSON ───────────────────────────────────────────────────────
   const routeStopsGeoJSON = useMemo(
     () => ({
       type: "FeatureCollection" as const,
@@ -459,7 +550,7 @@ export default function CommuteScreen() {
     [routeStops],
   );
 
-  // ── Fit map to route polyline ─────────────────────────────────────────────────
+  // ── Fit map to route polyline ─────────────────────────────────────────────
   useEffect(() => {
     if (!route?.polyline?.encodedPolyline) return;
     const coords = safeDecodePolyline(route.polyline.encodedPolyline);
@@ -487,7 +578,7 @@ export default function CommuteScreen() {
     [rawStops, currentStopIndex],
   );
 
-  // ── Polyline GeoJSON: completed (blue) + remaining (line color) ──────────────
+  // ── Polyline GeoJSON: completed + remaining ───────────────────────────────
   const routePolylinesGeoJSON = useMemo(() => {
     if (!route?.polyline?.encodedPolyline) {
       return { type: "FeatureCollection" as const, features: [] };
@@ -556,9 +647,6 @@ export default function CommuteScreen() {
     return { type: "FeatureCollection" as const, features };
   }, [route, currentStopIndex, stops]);
 
-  // ── Route stops markers (the timeline dots on the map) ───────────────────────
-  // These are the Google-route-API stops (origin, transit boundaries, destination)
-  // rendered as colored dots reflecting departed/current/destination state.
   const timelineStopsGeoJSON = useMemo(
     () => ({
       type: "FeatureCollection" as const,
@@ -566,21 +654,20 @@ export default function CommuteScreen() {
         .filter((s) => s.coordinate)
         .map((s) => ({
           type: "Feature" as const,
-          properties: {
-            status: s.status,
-          },
+          properties: { status: s.status },
           geometry: {
             type: "Point" as const,
-            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [
-              number,
-              number,
-            ],
+            coordinates: [
+              s.coordinate!.longitude,
+              s.coordinate!.latitude,
+            ] as [number, number],
           },
         })),
     }),
     [stops],
   );
 
+  // ── Derived display values ────────────────────────────────────────────────
   const etaMinutes = useMemo(() => {
     if (!route) return null;
     const secs = parseDurationSecs(route.duration);
@@ -648,13 +735,20 @@ export default function CommuteScreen() {
     boardingStep?.transitDetails?.transitLine?.name ||
     "Transit";
 
-  const trackDoneHeight = Math.max(0, currentStopIndex * 50);
+  // Next/current stop for hero subtitle
+  const heroNextStop = useMemo(
+    () =>
+      stops.find((s) => s.status === "current") ??
+      stops.find((s) => s.status === "upcoming"),
+    [stops],
+  );
 
   const handleExit = useCallback(() => {
     routeStore.clearJourney();
     router.navigate("/(tabs)/routes" as never);
   }, [router]);
 
+  // ── Empty state ───────────────────────────────────────────────────────────
   if (!route) {
     return (
       <View style={styles.emptyScreen}>
@@ -685,21 +779,15 @@ export default function CommuteScreen() {
           >
             <Camera
               ref={cameraRef}
-              initialViewState={{
-                center: CALGARY_CENTER,
-                zoom: 13,
-              }}
+              initialViewState={{ center: CALGARY_CENTER, zoom: 13 }}
             />
-
             <UserLocation heading={true} animated={true} />
-
             <Images
               images={{
                 tranzitBus: require("@/assets/images/tranzit_busView.png"),
               }}
             />
 
-            {/* Completed + remaining route polylines, data-driven color */}
             <GeoJSONSource
               id="commute-route-source"
               data={routePolylinesGeoJSON}
@@ -707,18 +795,11 @@ export default function CommuteScreen() {
               <Layer
                 id="commute-route-line"
                 type="line"
-                paint={{
-                  "line-color": ["get", "color"],
-                  "line-width": 5,
-                }}
-                layout={{
-                  "line-cap": "round",
-                  "line-join": "round",
-                }}
+                paint={{ "line-color": ["get", "color"], "line-width": 5 }}
+                layout={{ "line-cap": "round", "line-join": "round" }}
               />
             </GeoJSONSource>
 
-            {/* All transit stops along the active route's trips */}
             <GeoJSONSource id="commute-stops-source" data={routeStopsGeoJSON}>
               <Layer
                 id="commute-stops-circle"
@@ -734,8 +815,6 @@ export default function CommuteScreen() {
               />
             </GeoJSONSource>
 
-            {/* Timeline dots (origin, transit boundaries, destination) — colored
-                by status via Mapbox's match expression. No React per-dot cost. */}
             <GeoJSONSource
               id="commute-timeline-source"
               data={timelineStopsGeoJSON}
@@ -774,7 +853,6 @@ export default function CommuteScreen() {
               />
             </GeoJSONSource>
 
-            {/* Live buses for the active route(s) */}
             <GeoJSONSource id="commute-vehicles-source" data={vehiclesGeoJSON}>
               <Layer
                 id="commute-vehicles-icon"
@@ -817,15 +895,48 @@ export default function CommuteScreen() {
           </View>
         </View>
 
+        {/* ── Hero Section ── */}
+        <View style={styles.hero}>
+          {boardingStep && (
+            <View style={styles.lineBadge}>
+              <Ionicons
+                name="bus-outline"
+                size={13}
+                color={theme.colors.primaryInk}
+              />
+              <Text style={styles.lineBadgeText}>
+                {boardingStep.transitDetails?.transitLine?.nameShort ||
+                  boardingStep.transitDetails?.transitLine?.name ||
+                  "Transit"}
+                {boardingStep.transitDetails?.headsign
+                  ? ` · ${boardingStep.transitDetails.headsign}`
+                  : ""}
+              </Text>
+            </View>
+          )}
+          <Text style={styles.heroEtaLabel}>Arriving in</Text>
+          <Text style={styles.heroEtaNum}>
+            {etaMinutes ?? "--"}
+            <Text style={styles.heroEtaUnit}> min</Text>
+          </Text>
+          <Text style={styles.heroNextStop}>
+            Next stop:{" "}
+            <Text style={styles.heroNextStopName}>
+              {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
+            </Text>
+          </Text>
+        </View>
+
         <View style={styles.content}>
+          {/* ── Journey summary + progress bar ── */}
           <View style={styles.journeyCard}>
             <View style={styles.journeyCardTop}>
-              <View>
-                <Text style={styles.journeyDestination}>
+              <View style={{ flex: 1, marginRight: 10 }}>
+                <Text style={styles.journeyDestination} numberOfLines={1}>
                   To: {destinationInfo?.label ?? "Destination"}
                 </Text>
                 <Text style={styles.journeyEta}>
-                  Arriving in {etaMinutes ?? "--"} min
+                  Arriving around {arrivalTime ?? "--:--"}
                 </Text>
               </View>
               <View style={styles.arrivalBadge}>
@@ -868,7 +979,8 @@ export default function CommuteScreen() {
             </View>
           </View>
 
-          <View style={styles.progressCard}>
+          {/* ── Route Progress Timeline ── */}
+          <View style={styles.timelineCard}>
             <View style={styles.sectionLabelRow}>
               <Ionicons
                 name="navigate"
@@ -879,15 +991,37 @@ export default function CommuteScreen() {
             </View>
 
             <View style={styles.stopList}>
-              <View style={styles.trackBg} />
-              <View style={[styles.trackDone, { height: trackDoneHeight }]} />
-
-              {stops.map((stop) => (
-                <StopItem key={stop.id} stop={stop} />
-              ))}
+              {stops.map((stop, i) => {
+                const isLast = i === stops.length - 1;
+                let connectorType: ConnectorType = "none";
+                if (!isLast) {
+                  const next = stops[i + 1];
+                  if (
+                    stop.status === "departed" &&
+                    next?.status === "departed"
+                  ) {
+                    connectorType = "solid-gray";
+                  } else if (
+                    stop.status === "departed" &&
+                    next?.status === "current"
+                  ) {
+                    connectorType = "solid-primary";
+                  } else {
+                    connectorType = "dashed";
+                  }
+                }
+                return (
+                  <StopItem
+                    key={stop.id}
+                    stop={stop}
+                    connectorType={connectorType}
+                  />
+                );
+              })}
             </View>
           </View>
 
+          {/* ── Boarding Instruction ── */}
           {boardingStep && (
             <View style={styles.boardingCard}>
               <View style={styles.boardingIcon}>
@@ -920,6 +1054,7 @@ export default function CommuteScreen() {
             </View>
           )}
 
+          {/* ── Community Check-in ── */}
           <View style={styles.communityCard}>
             <View style={styles.communityHeader}>
               <MaterialCommunityIcons
@@ -1001,6 +1136,7 @@ export default function CommuteScreen() {
             </TouchableOpacity>
           </View>
 
+          {/* ── Stats Row ── */}
           <View style={styles.statsRow}>
             <View style={styles.statCard}>
               <Ionicons
@@ -1028,6 +1164,7 @@ export default function CommuteScreen() {
         </View>
       </ScrollView>
 
+      {/* ── End Journey Bar ── */}
       <View style={styles.exitBar}>
         <TouchableOpacity
           style={styles.exitBtn}
@@ -1045,38 +1182,40 @@ export default function CommuteScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F9F9FE" },
+  screen: { flex: 1, backgroundColor: theme.colors.surface },
   container: { flex: 1 },
   content: {
     paddingHorizontal: theme.spacing.screen,
+    paddingTop: theme.spacing.card,
     gap: theme.spacing.card,
     flexDirection: "column",
   },
 
+  // ── Empty state ──────────────────────────────────────────────────────────
   emptyScreen: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     gap: 12,
     paddingHorizontal: 32,
-    backgroundColor: "#F9F9FE",
+    backgroundColor: theme.colors.surface,
   },
   emptyTitle: {
     fontSize: theme.fontSize.title,
     fontWeight: "700",
-    color: "#1A1C1F",
+    color: theme.colors.ink,
   },
   emptySubtitle: {
     fontSize: theme.fontSize.body,
-    color: theme.colors.text,
+    color: theme.colors.ink2,
     textAlign: "center",
     lineHeight: 22,
   },
 
+  // ── Map ──────────────────────────────────────────────────────────────────
   mapContainer: {
     height: 240,
     backgroundColor: theme.colors.muted,
-    marginBottom: theme.spacing.card,
     position: "relative",
   },
   map: { ...StyleSheet.absoluteFillObject },
@@ -1084,7 +1223,7 @@ const styles = StyleSheet.create({
     position: "absolute",
     top: 14,
     right: 14,
-    backgroundColor: "#BA1A1A",
+    backgroundColor: theme.colors.danger,
     borderRadius: 99,
     flexDirection: "row",
     alignItems: "center",
@@ -1097,57 +1236,95 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  liveBadgeDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "white",
+  liveBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "white" },
+  liveBadgeText: { color: "white", fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+
+  // ── Hero ─────────────────────────────────────────────────────────────────
+  hero: {
+    paddingHorizontal: theme.spacing.screen,
+    paddingTop: 22,
+    paddingBottom: 18,
+    backgroundColor: theme.colors.surface,
   },
-  liveBadgeText: {
-    color: "white",
-    fontSize: 12,
+  lineBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    backgroundColor: theme.colors.primaryDim,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 99,
+    alignSelf: "flex-start",
+    marginBottom: 12,
+  },
+  lineBadgeText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: theme.colors.primaryInk,
+    letterSpacing: 0.2,
+  },
+  heroEtaLabel: {
+    fontSize: 16,
+    color: theme.colors.ink2,
+    lineHeight: 22,
+  },
+  heroEtaNum: {
+    fontSize: 52,
+    fontWeight: "800",
+    color: theme.colors.ink,
+    letterSpacing: -1.5,
+    lineHeight: 60,
+    marginBottom: 6,
+  },
+  heroEtaUnit: {
+    fontSize: 28,
+    fontWeight: "600",
+    letterSpacing: -0.5,
+  },
+  heroNextStop: {
+    fontSize: 16,
+    color: theme.colors.ink2,
+    lineHeight: 24,
+  },
+  heroNextStopName: {
     fontWeight: "700",
-    letterSpacing: 0.5,
+    color: theme.colors.ink,
   },
 
+  // ── Journey summary card ─────────────────────────────────────────────────
   journeyCard: {
-    backgroundColor: "#F9F9FE",
-    borderRadius: 24,
-    borderLeftWidth: 6,
+    backgroundColor: theme.colors.card,
+    borderRadius: theme.borderRadius.card,
+    borderLeftWidth: 5,
     borderLeftColor: theme.colors.secondary,
     padding: theme.spacing.card,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 12,
-    elevation: 4,
-    marginTop: 4,
+    ...theme.shadow.card,
   },
   journeyCardTop: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "flex-start",
-    marginBottom: 20,
+    marginBottom: 18,
   },
   journeyDestination: {
-    fontSize: 22,
-    fontWeight: "800",
-    color: "#1A1C1F",
+    fontSize: 17,
+    fontWeight: "700",
+    color: theme.colors.ink,
   },
   journeyEta: {
-    fontSize: theme.fontSize.subtitle,
+    fontSize: theme.fontSize.body,
     fontStyle: "italic",
-    color: theme.colors.text,
-    marginTop: 2,
+    color: theme.colors.ink2,
+    marginTop: 3,
   },
   arrivalBadge: {
-    backgroundColor: "#E8E8ED",
+    backgroundColor: theme.colors.surface2,
     borderRadius: 99,
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
   arrivalBadgeText: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: "700",
     color: theme.colors.primary,
   },
@@ -1160,12 +1337,12 @@ const styles = StyleSheet.create({
   progressSegment: {
     flex: 1,
     height: 10,
-    backgroundColor: "#C1C6D7",
+    backgroundColor: theme.colors.surface2,
     borderRadius: 99,
     position: "relative",
     justifyContent: "center",
   },
-  progressSegmentDone: { backgroundColor: "#0070EB" },
+  progressSegmentDone: { backgroundColor: theme.colors.primary },
   progressThumb: {
     position: "absolute",
     right: -2,
@@ -1182,121 +1359,219 @@ const styles = StyleSheet.create({
     shadowRadius: 2,
     elevation: 3,
   },
-  progressLabels: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
+  progressLabels: { flexDirection: "row", justifyContent: "space-between" },
   progressLabel: {
     flex: 1,
     fontSize: theme.fontSize.caption,
     fontWeight: "600",
-    color: theme.colors.text,
+    color: theme.colors.ink2,
   },
 
-  progressCard: {
-    backgroundColor: "#F3F3F8",
-    borderRadius: 24,
+  // ── Timeline card ────────────────────────────────────────────────────────
+  timelineCard: {
+    backgroundColor: theme.colors.surface2,
+    borderRadius: theme.borderRadius.card,
     borderWidth: 1,
-    borderColor: "#E2E2E7",
+    borderColor: theme.colors.divider,
     padding: theme.spacing.card + 8,
     gap: 20,
   },
-  sectionLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
+  sectionLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
   sectionLabel: {
     fontSize: theme.fontSize.caption,
     fontWeight: "600",
-    color: theme.colors.text,
+    color: theme.colors.ink2,
     letterSpacing: 1.2,
     textTransform: "uppercase",
   },
-  stopList: { position: "relative", gap: 24 },
-  trackBg: {
-    position: "absolute",
-    left: 11,
-    top: 8,
-    width: 4,
-    bottom: 8,
-    backgroundColor: "#C1C6D7",
-    borderRadius: 99,
+  stopList: { gap: 0 },
+
+  // ── Stop row ─────────────────────────────────────────────────────────────
+  stopRow: {
+    flexDirection: "row",
+    gap: 12,
+    minHeight: 72,
   },
-  trackDone: {
-    position: "absolute",
-    left: 11,
-    top: 8,
-    width: 4,
-    backgroundColor: theme.colors.primary,
-    borderRadius: 99,
-  },
-  stopRow: { flexDirection: "row", alignItems: "center", gap: 14 },
-  stopDotWrapper: { width: 26, alignItems: "center" },
-  stopDot: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: "center",
+
+  // ── Timeline column ──────────────────────────────────────────────────────
+  stopTimelineCol: {
+    width: 32,
     alignItems: "center",
+    alignSelf: "stretch",
   },
-  stopDotCurrentRing: {
-    borderColor: theme.colors.primary,
-    borderWidth: 4,
-    backgroundColor: "#F9F9FE",
+
+  // Current dot (pulsing)
+  currentDotContainer: {
+    width: 32,
+    height: 32,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
   },
-  stopDotCurrentInner: {
+  currentDotRing: {
+    position: "absolute",
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: theme.colors.primary,
+  },
+  currentDot: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: theme.colors.primary,
+    borderWidth: 3,
+    borderColor: "white",
+    alignItems: "center",
+    justifyContent: "center",
+    zIndex: 1,
+  },
+  currentDotCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "white",
+  },
+
+  // Departed dot
+  departedDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: theme.colors.surface2,
+    borderWidth: 2,
+    borderColor: "#BBCBB9",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+
+  // Destination dot
+  destinationDot: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: theme.colors.card,
+    borderWidth: 2,
+    borderColor: "#BBCBB9",
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 6,
+  },
+  destinationDotCore: {
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: theme.colors.primary,
+    backgroundColor: "#BBCBB9",
   },
-  stopContent: { flex: 1, gap: 2 },
+
+  // Upcoming dot
+  upcomingDot: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: theme.colors.card,
+    borderWidth: 2,
+    borderColor: "#BBCBB9",
+    marginTop: 10,
+  },
+
+  // Connectors
+  connectorSolid: {
+    flex: 1,
+    width: 2,
+    marginTop: 3,
+    borderRadius: 1,
+  },
+  connectorDashed: {
+    flex: 1,
+    width: 0,
+    borderLeftWidth: 2,
+    borderLeftColor: "#BBCBB9",
+    borderStyle: "dashed",
+    marginTop: 3,
+  },
+
+  // ── Stop content ─────────────────────────────────────────────────────────
+  stopContentOuter: {
+    flex: 1,
+    paddingBottom: 20,
+    paddingTop: 6,
+    gap: 3,
+  },
+  stopContentOuterCurrent: {
+    backgroundColor: theme.colors.primaryDim + "55",
+    borderRadius: 12,
+    borderLeftWidth: 3,
+    borderLeftColor: theme.colors.primary,
+    paddingLeft: 12,
+    paddingRight: 10,
+    paddingTop: 8,
+    paddingBottom: 10,
+    marginBottom: 4,
+  },
+  stopRowInner: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "baseline",
+    gap: 8,
+  },
   stopName: {
-    fontSize: theme.fontSize.subtitle,
-    color: "#1A1C1F",
+    flex: 1,
+    fontSize: 15,
+    color: theme.colors.ink,
     lineHeight: 22,
   },
   stopNameDeparted: {
     textDecorationLine: "line-through",
-    opacity: 0.6,
-    color: theme.colors.text,
+    color: theme.colors.ink3,
   },
-  stopMeta: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-    fontStyle: "italic",
-  },
-  currentStopCard: {
-    flex: 1,
-    backgroundColor: "rgba(0,112,235,0.10)",
-    borderRadius: 16,
-    borderLeftWidth: 4,
-    borderLeftColor: theme.colors.primary,
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    gap: 2,
+  stopNameDestination: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.ink,
   },
   currentStopName: {
-    fontSize: theme.fontSize.subtitle,
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "700",
     color: theme.colors.primary,
     lineHeight: 22,
   },
-  currentStopLabel: {
-    fontSize: theme.fontSize.caption,
+  stopTimeText: {
+    fontSize: 13,
     fontWeight: "600",
-    color: theme.colors.primary,
+    color: theme.colors.ink2,
+  },
+  currentStopChip: {
+    backgroundColor: theme.colors.surface,
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    alignSelf: "flex-start",
+  },
+  currentStopChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: theme.colors.ink2,
+    textTransform: "uppercase",
+    letterSpacing: 0.5,
+  },
+  destinationLabel: {
+    fontSize: 12,
+    color: theme.colors.ink3,
+    fontStyle: "italic",
   },
 
+  // ── Boarding card ────────────────────────────────────────────────────────
   boardingCard: {
-    backgroundColor: "#0070EB",
-    borderRadius: 24,
+    backgroundColor: theme.colors.primary,
+    borderRadius: theme.borderRadius.card,
     padding: theme.spacing.card + 8,
     flexDirection: "row",
     alignItems: "center",
     gap: 16,
-    shadowColor: "#0058BC",
+    shadowColor: theme.colors.primaryInk,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 12,
@@ -1315,53 +1590,43 @@ const styles = StyleSheet.create({
   boardingCategory: {
     fontSize: 11,
     fontWeight: "600",
-    color: "rgba(254,252,255,0.8)",
+    color: "rgba(255,255,255,0.75)",
     letterSpacing: 0.6,
     textTransform: "uppercase",
   },
   boardingTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: "#FEFCFF",
+    color: "white",
     lineHeight: 26,
   },
   boardingTip: {
     fontSize: theme.fontSize.subtitle,
-    color: "rgba(254,252,255,0.9)",
+    color: "rgba(255,255,255,0.85)",
     lineHeight: 22,
     marginTop: 2,
   },
 
+  // ── Community card ───────────────────────────────────────────────────────
   communityCard: {
-    backgroundColor: "#F3F3F8",
-    borderRadius: 24,
+    backgroundColor: theme.colors.surface2,
+    borderRadius: theme.borderRadius.card,
     borderWidth: 2,
-    borderColor: "#C1C6D7",
+    borderColor: theme.colors.divider,
     padding: theme.spacing.card + 8,
     gap: 14,
   },
-  communityHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  communityTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#1A1C1F",
-  },
+  communityHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
+  communityTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.ink },
   communityQuestion: {
     fontSize: theme.fontSize.subtitle,
-    color: theme.colors.text,
+    color: theme.colors.ink2,
     lineHeight: 24,
   },
-  communityOptions: {
-    flexDirection: "row",
-    gap: theme.spacing.element,
-  },
+  communityOptions: { flexDirection: "row", gap: theme.spacing.element },
   communityOption: {
     flex: 1,
-    backgroundColor: "#E2E2E7",
+    backgroundColor: theme.colors.surface,
     borderRadius: 20,
     paddingVertical: 20,
     alignItems: "center",
@@ -1371,12 +1636,12 @@ const styles = StyleSheet.create({
   },
   communityOptionSelected: {
     borderColor: theme.colors.primary,
-    backgroundColor: "rgba(0,88,188,0.08)",
+    backgroundColor: theme.colors.primaryDim,
   },
   communityOptionText: {
     fontSize: theme.fontSize.subtitle,
     fontWeight: "600",
-    color: "#1A1C1F",
+    color: theme.colors.ink,
   },
   thankButton: {
     backgroundColor: theme.colors.secondary,
@@ -1395,16 +1660,34 @@ const styles = StyleSheet.create({
   thankButtonText: {
     fontSize: theme.fontSize.subtitle,
     fontWeight: "700",
-    color: theme.colors.selected,
+    color: theme.colors.accentInk,
   },
 
+  // ── Stats row ────────────────────────────────────────────────────────────
+  statsRow: { flexDirection: "row", gap: theme.spacing.element },
+  statCard: {
+    flex: 1,
+    backgroundColor: theme.colors.surface2,
+    borderRadius: 20,
+    padding: theme.spacing.card,
+    gap: 4,
+  },
+  statLabel: {
+    fontSize: theme.fontSize.caption,
+    fontWeight: "600",
+    color: theme.colors.ink2,
+    marginTop: 6,
+  },
+  statValue: { fontSize: 20, fontWeight: "700", color: theme.colors.ink },
+
+  // ── Exit bar ─────────────────────────────────────────────────────────────
   exitBar: {
-    backgroundColor: "#F9F9FE",
+    backgroundColor: theme.colors.surface,
     paddingHorizontal: theme.spacing.screen,
     paddingTop: 12,
     paddingBottom: 16,
     borderTopWidth: 1,
-    borderTopColor: "#E2E2E7",
+    borderTopColor: theme.colors.divider,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: -2 },
     shadowOpacity: 0.06,
@@ -1412,8 +1695,8 @@ const styles = StyleSheet.create({
     elevation: 8,
   },
   exitBtn: {
-    backgroundColor: "#BA1A1A",
-    borderRadius: 16,
+    backgroundColor: theme.colors.tertiary,
+    borderRadius: theme.borderRadius.button,
     paddingVertical: 16,
     flexDirection: "row",
     justifyContent: "center",
@@ -1425,20 +1708,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "white",
   },
-
-  statsRow: { flexDirection: "row", gap: theme.spacing.element },
-  statCard: {
-    flex: 1,
-    backgroundColor: theme.colors.muted,
-    borderRadius: 20,
-    padding: theme.spacing.card,
-    gap: 4,
-  },
-  statLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-    marginTop: 6,
-  },
-  statValue: { fontSize: 20, fontWeight: "700", color: "#1A1C1F" },
 });
