@@ -16,6 +16,7 @@
 8. [Hooks](#8-hooks)
 9. [Types](#9-types)
 10. [Critical Constraints & Known Gotchas](#10-critical-constraints--known-gotchas)
+11. [Toolchain & Build Setup](#11-toolchain--build-setup)
 
 ---
 
@@ -529,3 +530,61 @@ iOS enforces a 2 KB value size limit per key. Supabase session tokens can approa
 | `EXPO_PUBLIC_MAPTILER_KEY` | `app/(tabs)/map.tsx` | MapTiler API key for the Positron tile style. Without this, `STYLE_URL` is undefined and the map renders blank. |
 
 Never commit `.env.local`. Never expose the Supabase Service Role key in the RN bundle.
+
+---
+
+## 11. Toolchain & Build Setup
+
+### Package manager — bun
+
+The project uses **bun** (not npm or yarn). The lockfile is `bun.lock` (text format).
+
+```bash
+bun install          # install dependencies
+bun run ios          # → expo run:ios  (local Xcode build + install to simulator/device)
+bun run android      # → expo run:android
+bun run start        # → expo start (Metro bundler)
+bunx expo run:ios    # equivalent one-liner without the npm script
+```
+
+Do not commit `package-lock.json` or `yarn.lock`. If either appears after an accidental `npm install`, delete it and re-run `bun install`.
+
+### iOS native builds
+
+**Bundle identifier:** `com.anonymous.tranzit`  
+**Deep-link scheme:** `tranzit`  
+**Display name (CFBundleDisplayName):** `Tranzit`
+
+After any change to `ios/` dependencies (adding a native module, updating Pods):
+
+```bash
+cd ios && pod install && cd ..
+bun run ios
+```
+
+**ccache** is enabled (`apple.ccacheEnabled: true` in `ios/Podfile.properties.json`). Install it once to activate the cache:
+
+```bash
+brew install ccache
+```
+
+Subsequent native recompiles will be significantly faster once the cache is warm.
+
+### Android native builds
+
+**Application ID / namespace:** `com.anonymous.tranzit`  
+**App label:** `Tranzit` (from `android/app/src/main/res/values/strings.xml`)
+
+```bash
+bun run android      # builds and installs debug APK on connected device/emulator
+```
+
+### App identifiers at a glance
+
+| Field | Value |
+|---|---|
+| Expo slug | `tranzit` |
+| iOS bundle ID | `com.anonymous.tranzit` |
+| Android package | `com.anonymous.tranzit` |
+| Deep-link scheme | `tranzit` |
+| Display name | `Tranzit` |

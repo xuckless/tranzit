@@ -24,11 +24,12 @@ import { parseWKTPoint } from "@/components/stopViews";
 import type { CalgaryTransitStop } from "@/types/database";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
+import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
-import { theme } from "@/styles/theme";
+import { theme, PASTELS } from "@/styles/theme";
 import { routeStore } from "@/lib/routeStore";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
@@ -40,8 +41,28 @@ const MIN_MARKER_ZOOM = 12;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type CrowdAnswer = "packed" | "clearing" | null;
 type ConnectorType = "solid-gray" | "solid-primary" | "dashed" | "none";
+
+type PastelKey = keyof typeof PASTELS;
+
+interface ReportType {
+  id: string;
+  label: string;
+  pastel: PastelKey;
+  iconLib: "ionicons" | "fa5" | "fa6" | "mci";
+  icon: string;
+}
+
+const REPORT_TYPES: ReportType[] = [
+  { id: "crowd",  label: "Crowded",      pastel: "sky",      iconLib: "ionicons", icon: "people" },
+  { id: "delay",  label: "Delay",        pastel: "butter",   iconLib: "ionicons", icon: "time" },
+  { id: "safety", label: "Safety",       pastel: "rose",     iconLib: "ionicons", icon: "shield" },
+  { id: "vandal", label: "Vandalism",    pastel: "peach",    iconLib: "fa5",      icon: "spray-can" },
+  { id: "cons",   label: "Construction", pastel: "mint",     iconLib: "mci",      icon: "road-barrier" },
+  { id: "other",  label: "Other",        pastel: "lavender", iconLib: "ionicons", icon: "sparkles" },
+];
+
+const SEVERITY_LABELS = ["A little", "Notable", "Pretty bad", "Critical"];
 
 interface CommuteStop {
   id: string;
@@ -165,6 +186,15 @@ function applyStatuses(
             ? "current"
             : "upcoming",
   }));
+}
+
+// ─── ReportIcon ───────────────────────────────────────────────────────────────
+
+function ReportIcon({ lib, name, size, color }: { lib: "ionicons" | "fa5" | "fa6" | "mci"; name: string; size: number; color: string }) {
+  if (lib === "fa5") return <FontAwesome5 name={name as any} size={size} color={color} />;
+  if (lib === "fa6") return <FontAwesome6 name={name as any} size={size} color={color} />;
+  if (lib === "mci") return <MaterialCommunityIcons name={name as any} size={size} color={color} />;
+  return <Ionicons name={name as any} size={size} color={color} />;
 }
 
 // ─── StopItem ─────────────────────────────────────────────────────────────────
@@ -330,7 +360,9 @@ function StopItem({
 
 export default function CommuteScreen() {
   const router = useRouter();
-  const [crowdAnswer, setCrowdAnswer] = useState<CrowdAnswer>(null);
+  const [reportSelected, setReportSelected] = useState<string | null>(null);
+  const [reportSeverity, setReportSeverity] = useState(1);
+  const [reportSent, setReportSent] = useState(false);
   const cameraRef = useRef<CameraRef>(null);
 
   const [route, setRoute] = useState<Route | null>(null);
@@ -367,7 +399,9 @@ export default function CommuteScreen() {
       setRoute(storedRoute);
       if (storedRoute) {
         setCurrentStopIndex(1);
-        setCrowdAnswer(null);
+        setReportSelected(null);
+        setReportSeverity(1);
+        setReportSent(false);
       }
       if (storedDest) setDestinationInfo(storedDest);
       if (storedOrigin) setOriginInfo(storedOrigin);
@@ -914,11 +948,28 @@ export default function CommuteScreen() {
               </Text>
             </View>
           )}
-          <Text style={styles.heroEtaLabel}>Arriving in</Text>
+
+          {co2Saved != null && (
+            <View style={styles.heroCo2Row}>
+              <MaterialCommunityIcons name="leaf" size={14} color={theme.colors.primaryInk} />
+              <Text style={styles.heroCo2Text}>{co2Saved} kg CO₂ saved</Text>
+            </View>
+          )}
+
+          <View style={styles.heroEtaLabelRow}>
+            <Text style={styles.heroEtaLabel}>Arriving in</Text>
+            <View style={styles.heroSpeedBadge}>
+              <Ionicons name="speedometer-outline" size={15} color={theme.colors.ink3} />
+              <Text style={styles.heroSpeedText}>
+                {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
+              </Text>
+            </View>
+          </View>
           <Text style={styles.heroEtaNum}>
             {etaMinutes ?? "--"}
             <Text style={styles.heroEtaUnit}> min</Text>
           </Text>
+
           <Text style={styles.heroNextStop}>
             Next stop:{" "}
             <Text style={styles.heroNextStopName}>
@@ -1054,7 +1105,7 @@ export default function CommuteScreen() {
             </View>
           )}
 
-          {/* ── Community Check-in ── */}
+          {/* ── Community Reports ── */}
           <View style={styles.communityCard}>
             <View style={styles.communityHeader}>
               <MaterialCommunityIcons
@@ -1062,70 +1113,102 @@ export default function CommuteScreen() {
                 size={22}
                 color={theme.colors.selected}
               />
-              <Text style={styles.communityTitle}>Community Check-in</Text>
-            </View>
-            <Text style={styles.communityQuestion}>
-              Is the{" "}
-              <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>{" "}
-              crowded right now?
-            </Text>
-
-            <View style={styles.communityOptions}>
-              <TouchableOpacity
-                style={[
-                  styles.communityOption,
-                  crowdAnswer === "packed" && styles.communityOptionSelected,
-                ]}
-                onPress={() => setCrowdAnswer("packed")}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="people"
-                  size={24}
-                  color={
-                    crowdAnswer === "packed" ? theme.colors.primary : "#1A1C1F"
-                  }
-                />
-                <Text
-                  style={[
-                    styles.communityOptionText,
-                    crowdAnswer === "packed" && { color: theme.colors.primary },
-                  ]}
-                >
-                  Yes, Packed
-                </Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[
-                  styles.communityOption,
-                  crowdAnswer === "clearing" && styles.communityOptionSelected,
-                ]}
-                onPress={() => setCrowdAnswer("clearing")}
-                activeOpacity={0.8}
-              >
-                <Ionicons
-                  name="happy-outline"
-                  size={24}
-                  color={
-                    crowdAnswer === "clearing"
-                      ? theme.colors.primary
-                      : "#1A1C1F"
-                  }
-                />
-                <Text
-                  style={[
-                    styles.communityOptionText,
-                    crowdAnswer === "clearing" && {
-                      color: theme.colors.primary,
-                    },
-                  ]}
-                >
-                  No, Clearing
-                </Text>
-              </TouchableOpacity>
+              <Text style={styles.communityTitle}>Community Reports</Text>
             </View>
 
+            {reportSent ? (
+              /* Thank-you inline state */
+              <View style={styles.reportThanks}>
+                <View style={styles.reportThanksIcon}>
+                  <Ionicons name="checkmark" size={32} color={theme.colors.primary} />
+                </View>
+                <Text style={styles.reportThanksTitle}>Thanks for the heads up!</Text>
+                <Text style={styles.reportThanksBody}>
+                  We just told{" "}
+                  <Text style={{ fontWeight: "800", color: theme.colors.ink }}>1,240 commuters</Text>
+                  {" "}on this line. You're a real one.
+                </Text>
+                <TouchableOpacity
+                  onPress={() => { setReportSelected(null); setReportSeverity(1); setReportSent(false); }}
+                  activeOpacity={0.8}
+                  style={styles.reportAgainBtn}
+                >
+                  <Text style={styles.reportAgainBtnText}>Report something else</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <>
+                <Text style={styles.communityQuestion}>
+                  What's happening on the{" "}
+                  <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>?
+                </Text>
+
+                {/* 2-column category grid */}
+                <View style={styles.reportGrid}>
+                  {REPORT_TYPES.map((r) => {
+                    const p = PASTELS[r.pastel];
+                    const active = reportSelected === r.id;
+                    return (
+                      <TouchableOpacity
+                        key={r.id}
+                        onPress={() => setReportSelected(r.id)}
+                        activeOpacity={0.85}
+                        style={[styles.reportGridCard, active && styles.reportGridCardActive]}
+                      >
+                        <View style={[styles.reportGridIcon, { backgroundColor: p.bg }]}>
+                          <ReportIcon lib={r.iconLib} name={r.icon} size={20} color={p.ink} />
+                        </View>
+                        <Text style={[styles.reportGridLabel, active && styles.reportGridLabelActive]}>
+                          {r.label}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Severity stepper — appears after category selection */}
+                {reportSelected && (
+                  <View style={styles.severityCard}>
+                    <Text style={styles.severityHeading}>
+                      How {reportSelected === "safety" ? "urgent" : "bad"}?
+                    </Text>
+                    <View style={styles.severityRow}>
+                      {SEVERITY_LABELS.map((label, i) => {
+                        const active = reportSeverity === i + 1;
+                        return (
+                          <TouchableOpacity
+                            key={i}
+                            onPress={() => setReportSeverity(i + 1)}
+                            activeOpacity={0.8}
+                            style={[styles.severityChip, active && styles.severityChipActive]}
+                          >
+                            <Text style={[styles.severityChipText, active && styles.severityChipTextActive]}>
+                              {label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
+                )}
+
+                {/* Send button */}
+                <TouchableOpacity
+                  onPress={() => reportSelected && setReportSent(true)}
+                  activeOpacity={0.85}
+                  style={[styles.reportSendBtn, !reportSelected && styles.reportSendBtnDisabled]}
+                >
+                  <Ionicons name="send" size={18} color="#fff" />
+                  <Text style={styles.reportSendBtnText}>
+                    {reportSelected
+                      ? `Send "${REPORT_TYPES.find((r) => r.id === reportSelected)?.label}" report`
+                      : "Pick what you saw"}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+
+            {/* Thank a Driver — always visible */}
             <TouchableOpacity style={styles.thankButton} activeOpacity={0.85}>
               <FontAwesome5
                 name="thumbs-up"
@@ -1134,32 +1217,6 @@ export default function CommuteScreen() {
               />
               <Text style={styles.thankButtonText}>Thank a Driver</Text>
             </TouchableOpacity>
-          </View>
-
-          {/* ── Stats Row ── */}
-          <View style={styles.statsRow}>
-            <View style={styles.statCard}>
-              <Ionicons
-                name="speedometer-outline"
-                size={18}
-                color={theme.colors.primary}
-              />
-              <Text style={styles.statLabel}>Avg Speed</Text>
-              <Text style={styles.statValue}>
-                {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
-              </Text>
-            </View>
-            <View style={styles.statCard}>
-              <MaterialCommunityIcons
-                name="leaf"
-                size={18}
-                color={theme.colors.tertiary}
-              />
-              <Text style={styles.statLabel}>CO₂ Saved</Text>
-              <Text style={styles.statValue}>
-                {co2Saved != null ? `${co2Saved} kg` : "-- kg"}
-              </Text>
-            </View>
           </View>
         </View>
       </ScrollView>
@@ -1255,7 +1312,7 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 99,
     alignSelf: "flex-start",
-    marginBottom: 12,
+    marginBottom: 10,
   },
   lineBadgeText: {
     fontSize: 13,
@@ -1263,10 +1320,41 @@ const styles = StyleSheet.create({
     color: theme.colors.primaryInk,
     letterSpacing: 0.2,
   },
+  heroCo2Row: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+    backgroundColor: theme.colors.primaryDim,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 99,
+    alignSelf: "flex-start",
+    marginBottom: 8,
+  },
+  heroCo2Text: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: theme.colors.primaryInk,
+  },
+  heroEtaLabelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
   heroEtaLabel: {
     fontSize: 16,
     color: theme.colors.ink2,
     lineHeight: 22,
+  },
+  heroSpeedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 5,
+  },
+  heroSpeedText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: theme.colors.ink2,
   },
   heroEtaNum: {
     fontSize: 52,
@@ -1623,26 +1711,155 @@ const styles = StyleSheet.create({
     color: theme.colors.ink2,
     lineHeight: 24,
   },
-  communityOptions: { flexDirection: "row", gap: theme.spacing.element },
-  communityOption: {
-    flex: 1,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 20,
-    paddingVertical: 20,
-    alignItems: "center",
-    gap: 6,
-    borderWidth: 2,
-    borderColor: "transparent",
+
+  // Report category grid
+  reportGrid: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
   },
-  communityOptionSelected: {
+  reportGridCard: {
+    width: "47.5%",
+    backgroundColor: theme.colors.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.divider,
+    padding: 14,
+    gap: 10,
+  },
+  reportGridCardActive: {
+    borderWidth: 2,
+    borderColor: theme.colors.primary,
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  reportGridIcon: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  reportGridLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: theme.colors.ink,
+  },
+  reportGridLabelActive: {
+    color: theme.colors.primary,
+  },
+
+  // Severity stepper
+  severityCard: {
+    backgroundColor: theme.colors.card,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.divider,
+    padding: 14,
+    gap: 10,
+  },
+  severityHeading: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: theme.colors.ink3,
+    letterSpacing: 1.4,
+    textTransform: "uppercase",
+  },
+  severityRow: { flexDirection: "row", gap: 6 },
+  severityChip: {
+    flex: 1,
+    paddingVertical: 10,
+    borderRadius: 12,
+    borderWidth: 1.5,
+    borderColor: theme.colors.divider,
+    backgroundColor: theme.colors.card,
+    alignItems: "center",
+  },
+  severityChipActive: {
     borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primaryDim,
   },
-  communityOptionText: {
-    fontSize: theme.fontSize.subtitle,
+  severityChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: theme.colors.ink2,
+  },
+  severityChipTextActive: {
+    color: theme.colors.primaryInk,
+  },
+
+  // Send report button
+  reportSendBtn: {
+    backgroundColor: theme.colors.primary,
+    borderRadius: theme.borderRadius.button,
+    height: 50,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 8,
+    shadowColor: theme.colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  reportSendBtnDisabled: { opacity: 0.4, shadowOpacity: 0, elevation: 0 },
+  reportSendBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
+
+  // Inline thank-you
+  reportThanks: {
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 8,
+  },
+  reportThanksIcon: {
+    width: 72,
+    height: 72,
+    borderRadius: 22,
+    backgroundColor: theme.colors.primaryDim,
+    justifyContent: "center",
+    alignItems: "center",
+    marginBottom: 4,
+  },
+  reportThanksTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: theme.colors.ink,
+    letterSpacing: -0.4,
+    textAlign: "center",
+  },
+  reportThanksBody: {
+    fontSize: 14,
+    color: theme.colors.ink2,
+    textAlign: "center",
+    lineHeight: 22,
+  },
+  reportAgainBtn: {
+    height: 44,
+    paddingHorizontal: 20,
+    borderRadius: theme.borderRadius.button,
+    borderWidth: 1.5,
+    borderColor: theme.colors.divider,
+    backgroundColor: theme.colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 4,
+  },
+  reportAgainBtnText: {
+    fontSize: 15,
     fontWeight: "600",
     color: theme.colors.ink,
   },
+
+  // Thank a Driver button
   thankButton: {
     backgroundColor: theme.colors.secondary,
     borderRadius: 99,
@@ -1662,23 +1879,6 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.accentInk,
   },
-
-  // ── Stats row ────────────────────────────────────────────────────────────
-  statsRow: { flexDirection: "row", gap: theme.spacing.element },
-  statCard: {
-    flex: 1,
-    backgroundColor: theme.colors.surface2,
-    borderRadius: 20,
-    padding: theme.spacing.card,
-    gap: 4,
-  },
-  statLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.ink2,
-    marginTop: 6,
-  },
-  statValue: { fontSize: 20, fontWeight: "700", color: theme.colors.ink },
 
   // ── Exit bar ─────────────────────────────────────────────────────────────
   exitBar: {

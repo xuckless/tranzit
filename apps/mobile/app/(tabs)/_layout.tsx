@@ -116,20 +116,7 @@ export default function RootLayout() {
       />
       <Tabs.Screen
         name="report"
-        options={{
-          title: "Report",
-          tabBarIcon: ({ color, focused }) => (
-            <View
-              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
-            >
-              <Ionicons
-                name={focused ? "warning" : "warning-outline"}
-                size={22}
-                color={color}
-              />
-            </View>
-          ),
-        }}
+        options={{ href: null }}
       />
       <Tabs.Screen
         name="commute"
