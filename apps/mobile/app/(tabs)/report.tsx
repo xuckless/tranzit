@@ -57,7 +57,7 @@ const REPORT_TYPES: ReportType[] = [
     label: "Construction",
     pastel: "mint",
     iconLib: "mci",
-    icon: "road-barrier",
+    icon: "traffic-cone",
   },
   {
     id: "other",

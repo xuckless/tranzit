@@ -58,7 +58,7 @@ const REPORT_TYPES: ReportType[] = [
   { id: "delay",  label: "Delay",        pastel: "butter",   iconLib: "ionicons", icon: "time" },
   { id: "safety", label: "Safety",       pastel: "rose",     iconLib: "ionicons", icon: "shield" },
   { id: "vandal", label: "Vandalism",    pastel: "peach",    iconLib: "fa5",      icon: "spray-can" },
-  { id: "cons",   label: "Construction", pastel: "mint",     iconLib: "mci",      icon: "road-barrier" },
+  { id: "cons",   label: "Construction", pastel: "mint",     iconLib: "mci",      icon: "traffic-cone" },
   { id: "other",  label: "Other",        pastel: "lavender", iconLib: "ionicons", icon: "sparkles" },
 ];
 
