@@ -230,13 +230,15 @@ func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
 // ── Route stop SSE ───────────────────────────────────────────────────────────
 
 type routeStop struct {
-	RouteID       string  `json:"route_id"`
-	TripID        string  `json:"trip_id"`
-	StopID        string  `json:"stop_id"`
-	Latitude      float64 `json:"stop_lat"`
-	Longitude     float64 `json:"stop_lng"`
-	ArrivalTime   *int64  `json:"arrival_time"`
-	DepartureTime *int64  `json:"departure_time"`
+	RouteID        string  `json:"route_id"`
+	TripID         string  `json:"trip_id"`
+	StopID         string  `json:"stop_id"`
+	Latitude       float64 `json:"stop_lat"`
+	Longitude      float64 `json:"stop_lng"`
+	ArrivalTime    *int64  `json:"arrival_time"`
+	DepartureTime  *int64  `json:"departure_time"`
+	ArrivalDelay   *int64  `json:"arrival_delay"`
+	DepartureDelay *int64  `json:"departure_delay"`
 }
 
 type routeStopDiff struct {
@@ -295,6 +297,8 @@ func fetchRouteStops(ctx context.Context, tripID string) ([]routeStop, error) {
 			stu.stop_id,
 			stu.arrival_time,
 			stu.departure_time,
+			stu.arrival_delay,
+			stu.departure_delay,
 			cts.point
 		FROM stop_time_updates stu
 		JOIN trip_updates tu ON tu.trip_id = stu.trip_id
@@ -313,7 +317,7 @@ func fetchRouteStops(ctx context.Context, tripID string) ([]routeStop, error) {
 		var s routeStop
 		var pointWKT *string
 		if err := rows.Scan(&s.RouteID, &s.TripID, &s.StopID,
-			&s.ArrivalTime, &s.DepartureTime, &pointWKT); err != nil {
+			&s.ArrivalTime, &s.DepartureTime, &s.ArrivalDelay, &s.DepartureDelay, &pointWKT); err != nil {
 			return nil, err
 		}
 		if pointWKT != nil {
@@ -350,9 +354,11 @@ func computeRouteStopDiff(prev, next []routeStop) routeStopDiff {
 		if !exists {
 			diff.Added = append(diff.Added, s)
 		} else {
-			at := ptrInt64Eq(old.ArrivalTime, s.ArrivalTime)
-			dt := ptrInt64Eq(old.DepartureTime, s.DepartureTime)
-			if !at || !dt {
+			changed := !ptrInt64Eq(old.ArrivalTime, s.ArrivalTime) ||
+				!ptrInt64Eq(old.DepartureTime, s.DepartureTime) ||
+				!ptrInt64Eq(old.ArrivalDelay, s.ArrivalDelay) ||
+				!ptrInt64Eq(old.DepartureDelay, s.DepartureDelay)
+			if changed {
 				diff.Updated = append(diff.Updated, s)
 			}
 		}

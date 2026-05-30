@@ -55,7 +55,7 @@ then streams live predictions for all stops on that trip.
 │ : ping   │ heartbeat comment — no change since last poll                 │
 └──────────┴───────────────────────────────────────────────────────────────┘
 
-Each stop row: { route_id, trip_id, stop_id, stop_lat, stop_lng, arrival_time, departure_time }
+Each stop row: { route_id, trip_id, stop_id, stop_lat, stop_lng, arrival_time, departure_time, arrival_delay, departure_delay }
 
 The trip is locked on connect; polls every 30 s and pushes diffs as arrival/departure
 times change. Returns 400 if params missing, 404 if no matching trip exists.
