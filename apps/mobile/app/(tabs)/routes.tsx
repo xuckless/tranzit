@@ -413,12 +413,20 @@ export default function RouteScreen() {
   );
 
   const dismissSearch = useCallback(() => {
+    Keyboard.dismiss();
     setFocusedField(null);
     originSearch.reset();
     destinationSearch.reset();
-    Keyboard.dismiss();
-    if (!originLabel.trim()) setOriginLabel("Current Location");
-  }, [originSearch, destinationSearch, originLabel]);
+    setOriginLabel("Current Location");
+    setOrigin(gpsLocation ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude } : null);
+    setDestinationLabel("");
+    setDestination(null);
+    setRoutes([]);
+    setSelectedRoute(null);
+    setRouteError(null);
+    routeStore.clear();
+    router.navigate("/(tabs)/map" as never);
+  }, [originSearch, destinationSearch, gpsLocation, router]);
 
   const handleStart = useCallback(() => {
     if (!selectedRoute || !destination || !origin) return;
@@ -607,6 +615,9 @@ export default function RouteScreen() {
                   setDestinationLabel("");
                   setDestination(null);
                   destinationSearch.reset();
+                  setRoutes([]);
+                  setSelectedRoute(null);
+                  setRouteError(null);
                 }}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
               >
@@ -649,15 +660,13 @@ export default function RouteScreen() {
           )}
         </View>
 
-        {focusedField && (
-          <TouchableOpacity
-            style={styles.cancelBtn}
-            onPress={dismissSearch}
-            activeOpacity={0.75}
-          >
-            <Text style={styles.cancelText}>Cancel</Text>
-          </TouchableOpacity>
-        )}
+        <TouchableOpacity
+          style={styles.cancelBtn}
+          onPress={dismissSearch}
+          activeOpacity={0.75}
+        >
+          <Text style={styles.cancelText}>Cancel</Text>
+        </TouchableOpacity>
       </View>
 
       {/* ── Content area ── */}
