@@ -121,18 +121,15 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 
 			for _, stu := range tu.StopTimeUpdate {
 				var arrTime, depTime *int64
-				var arrDelay, depDelay *int32
 				if stu.Arrival != nil {
-					t := stu.Arrival.GetTime()
-					arrTime = &t
-					d := stu.Arrival.GetDelay()
-					arrDelay = &d
+					if t := stu.Arrival.GetTime(); t > 0 {
+						arrTime = &t
+					}
 				}
 				if stu.Departure != nil {
-					t := stu.Departure.GetTime()
-					depTime = &t
-					d := stu.Departure.GetDelay()
-					depDelay = &d
+					if t := stu.Departure.GetTime(); t > 0 {
+						depTime = &t
+					}
 				}
 				rel := enumStr(stopScheduleRel, int(stu.GetScheduleRelationship()), "SCHEDULED")
 				stuBatch.Queue(`
@@ -140,19 +137,22 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
                    (trip_id, stop_sequence, stop_id,
                     arrival_time, departure_time,
                     arrival_delay, departure_delay,
-                    schedule_relationship)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+                    schedule_relationship,
+                    scheduled_arrival_time, scheduled_departure_time)
+                VALUES ($1,$2,$3,$4,$5,0,0,$6,$4,$5)
                 ON CONFLICT (trip_id, stop_sequence) DO UPDATE SET
-                   stop_id               = COALESCE(EXCLUDED.stop_id, stop_time_updates.stop_id),
-                   arrival_time          = COALESCE(EXCLUDED.arrival_time, stop_time_updates.arrival_time),
-                   departure_time        = COALESCE(EXCLUDED.departure_time, stop_time_updates.departure_time),
-                   arrival_delay         = COALESCE(EXCLUDED.arrival_delay, stop_time_updates.arrival_delay),
-                   departure_delay       = COALESCE(EXCLUDED.departure_delay, stop_time_updates.departure_delay),
-                   schedule_relationship = EXCLUDED.schedule_relationship`,
+                   stop_id                  = COALESCE(EXCLUDED.stop_id, stop_time_updates.stop_id),
+                   arrival_time             = COALESCE(EXCLUDED.arrival_time, stop_time_updates.arrival_time),
+                   departure_time           = COALESCE(EXCLUDED.departure_time, stop_time_updates.departure_time),
+                   arrival_delay            = EXCLUDED.arrival_time - stop_time_updates.scheduled_arrival_time,
+                   departure_delay          = EXCLUDED.departure_time - stop_time_updates.scheduled_departure_time,
+                   schedule_relationship    = EXCLUDED.schedule_relationship,
+                   scheduled_arrival_time   = COALESCE(stop_time_updates.scheduled_arrival_time, EXCLUDED.arrival_time),
+                   scheduled_departure_time = COALESCE(stop_time_updates.scheduled_departure_time, EXCLUDED.departure_time)`,
 					tu.Trip.GetTripId(),
 					int(stu.GetStopSequence()),
 					stu.GetStopId(),
-					arrTime, depTime, arrDelay, depDelay, rel,
+					arrTime, depTime, rel,
 				)
 				stuCount++
 			}

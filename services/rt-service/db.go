@@ -108,6 +108,8 @@ departure_time        BIGINT,
 arrival_delay         INTEGER,
 departure_delay       INTEGER,
 schedule_relationship TEXT,
+scheduled_arrival_time   BIGINT,
+scheduled_departure_time BIGINT,
 PRIMARY KEY (trip_id, stop_sequence),
 CONSTRAINT fk_stu_trip_id FOREIGN KEY (trip_id) REFERENCES trip_updates (trip_id) ON DELETE CASCADE
 );
@@ -156,6 +158,7 @@ actual_arrival_time    BIGINT,
 actual_departure_time  BIGINT,
 min_distance_recorded  REAL,
 observed_delay_seconds INTEGER,
+scheduled_arrival_time BIGINT,
 PRIMARY KEY (trip_id, stop_sequence),
 CONSTRAINT fk_tsd_trip_id FOREIGN KEY (trip_id) REFERENCES trip_updates (trip_id) ON DELETE CASCADE
 );
