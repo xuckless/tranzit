@@ -35,6 +35,16 @@ var allowedTables = map[string]struct{}{
 	"stop_analytics":         {},
 }
 
+// realtimeTables are dropped and recreated on every GTFS-RT processor startup;
+// their column lists must not be cached so new columns are always discoverable.
+var realtimeTables = map[string]struct{}{
+	"trip_updates":      {},
+	"stop_time_updates": {},
+	"vehicle_positions": {},
+	"alerts":            {},
+	"trip_stop_delays":  {},
+}
+
 // ── SSE for vehicle_positions ─────────────────────────────────────────────────
 
 type vehicleHub struct {
@@ -217,6 +227,234 @@ func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ── Route stop SSE ───────────────────────────────────────────────────────────
+
+type routeStop struct {
+	RouteID       string  `json:"route_id"`
+	TripID        string  `json:"trip_id"`
+	StopID        string  `json:"stop_id"`
+	Latitude      float64 `json:"stop_lat"`
+	Longitude     float64 `json:"stop_lng"`
+	ArrivalTime   *int64  `json:"arrival_time"`
+	DepartureTime *int64  `json:"departure_time"`
+}
+
+type routeStopDiff struct {
+	TripID  string      `json:"trip_id"`
+	RouteID string      `json:"route_id"`
+	Added   []routeStop `json:"added"`
+	Updated []routeStop `json:"updated"`
+	Removed []string    `json:"removed"`
+}
+
+// parseWKTPoint parses "POINT(longitude latitude)" into lat/lon.
+func parseWKTPoint(wkt string) (lat, lon float64, ok bool) {
+	s := strings.TrimSuffix(strings.TrimPrefix(wkt, "POINT("), ")")
+	parts := strings.Fields(s)
+	if len(parts) != 2 {
+		return
+	}
+	var err1, err2 error
+	lon, err1 = strconv.ParseFloat(parts[0], 64)
+	lat, err2 = strconv.ParseFloat(parts[1], 64)
+	if err1 != nil || err2 != nil {
+		return
+	}
+	return lat, lon, true
+}
+
+// findNearestTrip returns the trip_id for route whose stops are nearest to queryTime.
+func findNearestTrip(ctx context.Context, routeID string, queryTime int64) (string, error) {
+	row := db.QueryRow(ctx, `
+		SELECT tu.trip_id
+		FROM trip_updates tu
+		JOIN (
+			SELECT trip_id, MIN(ABS(arrival_time - $2)) AS min_diff
+			FROM stop_time_updates
+			WHERE arrival_time IS NOT NULL AND arrival_time > 0
+			GROUP BY trip_id
+		) closest ON closest.trip_id = tu.trip_id
+		WHERE tu.route_id = $1
+		ORDER BY closest.min_diff ASC
+		LIMIT 1`,
+		routeID, queryTime,
+	)
+	var tripID string
+	if err := row.Scan(&tripID); err != nil {
+		return "", err
+	}
+	return tripID, nil
+}
+
+// fetchRouteStops returns all stops for tripID joined with static stop coordinates.
+func fetchRouteStops(ctx context.Context, tripID string) ([]routeStop, error) {
+	rows, err := db.Query(ctx, `
+		SELECT
+			tu.route_id,
+			stu.trip_id,
+			stu.stop_id,
+			stu.arrival_time,
+			stu.departure_time,
+			cts.point
+		FROM stop_time_updates stu
+		JOIN trip_updates tu ON tu.trip_id = stu.trip_id
+		LEFT JOIN calgary_transit_stops cts ON cts.teleride_number::text = stu.stop_id
+		WHERE stu.trip_id = $1
+		ORDER BY stu.stop_sequence`,
+		tripID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var stops []routeStop
+	for rows.Next() {
+		var s routeStop
+		var pointWKT *string
+		if err := rows.Scan(&s.RouteID, &s.TripID, &s.StopID,
+			&s.ArrivalTime, &s.DepartureTime, &pointWKT); err != nil {
+			return nil, err
+		}
+		if pointWKT != nil {
+			if lat, lon, ok := parseWKTPoint(*pointWKT); ok {
+				s.Latitude, s.Longitude = lat, lon
+			}
+		}
+		stops = append(stops, s)
+	}
+	return stops, rows.Err()
+}
+
+// computeRouteStopDiff compares two stop slices keyed by stop_id and returns a diff.
+func computeRouteStopDiff(prev, next []routeStop) routeStopDiff {
+	diff := routeStopDiff{
+		Added:   []routeStop{},
+		Updated: []routeStop{},
+		Removed: []string{},
+	}
+	if len(next) == 0 {
+		return diff
+	}
+	diff.TripID = next[0].TripID
+	diff.RouteID = next[0].RouteID
+
+	prevMap := make(map[string]routeStop, len(prev))
+	for _, s := range prev {
+		prevMap[s.StopID] = s
+	}
+	nextMap := make(map[string]struct{}, len(next))
+	for _, s := range next {
+		nextMap[s.StopID] = struct{}{}
+		old, exists := prevMap[s.StopID]
+		if !exists {
+			diff.Added = append(diff.Added, s)
+		} else {
+			at := ptrInt64Eq(old.ArrivalTime, s.ArrivalTime)
+			dt := ptrInt64Eq(old.DepartureTime, s.DepartureTime)
+			if !at || !dt {
+				diff.Updated = append(diff.Updated, s)
+			}
+		}
+	}
+	for _, s := range prev {
+		if _, ok := nextMap[s.StopID]; !ok {
+			diff.Removed = append(diff.Removed, s.StopID)
+		}
+	}
+	return diff
+}
+
+func ptrInt64Eq(a, b *int64) bool {
+	if a == nil && b == nil {
+		return true
+	}
+	if a == nil || b == nil {
+		return false
+	}
+	return *a == *b
+}
+
+func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		jsonError(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	q := r.URL.Query()
+	routeID := q.Get("route_id")
+	timeStr := q.Get("time")
+	if routeID == "" || timeStr == "" {
+		jsonError(w, "route_id and time are required", http.StatusBadRequest)
+		return
+	}
+	queryTime, err := strconv.ParseInt(timeStr, 10, 64)
+	if err != nil {
+		jsonError(w, "time must be a unix timestamp integer", http.StatusBadRequest)
+		return
+	}
+
+	tripID, err := findNearestTrip(r.Context(), routeID, queryTime)
+	if err != nil {
+		jsonError(w, "no active trip found for that route and time", http.StatusNotFound)
+		return
+	}
+
+	stops, err := fetchRouteStops(r.Context(), tripID)
+	if err != nil {
+		log.Printf("fetchRouteStops: %v", err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	if b, err := json.Marshal(map[string]any{
+		"trip_id":  tripID,
+		"route_id": routeID,
+		"count":    len(stops),
+		"data":     stops,
+	}); err == nil {
+		fmt.Fprintf(w, "event: snapshot\ndata: %s\n\n", b)
+		flusher.Flush()
+	}
+
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	prev := stops
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+			next, err := fetchRouteStops(r.Context(), tripID)
+			if err != nil {
+				log.Printf("fetchRouteStops poll: %v", err)
+				fmt.Fprintf(w, ": ping\n\n")
+				flusher.Flush()
+				continue
+			}
+			diff := computeRouteStopDiff(prev, next)
+			if len(diff.Added)+len(diff.Updated)+len(diff.Removed) == 0 {
+				fmt.Fprintf(w, ": ping\n\n")
+			} else {
+				b, _ := json.Marshal(diff)
+				fmt.Fprintf(w, "event: update\ndata: %s\n\n", b)
+			}
+			flusher.Flush()
+			prev = next
+		}
+	}
+}
+
 // ── Query filter helpers ──────────────────────────────────────────────────────
 
 // postgrestOps maps PostgREST operator names to their SQL equivalents.
@@ -321,8 +559,9 @@ func main() {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
-	// Exact match takes precedence over the /api/v1/ prefix match.
+	// Exact matches take precedence over the /api/v1/ prefix catch-all.
 	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
+	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
 	mux.HandleFunc("/api/v1/", withCORS(handleQuery))
 
 	port := os.Getenv("PORT")
@@ -521,10 +760,16 @@ func listTables(w http.ResponseWriter) {
 }
 
 // tableColumns returns the ordered column names for a table, caching the result.
+// Realtime tables (dropped and recreated on every GTFS-RT startup) bypass the
+// cache so newly added columns are always discoverable without a middleware restart.
 func tableColumns(ctx context.Context, table string) ([]string, error) {
-	if v, ok := columnCache.Load(table); ok {
-		return v.([]string), nil
+	_, isRealtime := realtimeTables[table]
+	if !isRealtime {
+		if v, ok := columnCache.Load(table); ok {
+			return v.([]string), nil
+		}
 	}
+
 	rows, err := db.Query(ctx,
 		`SELECT column_name
 		 FROM information_schema.columns
@@ -545,7 +790,9 @@ func tableColumns(ctx context.Context, table string) ([]string, error) {
 		}
 		cols = append(cols, c)
 	}
-	columnCache.Store(table, cols)
+	if !isRealtime {
+		columnCache.Store(table, cols)
+	}
 	return cols, nil
 }
 

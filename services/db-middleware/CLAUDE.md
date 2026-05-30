@@ -1,15 +1,17 @@
 ---
 API
 
-┌────────┬─────────────────┬──────────────────────────────────────────┐
-│ Method │      Path       │               Description                │
-├────────┼─────────────────┼──────────────────────────────────────────┤
-│ GET    │ /health         │ DB ping — returns {"status":"ok"} or 503 │
-├────────┼─────────────────┼──────────────────────────────────────────┤
-│ GET    │ /api/v1/        │ List all queryable tables                │
-├────────┼─────────────────┼──────────────────────────────────────────┤
-│ GET    │ /api/v1/{table} │ Query any whitelisted table              │
-└────────┴─────────────────┴──────────────────────────────────────────┘
+┌────────┬────────────────────────┬──────────────────────────────────────────────────────┐
+│ Method │          Path          │                     Description                      │
+├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
+│ GET    │ /health                │ DB ping — returns {"status":"ok"} or 503             │
+├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
+│ GET    │ /api/v1/               │ List all queryable tables                            │
+├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
+│ GET    │ /api/v1/{table}        │ Query any whitelisted table                          │
+├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
+│ GET    │ /api/v1/stream/route   │ SSE — live stop predictions for a route+time query   │
+└────────┴────────────────────────┴──────────────────────────────────────────────────────┘
 
 Allowed tables: calgary_transit_stops, calgary_transit_routes, calgary_train_stations, trip_updates, stop_time_updates, vehicle_positions, alerts, trip_stop_delays,
 stop_analytics
@@ -37,6 +39,29 @@ GET /api/v1/alerts
 
 Response shape:
 { "table": "vehicle_positions", "count": 50, "limit": 50, "offset": 0, "data": [...] }
+
+SSE — /api/v1/stream/route
+
+Query parameters: route_id (required), time (required, unix epoch integer)
+
+Resolves the trip on route_id whose predicted stop arrival times are nearest to time,
+then streams live predictions for all stops on that trip.
+
+┌──────────┬───────────────────────────────────────────────────────────────┐
+│  Event   │  Payload                                                      │
+├──────────┼───────────────────────────────────────────────────────────────┤
+│ snapshot │ { "trip_id", "route_id", "count", "data": [stop…] }          │
+│ update   │ { "trip_id", "route_id", "added", "updated", "removed" }     │
+│ : ping   │ heartbeat comment — no change since last poll                 │
+└──────────┴───────────────────────────────────────────────────────────────┘
+
+Each stop row: { route_id, trip_id, stop_id, stop_lat, stop_lng, arrival_time, departure_time }
+
+The trip is locked on connect; polls every 30 s and pushes diffs as arrival/departure
+times change. Returns 400 if params missing, 404 if no matching trip exists.
+
+Example:
+GET /api/v1/stream/route?route_id=3&time=1748000000
 
 Security notes
 
