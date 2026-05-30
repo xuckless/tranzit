@@ -1,15 +1,15 @@
 .env
-.dockerignore
+
 *.md
 .claude/
 
 .idea/
 *.exe
 *.test
-go.sum
 
 
-.dockerignore
+
+
 
 hidden.md
 TODO.md
