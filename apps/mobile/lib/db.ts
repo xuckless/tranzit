@@ -181,12 +181,12 @@ export async function setDefaultPlace(
   placeId: string
 ): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
-    await db.runAsync(
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
       "UPDATE category_places SET is_default = 0 WHERE categoryID = ?",
       categoryId
     );
-    await db.runAsync(
+    await txn.runAsync(
       "UPDATE category_places SET is_default = 1 WHERE categoryID = ? AND PlaceID = ?",
       categoryId,
       placeId
@@ -232,14 +232,14 @@ export async function linkPlaceToCategory(
   isDefault: boolean
 ): Promise<void> {
   const db = await getDb();
-  await db.withTransactionAsync(async () => {
+  await db.withExclusiveTransactionAsync(async (txn) => {
     if (isDefault) {
-      await db.runAsync(
+      await txn.runAsync(
         "UPDATE category_places SET is_default = 0 WHERE categoryID = ?",
         categoryId
       );
     }
-    await db.runAsync(
+    await txn.runAsync(
       `INSERT INTO category_places (categoryID, PlaceID, categoryName, label, is_default)
        VALUES (?, ?, ?, ?, ?)
        ON CONFLICT(categoryID, PlaceID) DO UPDATE SET
@@ -290,10 +290,10 @@ export async function getCachedTransitStops(): Promise<CalgaryTransitStop[] | nu
 export async function cacheTransitStops(stops: CalgaryTransitStop[]): Promise<void> {
   const db = await getDb();
   const now = Math.floor(Date.now() / 1000);
-  await db.withTransactionAsync(async () => {
-    await db.runAsync("DELETE FROM transit_stops_cache");
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync("DELETE FROM transit_stops_cache");
     for (const s of stops) {
-      await db.runAsync(
+      await txn.runAsync(
         `INSERT OR REPLACE INTO transit_stops_cache
            (globalid, teleride_number, stop_name, status, point, cached_at)
          VALUES (?, ?, ?, ?, ?, ?)`,
