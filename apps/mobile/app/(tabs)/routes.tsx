@@ -38,9 +38,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
-import { middlewareQuery } from "@/lib/middleware";
 import type { Route, SearchSuggestion } from "@/types/places";
-import type { TripUpdate, StopTimeUpdate } from "@/types/database";
 import HorizontalView from "@/components/horizontalView";
 
 const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
@@ -104,7 +102,6 @@ export default function RouteScreen() {
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("All");
-  const [lineDelays, setLineDelays] = useState<Record<string, number | null>>({});
 
   const originSearch = useDestinationSearch(gpsLocation);
   const destinationSearch = useDestinationSearch(gpsLocation);
@@ -327,79 +324,6 @@ export default function RouteScreen() {
       });
     });
   }, [routes, activeFilter]);
-
-  // ── Per-line delay fetch ──────────────────────────────────────────────────────
-  // For each transit line in the fetched routes, query the middleware for a
-  // representative sample of current trips and compute the average arrival delay.
-  useEffect(() => {
-    if (routes.length === 0) {
-      setLineDelays({});
-      return;
-    }
-
-    const nameShorts = [
-      ...new Set(
-        routes
-          .flatMap((r) => r.legs ?? [])
-          .flatMap((l) => l.steps ?? [])
-          .filter((s) => s.travelMode === "TRANSIT")
-          .map(
-            (s) =>
-              s.transitDetails?.transitLine?.nameShort ??
-              s.transitDetails?.transitLine?.name ??
-              null,
-          )
-          .filter((n): n is string => n !== null),
-      ),
-    ];
-
-    if (nameShorts.length === 0) return;
-
-    let cancelled = false;
-
-    (async () => {
-      const delays: Record<string, number | null> = {};
-
-      await Promise.all(
-        nameShorts.map(async (nameShort) => {
-          try {
-            const tripRows = await middlewareQuery<Pick<TripUpdate, "trip_id">>(
-              "trip_updates",
-              { route_id: `eq.${nameShort}`, limit: 5 },
-            );
-            if (cancelled || tripRows.length === 0) {
-              delays[nameShort] = null;
-              return;
-            }
-
-            const tripIds = tripRows.map((t) => t.trip_id);
-            const stopTimes = await middlewareQuery<
-              Pick<StopTimeUpdate, "arrival_delay">
-            >("stop_time_updates", {
-              trip_id: `in.(${tripIds.join(",")})`,
-              limit: 50,
-            });
-            if (cancelled) return;
-
-            const valid = stopTimes
-              .map((s) => s.arrival_delay)
-              .filter((d): d is number => d !== null);
-
-            delays[nameShort] =
-              valid.length > 0
-                ? Math.round(valid.reduce((a, b) => a + b, 0) / valid.length)
-                : null;
-          } catch {
-            delays[nameShort] = null;
-          }
-        }),
-      );
-
-      if (!cancelled) setLineDelays(delays);
-    })();
-
-    return () => { cancelled = true; };
-  }, [routes]);
 
   // ── Search handlers ───────────────────────────────────────────────────────────
   const handleOriginChange = useCallback(
@@ -868,7 +792,6 @@ export default function RouteScreen() {
                     routes={filteredRoutes}
                     selectedRoute={selectedRoute}
                     onSelectRoute={(r) => setSelectedRoute(r)}
-                    lineDelays={lineDelays}
                   />
                 ) : (
                   <Text style={[styles.emptyText, { marginTop: 16 }]}>

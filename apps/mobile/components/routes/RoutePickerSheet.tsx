@@ -10,6 +10,8 @@ import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import type { Route, RouteStep } from "@/types/places";
 import { theme } from "@/styles/theme";
+import { useRouteLiveStops } from "@/lib/routeSSE";
+import type { RouteSSEStop } from "@/lib/routeSSE";
 
 // ─── Helpers (exported so map.tsx can reuse them) ─────────────────────────────
 
@@ -33,6 +35,22 @@ export function formatDistance(meters: number): string {
   return `${(meters / 1000).toFixed(1)} km`;
 }
 
+function fmtTime(iso: string): string {
+  return new Date(iso).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtDelay(seconds: number): { label: string; color: string } | null {
+  if (Math.abs(seconds) < 60) return { label: "On time", color: "#2E7D32" };
+  const mins = Math.round(seconds / 60);
+  return {
+    label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
+    color: mins > 0 ? "#C62828" : "#1565C0",
+  };
+}
+
 // Collapse consecutive WALK steps into one icon so the chip row stays compact
 function condense(steps: RouteStep[]): RouteStep[] {
   const out: RouteStep[] = [];
@@ -43,23 +61,45 @@ function condense(steps: RouteStep[]): RouteStep[] {
   return out;
 }
 
-function fmtDelay(seconds: number | null): { label: string; color: string } | null {
-  if (seconds === null) return null;
-  if (Math.abs(seconds) < 60) return { label: "On time", color: "#2E7D32" };
-  const mins = Math.round(seconds / 60);
-  return {
-    label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
-    color: mins > 0 ? "#C62828" : "#1565C0",
-  };
-}
+// ─── Transit chip with live SSE delay ────────────────────────────────────────
+// Must be a proper component to call the hook.
 
-function renderTransitChip(step: RouteStep, lineDelays?: Record<string, number | null>) {
+function TransitChipLive({ step }: { step: RouteStep }) {
   const nameShort =
     step.transitDetails?.transitLine?.nameShort ??
     step.transitDetails?.transitLine?.name ??
     "Transit";
   const lineColor = normalizeColor(step.transitDetails?.transitLine?.color);
-  const delay = lineDelays ? fmtDelay(lineDelays[nameShort] ?? null) : null;
+
+  const deptTimeStr = step.transitDetails?.stopDetails?.departureTime;
+  const deptEpoch = deptTimeStr
+    ? Math.floor(new Date(deptTimeStr).getTime() / 1000)
+    : undefined;
+  const deptLat =
+    step.transitDetails?.stopDetails?.departureStop?.location?.latLng?.latitude;
+  const deptLng =
+    step.transitDetails?.stopDetails?.departureStop?.location?.latLng?.longitude;
+
+  const liveStops = useRouteLiveStops(nameShort, deptEpoch);
+
+  let delay: { label: string; color: string } | null = null;
+  if (liveStops.size > 0 && deptLat != null && deptEpoch != null) {
+    let closest: RouteSSEStop | undefined;
+    let minDist = Infinity;
+    for (const s of liveStops.values()) {
+      const d =
+        Math.abs(s.stop_lat - deptLat) +
+        Math.abs(s.stop_lng - (deptLng ?? 0));
+      if (d < minDist) {
+        minDist = d;
+        closest = s;
+      }
+    }
+    if (closest?.departure_time != null) {
+      delay = fmtDelay(closest.departure_time - deptEpoch);
+    }
+  }
+
   return (
     <View
       style={[
@@ -67,11 +107,17 @@ function renderTransitChip(step: RouteStep, lineDelays?: Record<string, number |
         { backgroundColor: lineColor + "20", borderColor: lineColor },
       ]}
     >
-      <Text style={[chipStyles.transitLabel, { color: lineColor }]} numberOfLines={1}>
+      <Text
+        style={[chipStyles.transitLabel, { color: lineColor }]}
+        numberOfLines={1}
+      >
         {nameShort}
       </Text>
       {delay && (
-        <Text style={[chipStyles.chipDelay, { color: delay.color }]} numberOfLines={1}>
+        <Text
+          style={[chipStyles.chipDelay, { color: delay.color }]}
+          numberOfLines={1}
+        >
           {delay.label}
         </Text>
       )}
@@ -81,13 +127,7 @@ function renderTransitChip(step: RouteStep, lineDelays?: Record<string, number |
 
 // ─── Step Chips row ───────────────────────────────────────────────────────────
 
-export function StepChips({
-  steps,
-  lineDelays,
-}: {
-  steps: RouteStep[];
-  lineDelays?: Record<string, number | null>;
-}) {
+export function StepChips({ steps }: { steps: RouteStep[] }) {
   const condensed = condense(steps);
 
   return (
@@ -98,7 +138,9 @@ export function StepChips({
             <View style={chipStyles.walkChip}>
               <FontAwesome5 name="walking" size={10} color="#757575" />
             </View>
-          ) : renderTransitChip(step, lineDelays)}
+          ) : (
+            <TransitChipLive step={step} />
+          )}
 
           {i < condensed.length - 1 && (
             <Ionicons name="chevron-forward" size={10} color="#BDBDBD" />
@@ -149,15 +191,16 @@ function RouteCard({
   index,
   isSelected,
   onSelect,
-  lineDelays,
 }: {
   route: Route;
   index: number;
   isSelected: boolean;
   onSelect: () => void;
-  lineDelays?: Record<string, number | null>;
 }) {
   const allSteps = route.legs.flatMap((l) => l.steps);
+  const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
+  const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
+  const lastArr = transitSteps.at(-1)?.transitDetails?.stopDetails?.arrivalTime;
   const isFastest = index === 0;
 
   return (
@@ -183,7 +226,25 @@ function RouteCard({
         </Text>
       </View>
 
-      <StepChips steps={allSteps} lineDelays={lineDelays} />
+      {(firstDept || lastArr) && (
+        <View style={styles.timeRow}>
+          {firstDept && (
+            <Text style={styles.timeText}>{fmtTime(firstDept)}</Text>
+          )}
+          {firstDept && lastArr && (
+            <Ionicons
+              name="arrow-forward"
+              size={11}
+              color={theme.colors.text}
+            />
+          )}
+          {lastArr && (
+            <Text style={styles.timeText}>{fmtTime(lastArr)}</Text>
+          )}
+        </View>
+      )}
+
+      <StepChips steps={allSteps} />
     </TouchableOpacity>
   );
 }
@@ -194,10 +255,9 @@ interface Props {
   routes: Route[];
   selectedRoute?: Route | null;
   onSelectRoute: (route: Route) => void;
-  lineDelays?: Record<string, number | null>;
 }
 
-export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute, lineDelays }: Props) {
+export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -219,7 +279,6 @@ export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute, lineDel
             index={i}
             isSelected={route === selectedRoute}
             onSelect={() => onSelectRoute(route)}
-            lineDelays={lineDelays}
           />
         ))}
       </ScrollView>
@@ -299,6 +358,17 @@ const styles = StyleSheet.create({
   },
   distance: {
     fontSize: theme.fontSize.body,
+    fontWeight: "600",
+    color: theme.colors.text,
+  },
+  timeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: -4,
+  },
+  timeText: {
+    fontSize: theme.fontSize.caption,
     fontWeight: "600",
     color: theme.colors.text,
   },
