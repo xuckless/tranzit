@@ -22,11 +22,22 @@ function fmtEpoch(epoch: number): string {
   });
 }
 
+function fmtDelay(seconds: number | null): { label: string; color: string } {
+  if (seconds === null || Math.abs(seconds) < 60)
+    return { label: "On Time", color: "#2E7D32" };
+  const mins = Math.round(seconds / 60);
+  return {
+    label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
+    color: mins > 0 ? theme.colors.error : "#1565C0",
+  };
+}
+
 interface TripStop {
   stop_sequence: number;
   stop_id: string;
   stop_name: string;
   arrival_time: number;
+  arrival_delay: number | null;
   passed: boolean;
 }
 
@@ -87,6 +98,7 @@ export function BusDetailsPanel({
           stop_id: s.stop_id ?? "",
           stop_name: nameMap.get(s.stop_id ?? "") ?? `Stop ${s.stop_id}`,
           arrival_time: s.arrival_time ?? 0,
+          arrival_delay: s.arrival_delay ?? null,
           passed: (s.arrival_time ?? 0) < now,
         })),
       );
@@ -127,6 +139,7 @@ export function BusDetailsPanel({
             {tripStops.map((stop) => {
               const telerideNum = parseInt(stop.stop_id, 10);
               const tappable = onStopTap && !isNaN(telerideNum);
+              const delay = fmtDelay(stop.arrival_delay);
               return (
                 <TouchableOpacity
                   key={stop.stop_sequence}
@@ -144,10 +157,14 @@ export function BusDetailsPanel({
                       {fmtEpoch(stop.arrival_time)}
                     </Text>
                   </View>
-                  {stop.passed && (
+                  {stop.passed ? (
                     <View style={s.passedPill}>
                       <Text style={s.passedPillText}>Passed</Text>
                     </View>
+                  ) : (
+                    <Text style={[s.delayLabel, { color: delay.color }]} numberOfLines={1}>
+                      {delay.label}
+                    </Text>
                   )}
                 </TouchableOpacity>
               );
@@ -255,5 +272,11 @@ const s = StyleSheet.create({
     fontSize: 10,
     fontWeight: "600",
     color: theme.colors.text,
+  },
+  delayLabel: {
+    fontSize: 10,
+    fontWeight: "700",
+    flexShrink: 0,
+    textAlign: "right",
   },
 });

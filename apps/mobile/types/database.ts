@@ -45,9 +45,11 @@ export interface StopTimeUpdate {
   trip_id: string; // PK (composite)
   stop_sequence: number; // PK (composite) — sequence within the trip
   stop_id: string | null; // maps to calgary_transit_stops.teleride_number
-  arrival_time: number | null; // unix epoch
-  departure_time: number | null; // unix epoch
-  arrival_delay: number | null;
+  arrival_time: number | null; // unix epoch — current predicted arrival
+  departure_time: number | null; // unix epoch — current predicted departure
+  scheduled_arrival_time: number | null; // unix epoch — frozen on first insert; ≤0 treated as NULL
+  scheduled_departure_time: number | null; // unix epoch — frozen on first insert; ≤0 treated as NULL
+  arrival_delay: number | null; // seconds; positive = late, negative = early
   departure_delay: number | null;
   schedule_relationship: string | null;
 }

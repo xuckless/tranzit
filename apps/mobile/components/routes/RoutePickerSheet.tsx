@@ -43,9 +43,51 @@ function condense(steps: RouteStep[]): RouteStep[] {
   return out;
 }
 
+function fmtDelay(seconds: number | null): { label: string; color: string } | null {
+  if (seconds === null) return null;
+  if (Math.abs(seconds) < 60) return { label: "On time", color: "#2E7D32" };
+  const mins = Math.round(seconds / 60);
+  return {
+    label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
+    color: mins > 0 ? "#C62828" : "#1565C0",
+  };
+}
+
+function renderTransitChip(step: RouteStep, lineDelays?: Record<string, number | null>) {
+  const nameShort =
+    step.transitDetails?.transitLine?.nameShort ??
+    step.transitDetails?.transitLine?.name ??
+    "Transit";
+  const lineColor = normalizeColor(step.transitDetails?.transitLine?.color);
+  const delay = lineDelays ? fmtDelay(lineDelays[nameShort] ?? null) : null;
+  return (
+    <View
+      style={[
+        chipStyles.transitChip,
+        { backgroundColor: lineColor + "20", borderColor: lineColor },
+      ]}
+    >
+      <Text style={[chipStyles.transitLabel, { color: lineColor }]} numberOfLines={1}>
+        {nameShort}
+      </Text>
+      {delay && (
+        <Text style={[chipStyles.chipDelay, { color: delay.color }]} numberOfLines={1}>
+          {delay.label}
+        </Text>
+      )}
+    </View>
+  );
+}
+
 // ─── Step Chips row ───────────────────────────────────────────────────────────
 
-export function StepChips({ steps }: { steps: RouteStep[] }) {
+export function StepChips({
+  steps,
+  lineDelays,
+}: {
+  steps: RouteStep[];
+  lineDelays?: Record<string, number | null>;
+}) {
   const condensed = condense(steps);
 
   return (
@@ -56,37 +98,7 @@ export function StepChips({ steps }: { steps: RouteStep[] }) {
             <View style={chipStyles.walkChip}>
               <FontAwesome5 name="walking" size={10} color="#757575" />
             </View>
-          ) : (
-            <View
-              style={[
-                chipStyles.transitChip,
-                {
-                  backgroundColor:
-                    normalizeColor(step.transitDetails?.transitLine?.color) +
-                    "20",
-                  borderColor: normalizeColor(
-                    step.transitDetails?.transitLine?.color,
-                  ),
-                },
-              ]}
-            >
-              <Text
-                style={[
-                  chipStyles.transitLabel,
-                  {
-                    color: normalizeColor(
-                      step.transitDetails?.transitLine?.color,
-                    ),
-                  },
-                ]}
-                numberOfLines={1}
-              >
-                {step.transitDetails?.transitLine?.nameShort ??
-                  step.transitDetails?.transitLine?.name ??
-                  "Transit"}
-              </Text>
-            </View>
-          )}
+          ) : renderTransitChip(step, lineDelays)}
 
           {i < condensed.length - 1 && (
             <Ionicons name="chevron-forward" size={10} color="#BDBDBD" />
@@ -117,10 +129,16 @@ const chipStyles = StyleSheet.create({
     paddingVertical: 3,
     borderRadius: 6,
     borderWidth: 1.5,
+    alignItems: "center",
   },
   transitLabel: {
     fontSize: 11,
     fontWeight: "700",
+  },
+  chipDelay: {
+    fontSize: 9,
+    fontWeight: "700",
+    marginTop: 1,
   },
 });
 
@@ -131,11 +149,13 @@ function RouteCard({
   index,
   isSelected,
   onSelect,
+  lineDelays,
 }: {
   route: Route;
   index: number;
   isSelected: boolean;
   onSelect: () => void;
+  lineDelays?: Record<string, number | null>;
 }) {
   const allSteps = route.legs.flatMap((l) => l.steps);
   const isFastest = index === 0;
@@ -163,7 +183,7 @@ function RouteCard({
         </Text>
       </View>
 
-      <StepChips steps={allSteps} />
+      <StepChips steps={allSteps} lineDelays={lineDelays} />
     </TouchableOpacity>
   );
 }
@@ -174,9 +194,10 @@ interface Props {
   routes: Route[];
   selectedRoute?: Route | null;
   onSelectRoute: (route: Route) => void;
+  lineDelays?: Record<string, number | null>;
 }
 
-export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
+export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute, lineDelays }: Props) {
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -198,6 +219,7 @@ export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props
             index={i}
             isSelected={route === selectedRoute}
             onSelect={() => onSelectRoute(route)}
+            lineDelays={lineDelays}
           />
         ))}
       </ScrollView>
