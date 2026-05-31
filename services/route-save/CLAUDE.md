@@ -454,6 +454,8 @@ RT enrichment is what makes the static Google directions responsive — it is th
 | `LOCATION_UPDATE_INTERVAL_S` | 5 | Client GPS cadence |
 | `RT_UPDATE_INTERVAL_S` | 30 | GTFS-RT refresh |
 | `TICK_INTERVAL_S` | 1 | Server evaluation tick |
+| `CLIENT_PUSH_INTERVAL_S` | 2 | Downstream STATE push cadence (on-change, throttled; as-built) |
+| `LOCATION_STALE_AFTER_S` | 15 | `3×LOCATION_UPDATE_INTERVAL_S`; older fix counts as "no fix" (as-built) |
 | `MISSED_EVAL_THRESHOLD_S` | 1 | TimeRemaining at which MISSED arms |
 | `MISSED_RADIUS_M` | 50 | Beyond this at trigger → MISSED |
 | `BOARDING_RADIUS_M` | 20 | Within this at trigger → ACTIVE (widened from 5m for GPS accuracy; tune in testing) |
@@ -561,6 +563,11 @@ goroutine. Verified with `go test -race`.
   `GET /api/v1/stop_time_updates?trip_id=` every 30s** for the trips we resolved.
   Same data, deterministic mapping. Behind the `rtfeed.Source` interface, so a true
   SSE impl can replace it later.
+- **Direction-aware trip resolution.** A route runs both directions under one
+  `route_id`, so matching only the entry stop + time can select a wrong-direction
+  trip (symptom: `LoadLegStops` errors with "entry seq N is after exit seq M").
+  `ResolveTrip` therefore requires a candidate to serve **both** entry and exit
+  with `entry_seq < exit_seq`; only the correct-direction run qualifies.
 - **§5.4 classification resolved.** Only the **boarding stop of each bus leg is
   FETCHED**; every other loaded stop (ride-through + exit/handoff) is **TRANSFER**
   (exempt from MISSED while ON_BUS). This matches §3's definition of FETCHED and
@@ -569,12 +576,35 @@ goroutine. Verified with `go test -race`.
   reroute is exercised live.
 - **Leg = a run of Google `steps` by `travelMode`**, not Google's `legs` (Google
   returns one `legs[0]` interleaving WALK/TRANSIT steps).
+- **MAX BRT route_id aliasing.** Google labels Calgary's MAX lines by letter code
+  in `transitLine.nameShort` (`MG`, `MO`, `MY`, `MT`, `MP`), but the GTFS-RT feed
+  (`trip_updates.route_id`) uses numeric ids. `directions.canonicalRouteID` maps
+  `MG→301, MO→303, MY→304, MT→306, MP→307` at parse time so resolution and the
+  STATE export use the accurate number; other routes pass through unchanged.
+  Extend `maxLineAliases` in `internal/directions/parse.go` as more MAX lines
+  surface (Google sometimes already returns the numeric id, e.g. `302`).
 - **Stop names come from GTFS** (covers intermediate stops the STATE export needs),
   not Google (which only names entry/exit).
 - **Reroute Case 1 (on-bus) re-arm** (`REROUTE_REARM_RADIUS_M`) is **not yet
   wired**; the realistic v1 path is Case 2 (off-bus, reroute from user location),
   which is implemented and tested. Case 1 branch exists but is rarely reached given
   the transfer-while-riding exemption.
+- **GPS-gated evaluation (as-built, P0).** The MISSED/boarding call is made only
+  from a **fresh** fix: `UserLocation.RecvAt` is server-stamped and a fix older than
+  `LOCATION_STALE_AFTER_S` (or never set) holds the active stop `EXPECTED` instead of
+  auto-resolving — a zero `user_distance_m` no longer reads as "boarded". `OnTick`
+  recomputes the active stop's distance from the latest fresh fix every tick (not just
+  on the 5s LOCATION frame), so the reroute decision and origin track the rider's live
+  position. The `MISSED …` decision and the reroute origin are logged to `docker logs`.
+- **Downstream STATE push is throttled (as-built, P0).** The 1s tick drives the
+  machine but no longer pushes inline; a `CLIENT_PUSH_INTERVAL_S` (2s) ticker flushes a
+  single coalesced, version-bumped STATE only when state changed. `REROUTE`/`NOTIFY`
+  and the first attach STATE still go out immediately. Every STATE carries a fresh
+  `time_remaining_s` for **all** stops (`StateMessage(ts, now)`), so the client counts
+  down without a per-second frame.
+- **Graceful shutdown (as-built, P0).** `main.go` runs an `http.Server` and traps
+  SIGINT/SIGTERM via `signal.NotifyContext` → `Manager.CloseAll()` (closes every
+  session) → `Shutdown(ctx)`.
 - **`RESUME` is acknowledged but deferred** (§16.1): the server just re-sends the
   current `STATE`; no snapshot reconciliation yet.
 - **`TripState` is in-memory only** — no Postgres/snapshots yet (§12).
@@ -586,6 +616,7 @@ goroutine. Verified with `go test -race`.
 | `PORT` | `:8090` | Route Save listen address (bare port is `:`-prefixed) |
 | `MIDDLEWARE_URL` | `https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app` | tranzit-db-middleware (RT + GTFS data) — live Cloud Run; override for local |
 | `ROUTE_SERVICE_URL` | `https://tranzit-route-service-qsv32inqpq-uc.a.run.app` | tranzit-route-service (`/route` directions) — live Cloud Run; override for local |
+| `LOG_STATE` | `1` (on) | Tabular STATE logging to stdout (`docker logs`); set `0` to silence |
 | `SUPABASE_DIRECT_CONNECTION_STRING` | — | reserved for persistence (§12), unused today |
 
 Siblings: **tranzit-db-middleware** `:8080` (SSE + generic table queries, no auth),

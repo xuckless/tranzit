@@ -21,7 +21,10 @@ func TestStateMessage_FullExport(t *testing.T) {
 		},
 	}
 
-	msg := StateMessage(ts)
+	// now is 240s before the stop's ETA, so time_remaining_s must export 240
+	// regardless of the (stale) TimeRemainingS on the record.
+	const now = 1730000000 - 240
+	msg := StateMessage(ts, now)
 	if msg.Type != TypeState || msg.SessionID != "sess-1" || msg.Version != 7 {
 		t.Fatalf("envelope = %+v", msg)
 	}
@@ -37,5 +40,18 @@ func TestStateMessage_FullExport(t *testing.T) {
 	}
 	if s.ETA != 1730000000 || s.StopName != "7 Ave & 2 St SW" {
 		t.Errorf("stop fields = %+v", s)
+	}
+	if s.TimeRemainingS != 240 {
+		t.Errorf("time_remaining_s = %d, want 240 (eta − now)", s.TimeRemainingS)
+	}
+}
+
+func TestStateMessage_NoETAStaysZero(t *testing.T) {
+	ts := &trip.TripState{
+		Stops: []trip.StopRecord{{StopID: "1", BusArrivalTime: 0}},
+	}
+	msg := StateMessage(ts, 1730000000)
+	if msg.Stops[0].TimeRemainingS != 0 || msg.Stops[0].ETA != 0 {
+		t.Errorf("no-ETA stop = %+v, want zero t-rem and eta", msg.Stops[0])
 	}
 }

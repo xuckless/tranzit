@@ -5,8 +5,13 @@
 package main
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
+	"os/signal"
+	"syscall"
+	"time"
 
 	"github.com/joho/godotenv"
 
@@ -32,10 +37,29 @@ func main() {
 	})
 
 	srv := api.NewServer(mgr, data)
+	httpSrv := &http.Server{Addr: endpoints.ServerAddr, Handler: srv.Handler()}
 
-	log.Printf("route-save listening on %s (middleware=%s route-service=%s)",
-		endpoints.ServerAddr, endpoints.MiddlewareURL, endpoints.RouteServiceURL)
-	if err := http.ListenAndServe(endpoints.ServerAddr, srv.Handler()); err != nil {
-		log.Fatal(err)
+	// Trap SIGINT/SIGTERM so we can close every live session and drain the HTTP
+	// server cleanly instead of dropping connections on exit.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
+
+	go func() {
+		log.Printf("route-save listening on %s (middleware=%s route-service=%s)",
+			endpoints.ServerAddr, endpoints.MiddlewareURL, endpoints.RouteServiceURL)
+		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	<-ctx.Done()
+	log.Printf("route-save: shutdown signal received; closing %d session(s)", mgr.Count())
+	mgr.CloseAll()
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := httpSrv.Shutdown(shutdownCtx); err != nil {
+		log.Printf("route-save: graceful shutdown error: %v", err)
 	}
+	log.Print("route-save: stopped")
 }

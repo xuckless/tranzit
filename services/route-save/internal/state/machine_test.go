@@ -3,6 +3,7 @@ package state
 import (
 	"testing"
 
+	"github.com/tranzit-route-save/internal/config"
 	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/trip"
 )
@@ -41,6 +42,14 @@ func (r *recorder) hooks() Hooks {
 	}
 }
 
+// setFix feeds the machine a fresh, valid user fix at (lat, lng), stamped with
+// the machine's current clock. The boarding stop sits at (51.045, -114.07); a
+// latitude offset of 0.001° is ~111m, so callers place the rider in a distance
+// band by choosing the offset (≈0.0009°/100m).
+func setFix(m *Machine, lat, lng float64) {
+	m.OnLocationUpdate(trip.UserLocation{Loc: geo.LatLng{Lat: lat, Lng: lng}})
+}
+
 func TestDelayedBus_NoFalseMissed(t *testing.T) {
 	ts := makeTrip(1000)
 	ts.Stops[0].UserDistanceM = 100 // far from boarding stop
@@ -70,10 +79,10 @@ func TestDelayedBus_NoFalseMissed(t *testing.T) {
 
 func TestArmed_MissedBeyondRadius(t *testing.T) {
 	ts := makeTrip(1000)
-	ts.Stops[0].UserDistanceM = 100
 	clk := &FakeClock{T: 1000} // armed: time_remaining = 0
 	var rec recorder
 	m := New(ts, clk, rec.hooks())
+	setFix(m, 51.046, -114.07) // ~111m from boarding stop -> beyond missed radius
 
 	m.OnTick()
 	if got := ts.Stops[0].Status; got != trip.StatusMissed {
@@ -89,10 +98,10 @@ func TestArmed_MissedBeyondRadius(t *testing.T) {
 
 func TestArmed_UnsureBand(t *testing.T) {
 	ts := makeTrip(1000)
-	ts.Stops[0].UserDistanceM = 35 // between boarding (20) and missed (50)
 	clk := &FakeClock{T: 1000}
 	var rec recorder
 	m := New(ts, clk, rec.hooks())
+	setFix(m, 51.0453, -114.07) // ~33m: between boarding (20) and missed (50)
 
 	m.OnTick()
 	if got := ts.Stops[0].Status; got != trip.StatusUnsure {
@@ -109,9 +118,9 @@ func TestArmed_UnsureBand(t *testing.T) {
 
 func TestArmed_BoardingAdvances(t *testing.T) {
 	ts := makeTrip(1000)
-	ts.Stops[0].UserDistanceM = 10 // within boarding radius
 	clk := &FakeClock{T: 1000}
 	m := New(ts, clk, Hooks{})
+	setFix(m, 51.04505, -114.07) // ~6m: within boarding radius
 
 	m.OnTick()
 	if got := ts.Stops[0].Status; got != trip.StatusActive {
@@ -158,7 +167,7 @@ func TestHappyPath_RunToCompletion(t *testing.T) {
 	m := New(ts, clk, Hooks{})
 
 	// Board.
-	ts.Stops[0].UserDistanceM = 5
+	setFix(m, 51.04505, -114.07) // ~6m: within boarding radius
 	m.OnTick()
 	// Ride through mid and exit (TRANSFER, on bus) -> advance each tick.
 	m.OnTick() // mid
@@ -175,6 +184,47 @@ func TestHappyPath_RunToCompletion(t *testing.T) {
 		if s.Status != trip.StatusCompleted {
 			t.Errorf("stop %d status = %s, want COMPLETED at end", i, s.Status)
 		}
+	}
+}
+
+func TestArmed_NoFix_HoldsExpected(t *testing.T) {
+	ts := makeTrip(1000)
+	clk := &FakeClock{T: 1000} // armed
+	var rec recorder
+	m := New(ts, clk, rec.hooks())
+
+	// No LOCATION ever arrived: distance defaults to 0, which must NOT read as
+	// "boarded". The stop holds EXPECTED until a fresh fix arrives.
+	m.OnTick()
+
+	if got := ts.Stops[0].Status; got != trip.StatusExpected {
+		t.Fatalf("status = %s, want EXPECTED with no fix", got)
+	}
+	if ts.CurrentStopIndex != 0 {
+		t.Errorf("index = %d, want 0 (no auto-board without a fix)", ts.CurrentStopIndex)
+	}
+	if len(rec.missed)+len(rec.unsure) != 0 {
+		t.Errorf("hooks fired without a fix: missed=%v unsure=%v", rec.missed, rec.unsure)
+	}
+}
+
+func TestArmed_StaleFix_HoldsExpected(t *testing.T) {
+	ts := makeTrip(1000)
+	clk := &FakeClock{T: 1000}
+	var rec recorder
+	m := New(ts, clk, rec.hooks())
+	setFix(m, 51.046, -114.07) // ~111m, would be MISSED if fresh
+
+	// Let the fix age past the staleness window; the bus arrives (armed) but the
+	// only fix is stale, so we hold EXPECTED rather than declaring MISSED.
+	clk.Advance(config.LocationStaleAfterS + 5)
+	m.OnTick()
+
+	if got := ts.Stops[0].Status; got != trip.StatusExpected {
+		t.Fatalf("status = %s, want EXPECTED with a stale fix", got)
+	}
+	if len(rec.missed) != 0 {
+		t.Errorf("stale fix produced MISSED: %v", rec.missed)
 	}
 }
 

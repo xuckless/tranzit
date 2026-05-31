@@ -1,0 +1,17 @@
+# VCS & local
+.git
+.gitignore
+.env
+
+# Docs & planning (not needed in the image)
+docs
+*.md
+TODO.md
+
+# Test fixtures (build doesn't need them)
+testdata
+
+# Editor/OS cruft
+.idea
+.vscode
+.DS_Store

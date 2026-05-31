@@ -43,9 +43,40 @@ func (m *Middleware) Fetch(ctx context.Context, tripIDs []string) ([]Arrival, er
 	return out, nil
 }
 
+// pageSize is the middleware's hard cap on rows per generic table query.
+const pageSize = 100
+
 func (m *Middleware) fetchTrip(ctx context.Context, tripID string) ([]Arrival, error) {
-	u := fmt.Sprintf("%s/api/v1/stop_time_updates?%s", m.BaseURL,
-		url.Values{"trip_id": {tripID}}.Encode())
+	var arrivals []Arrival
+	for offset := 0; ; offset += pageSize {
+		rows, err := m.queryPage(ctx, tripID, offset)
+		if err != nil {
+			return nil, err
+		}
+		for _, r := range rows {
+			at := asInt64(r["arrival_time"])
+			if at == 0 {
+				continue // no usable prediction for this stop yet
+			}
+			arrivals = append(arrivals, Arrival{
+				TripID:           tripID,
+				StopID:           asString(r["stop_id"]),
+				PredictedArrival: at,
+			})
+		}
+		if len(rows) < pageSize {
+			return arrivals, nil
+		}
+	}
+}
+
+func (m *Middleware) queryPage(ctx context.Context, tripID string, offset int) ([]map[string]any, error) {
+	q := url.Values{
+		"trip_id": {tripID},
+		"limit":   {strconv.Itoa(pageSize)},
+		"offset":  {strconv.Itoa(offset)},
+	}
+	u := fmt.Sprintf("%s/api/v1/stop_time_updates?%s", m.BaseURL, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return nil, err
@@ -62,20 +93,7 @@ func (m *Middleware) fetchTrip(ctx context.Context, tripID string) ([]Arrival, e
 	if err := json.NewDecoder(resp.Body).Decode(&qr); err != nil {
 		return nil, fmt.Errorf("rtfeed: decode: %w", err)
 	}
-
-	arrivals := make([]Arrival, 0, len(qr.Data))
-	for _, r := range qr.Data {
-		at := asInt64(r["arrival_time"])
-		if at == 0 {
-			continue // no usable prediction for this stop yet
-		}
-		arrivals = append(arrivals, Arrival{
-			TripID:           tripID,
-			StopID:           asString(r["stop_id"]),
-			PredictedArrival: at,
-		})
-	}
-	return arrivals, nil
+	return qr.Data, nil
 }
 
 func asString(v any) string {

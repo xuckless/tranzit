@@ -117,7 +117,7 @@ func busLeg(step googleStep) (ParsedLeg, error) {
 	}
 	return ParsedLeg{
 		Mode:    ModeBus,
-		RouteID: td.TransitLine.NameShort,
+		RouteID: canonicalRouteID(td.TransitLine.NameShort),
 		Entry: &StopEndpoint{
 			Name:      td.StopDetails.DepartureStop.Name,
 			Loc:       toLatLng(td.StopDetails.DepartureStop.Location.LatLng),
@@ -133,6 +133,28 @@ func busLeg(step googleStep) (ParsedLeg, error) {
 
 func toLatLng(l googleLatLng) geo.LatLng {
 	return geo.LatLng{Lat: l.Latitude, Lng: l.Longitude}
+}
+
+// maxLineAliases maps Google's MAX BRT letter codes (transitLine.nameShort) to
+// the numeric route_id the GTFS-RT feed uses. Google labels Calgary's MAX lines
+// "MG", "MO", … whereas trip_updates.route_id (and therefore our trip
+// resolution and the STATE export) uses 301, 303, … Extend this as more MAX
+// lines surface.
+var maxLineAliases = map[string]string{
+	"MG": "301",
+	"MO": "303",
+	"MY": "304",
+	"MT": "306",
+	"MP": "307",
+}
+
+// canonicalRouteID converts a Google nameShort to the route_id our data uses,
+// translating known MAX BRT aliases and passing everything else through.
+func canonicalRouteID(nameShort string) string {
+	if id, ok := maxLineAliases[strings.ToUpper(strings.TrimSpace(nameShort))]; ok {
+		return id
+	}
+	return nameShort
 }
 
 // parseDurationS turns Google's "1264s" into 1264. Unparseable values yield 0,

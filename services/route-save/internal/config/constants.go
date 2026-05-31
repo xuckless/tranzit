@@ -12,6 +12,15 @@ const (
 	RTUpdateIntervalS = 30
 	// TickIntervalS is the server evaluation tick (seconds).
 	TickIntervalS = 1
+	// ClientPushIntervalS is the downstream STATE push cadence (seconds). The
+	// evaluation tick stays at TickIntervalS; STATE is coalesced and flushed to
+	// the client at most once per this interval (§13, on-change throttled).
+	ClientPushIntervalS = 2
+	// LocationStaleAfterS bounds how old a client fix may be (measured against
+	// the server clock, not the client TS) before it counts as "no fix". At or
+	// beyond this age the MISSED check holds EXPECTED rather than resolving from
+	// a stale distance (3×LocationUpdateIntervalS).
+	LocationStaleAfterS = 3 * LocationUpdateIntervalS
 
 	// MissedEvalThresholdS is the TimeRemaining (seconds) at which the MISSED
 	// check arms. Above this the active stop stays EXPECTED regardless of

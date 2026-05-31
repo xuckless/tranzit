@@ -70,3 +70,18 @@ func (m *Manager) Count() int {
 	defer m.mu.RUnlock()
 	return len(m.byID)
 }
+
+// CloseAll tears down every live session, used on graceful shutdown. It snapshots
+// the registry under the lock first so each Close (which calls remove and takes
+// the lock) does not deadlock. Close is idempotent (sync.Once).
+func (m *Manager) CloseAll() {
+	m.mu.RLock()
+	sessions := make([]*Session, 0, len(m.byID))
+	for _, s := range m.byID {
+		sessions = append(sessions, s)
+	}
+	m.mu.RUnlock()
+	for _, s := range sessions {
+		s.Close()
+	}
+}

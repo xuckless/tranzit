@@ -53,13 +53,29 @@ func (m *Machine) OnRTUpdate(arrivals []Arrival) {
 }
 
 // OnLocationUpdate stores the latest client fix and refreshes the active stop's
-// distance (§7.1).
+// distance (§7.1). RecvAt is stamped from the server clock so staleness is judged
+// independently of client clock drift (§6.2).
 func (m *Machine) OnLocationUpdate(loc trip.UserLocation) {
 	loc.Valid = true
+	loc.RecvAt = m.clock.Now()
 	m.ts.UserLocation = loc
 	if active := m.ts.ActiveStop(); active != nil {
 		active.UserDistanceM = geo.HaversineM(loc.Loc, active.Loc())
 	}
+}
+
+// freshUserFix returns the latest fix and true only when it exists and is no
+// older than config.LocationStaleAfterS (server clock). The MISSED/boarding call
+// is made only from a fresh fix; otherwise the stop is held EXPECTED.
+func (m *Machine) freshUserFix() (geo.LatLng, bool) {
+	loc := m.ts.UserLocation
+	if !loc.Valid {
+		return geo.LatLng{}, false
+	}
+	if m.clock.Now()-loc.RecvAt > config.LocationStaleAfterS {
+		return geo.LatLng{}, false
+	}
+	return loc.Loc, true
 }
 
 // OnTick recomputes the active stop's TimeRemaining and evaluates it. It returns
@@ -79,6 +95,12 @@ func (m *Machine) OnTick() bool {
 	beforeStatus := m.statuses()
 
 	active.TimeRemainingS = int(active.BusArrivalTime - m.clock.Now())
+	// Recompute the active stop's distance from the latest fresh fix every tick,
+	// not just on the 5s LOCATION frame. Otherwise a freshly-advanced stop keeps
+	// its zero-value distance (reads as "on the stop") until the next frame.
+	if loc, ok := m.freshUserFix(); ok {
+		active.UserDistanceM = geo.HaversineM(loc, active.Loc())
+	}
 	m.evaluate(m.ts.CurrentStopIndex)
 
 	return beforeIdx != m.ts.CurrentStopIndex || !sameStatuses(beforeStatus, m.statuses())
@@ -98,6 +120,14 @@ func (m *Machine) evaluate(idx int) {
 	}
 
 	if !armed(stop) {
+		stop.Status = trip.StatusExpected
+		return
+	}
+
+	// Armed, but with no fresh fix we cannot tell boarded from missed: a
+	// never-set distance is 0, which would otherwise auto-board the rider and run
+	// the trip to completion. Hold EXPECTED until a fresh fix arrives (§6.2).
+	if _, ok := m.freshUserFix(); !ok {
 		stop.Status = trip.StatusExpected
 		return
 	}

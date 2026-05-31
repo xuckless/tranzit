@@ -33,7 +33,7 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		}
 
 		if pl.Mode == directions.ModeBus {
-			tripID, err := datasource.ResolveTrip(ds, pl.Entry.Loc, pl.RouteID, pl.Entry.TimeEpoch)
+			tripID, err := datasource.ResolveTrip(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch)
 			if err != nil {
 				return nil, fmt.Errorf("build trip: leg %d: %w", li, err)
 			}

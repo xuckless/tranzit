@@ -60,8 +60,36 @@ func (h *HTTPSource) query(table string, params url.Values) ([]map[string]any, e
 	return qr.Data, nil
 }
 
+// pageSize is the middleware's hard cap on rows per generic table query; larger
+// requested limits are silently truncated to this, so we must page with offset.
+const pageSize = 100
+
+// queryAll pages through every row of a table query, stepping offset until a
+// short page signals the end. Without this the stop catalog (thousands of rows)
+// would be truncated to a single page and most stop-geo lookups would miss.
+func (h *HTTPSource) queryAll(table string, params url.Values) ([]map[string]any, error) {
+	var all []map[string]any
+	for offset := 0; ; offset += pageSize {
+		p := url.Values{}
+		for k, v := range params {
+			p[k] = v
+		}
+		p.Set("limit", strconv.Itoa(pageSize))
+		p.Set("offset", strconv.Itoa(offset))
+
+		rows, err := h.query(table, p)
+		if err != nil {
+			return nil, err
+		}
+		all = append(all, rows...)
+		if len(rows) < pageSize {
+			return all, nil
+		}
+	}
+}
+
 func (h *HTTPSource) CandidateTrips(routeID string) ([]TripCandidate, error) {
-	rows, err := h.query("trip_updates", url.Values{"route_id": {routeID}})
+	rows, err := h.queryAll("trip_updates", url.Values{"route_id": {routeID}})
 	if err != nil {
 		return nil, err
 	}
@@ -84,7 +112,7 @@ func (h *HTTPSource) TripStops(tripID string) ([]Stop, error) {
 	if err := h.loadStopGeo(); err != nil {
 		return nil, err
 	}
-	rows, err := h.query("stop_time_updates", url.Values{"trip_id": {tripID}})
+	rows, err := h.queryAll("stop_time_updates", url.Values{"trip_id": {tripID}})
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +139,7 @@ func (h *HTTPSource) TripStops(tripID string) ([]Stop, error) {
 // loadStopGeo bulk-loads the static stop catalog once.
 func (h *HTTPSource) loadStopGeo() error {
 	h.stopsOnce.Do(func() {
-		rows, err := h.query("calgary_transit_stops", url.Values{"limit": {"100000"}})
+		rows, err := h.queryAll("calgary_transit_stops", nil)
 		if err != nil {
 			h.stopErr = err
 			return

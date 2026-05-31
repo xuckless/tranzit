@@ -107,7 +107,10 @@ type UserLocation struct {
 	Loc        geo.LatLng
 	SpeedMPS   float64
 	HeadingDeg float64
-	TS         int64
+	TS         int64 // client-reported epoch; not used for staleness (clock drift, §6.2)
+	// RecvAt is the server clock time the fix was accepted; staleness is measured
+	// against this, never the client TS.
+	RecvAt int64
 	// Valid is false until the first LOCATION update arrives.
 	Valid bool
 }

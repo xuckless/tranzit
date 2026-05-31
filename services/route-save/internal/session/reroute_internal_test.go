@@ -1,6 +1,7 @@
 package session
 
 import (
+	"context"
 	"testing"
 
 	"github.com/tranzit-route-save/internal/datasource"
@@ -87,5 +88,40 @@ func TestReroute_MissedSplices(t *testing.T) {
 	// A REROUTE and a STATE frame should be queued for the client.
 	if len(s.send) < 2 {
 		t.Errorf("queued frames = %d, want >= 2 (REROUTE + STATE)", len(s.send))
+	}
+}
+
+// TestReroute_OriginIsUserLocation pins the core contract: an off-bus (Case 2)
+// reroute must fetch the new route from the rider's live GPS fix, not the stop.
+func TestReroute_OriginIsUserLocation(t *testing.T) {
+	ts, fx, route := buildFixtureTrip(t)
+	clk := &state.FakeClock{T: 1000}
+
+	var gotOrigin geo.LatLng
+	routeFake := &routeclient.Fake{
+		RouteFn: func(_ context.Context, origin geo.LatLng, _ string) (directions.Route, error) {
+			gotOrigin = origin
+			return route, nil
+		},
+	}
+	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
+	s := newSession(ts, "place-123", deps, NewManager(deps))
+
+	userLoc := geo.LatLng{Lat: 51.20, Lng: -114.30}
+	s.machine.OnLocationUpdate(trip.UserLocation{Loc: userLoc})
+	s.machine.OnTick() // armed + far → MISSED → pending reroute (Case 2)
+
+	if s.pending == nil {
+		t.Fatal("expected a pending reroute")
+	}
+	req := *s.pending
+	if req.onBus {
+		t.Fatalf("expected Case 2 (off bus), got onBus=true")
+	}
+	s.fetchReroute(req, ts.SessionID, ts.Destination)
+	<-s.rerouteOut
+
+	if gotOrigin != userLoc {
+		t.Errorf("reroute origin = %+v, want the user's fix %+v", gotOrigin, userLoc)
 	}
 }

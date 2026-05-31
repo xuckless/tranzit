@@ -4,18 +4,24 @@ import "github.com/tranzit-route-save/internal/trip"
 
 // StateMessage builds the full read-only STATE export from a TripState (§13.0).
 // Each STATE carries the entire stop list so the client can redraw the whole
-// trip from a single frame.
-func StateMessage(ts *trip.TripState) StateMsg {
+// trip from a single frame. time_remaining_s is recomputed (eta − now) for every
+// stop, not just the active one, so the whole list counts down live; now is the
+// server clock (§6.2). A stop with no ETA yet (BusArrivalTime 0) exports 0.
+func StateMessage(ts *trip.TripState, now int64) StateMsg {
 	stops := make([]StateStop, len(ts.Stops))
 	for i := range ts.Stops {
 		s := &ts.Stops[i]
+		trem := 0
+		if s.BusArrivalTime != 0 {
+			trem = int(s.BusArrivalTime - now)
+		}
 		stops[i] = StateStop{
 			StopID:         s.StopID,
 			StopName:       s.StopName,
 			RouteID:        s.RouteID,
 			StopType:       s.StopType.String(),
 			Status:         s.Status.String(),
-			TimeRemainingS: s.TimeRemainingS,
+			TimeRemainingS: trem,
 			ETA:            s.BusArrivalTime,
 			Lat:            s.StopLat,
 			Lng:            s.StopLng,
