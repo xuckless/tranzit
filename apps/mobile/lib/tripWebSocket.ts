@@ -1,8 +1,35 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import type { TripStateMsg, TripRerouteMsg, TripNotifyMsg } from "@/types/trip";
+import type { TripStateMsg, TripRerouteMsg, TripNotifyMsg, ServerStopStatus } from "@/types/trip";
 
 const ROUTE_SAVE_HTTP = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
 const ROUTE_SAVE_WS = ROUTE_SAVE_HTTP.replace(/^http/, "ws");
+
+const STATUS_PRIORITY: Record<ServerStopStatus, number> = {
+  ACTIVE: 4, UNSURE: 3, EXPECTED: 2, MISSED: 1, COMPLETED: 0,
+};
+
+function mergeSessionStates(map: Map<string, TripStateMsg>): TripStateMsg {
+  const sessions = Array.from(map.values());
+  if (sessions.length === 1) return sessions[0];
+
+  const completed = sessions
+    .filter((s) => s.overall === "COMPLETED")
+    .sort((a, b) => (a.stops.at(-1)?.eta ?? 0) - (b.stops.at(-1)?.eta ?? 0));
+
+  const active = sessions
+    .filter((s) => s.overall !== "COMPLETED")
+    .sort((a, b) => STATUS_PRIORITY[b.overall] - STATUS_PRIORITY[a.overall]);
+
+  const primary = active[0] ?? sessions[sessions.length - 1];
+
+  return {
+    type: "STATE",
+    session_id: primary.session_id,
+    version: primary.version,
+    overall: primary.overall,
+    stops: [...completed, ...active].flatMap((s) => s.stops),
+  };
+}
 
 export interface UseTripWebSocketResult {
   tripState: TripStateMsg | null;
@@ -28,7 +55,8 @@ export function useTripWebSocket(
   const [isConnected, setIsConnected] = useState(false);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const lastVersionRef = useRef<number>(-1);
+  const lastVersionRef = useRef<Map<string, number>>(new Map());
+  const sessionStatesRef = useRef<Map<string, TripStateMsg>>(new Map());
 
   useEffect(() => {
     if (!wsPath || !ROUTE_SAVE_WS) return;
@@ -52,9 +80,11 @@ export function useTripWebSocket(
       switch (msg.type) {
         case "STATE": {
           const state = msg as unknown as TripStateMsg;
-          if (state.version <= lastVersionRef.current) return;
-          lastVersionRef.current = state.version;
-          setTripState(state);
+          const prev = lastVersionRef.current.get(state.session_id) ?? -1;
+          if (state.version <= prev) return;
+          lastVersionRef.current.set(state.session_id, state.version);
+          sessionStatesRef.current.set(state.session_id, state);
+          setTripState(mergeSessionStates(sessionStatesRef.current));
           break;
         }
         case "REROUTE":
@@ -78,7 +108,8 @@ export function useTripWebSocket(
     return () => {
       ws.close();
       wsRef.current = null;
-      lastVersionRef.current = -1;
+      lastVersionRef.current.clear();
+      sessionStatesRef.current.clear();
     };
   }, [wsPath]);
 

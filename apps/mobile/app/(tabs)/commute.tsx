@@ -127,10 +127,9 @@ function serverStatusToLocal(s: ServerStopStatus): CommuteStopStatus {
   }
 }
 
-function formatEta(eta: number, remainingSecs: number): string {
-  if (remainingSecs <= 0) return "Now";
-  const d = new Date(eta * 1000);
-  return d.toLocaleTimeString("en-CA", {
+function formatEta(eta: number): string {
+  if (eta <= 0) return "";
+  return new Date(eta * 1000).toLocaleTimeString("en-CA", {
     hour: "2-digit",
     minute: "2-digit",
     hour12: false,
@@ -485,7 +484,7 @@ export default function CommuteScreen() {
       id: s.stop_id,
       name: s.stop_name,
       status: serverStatusToLocal(s.status),
-      time: formatEta(s.eta, s.time_remaining_s),
+      time: formatEta(s.eta),
       coordinate: { latitude: s.lat, longitude: s.lng },
       mode: "TRANSIT",
       transitName: s.route_id || undefined,
