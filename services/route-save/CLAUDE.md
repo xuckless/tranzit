@@ -2,7 +2,7 @@
 
 **Service:** Route Save
 **Platform:** Go service (backend), React Native / Expo (client)
-**Status:** Build spec. Detection logic settled; sections marked *Open* to be finalized during testing.
+**Status:** Build spec + in-progress implementation. Build-order steps 1–4 (trip load, state machine, WS/RT wiring, reroute) are **built and tested**; persistence onward is pending. **See §18 for the as-built code, how to run it, and where implementation diverged from this spec.** Remaining work is tracked in `TODO.md`.
 
 ---
 
@@ -487,5 +487,125 @@ UNSURE band is implicitly `(BOARDING_RADIUS_M, MISSED_RADIUS_M]`.
 5. Persistence + snapshots (§12).
 6. Reconnection/resume (§16.1).
 7. Background + scaling (§16.2–§16.3).
+
+**Status:** 1–4 done. 5–7 + the §16 open items are pending (see `TODO.md`).
+
+---
+
+## 18. Implementation Status (as-built)
+
+This section documents the actual Go service. It is the source of truth for *how
+the code works today*; §1–§17 remain the design intent. Where the two differ, the
+divergence is called out below.
+
+**Module:** `github.com/tranzit-route-save` · **Go:** 1.26.3 · **Deps:**
+`gorilla/websocket`, `joho/godotenv` (pgx to be added with persistence).
+
+### 18.1 Package map
+
+```
+main.go                 Wiring: load env, build deps, start HTTP/WS server.
+internal/config/        §15 constants + LoadEndpoints (PORT, MIDDLEWARE_URL, ROUTE_SERVICE_URL).
+internal/geo/           HaversineM over LatLng (decimal degrees, lat,lng order).
+internal/directions/    Parse Google Routes → WALK/BUS legs. Parse/Best ({routes:[…]} wrapper),
+                        ParseSingle (single route object = the client start body).
+internal/datasource/    DataSource iface: own trip resolution (§5.2) + entry→exit stop load (§5).
+                        Fixture (tests) + HTTPSource (tranzit-db-middleware).
+internal/trip/          §4 model (StopRecord, TripState, Leg, enums), BuildTrip, Splice (§9.3).
+internal/state/         §7–§8 machine: OnRTUpdate/OnLocationUpdate/OnTick, missed rule,
+                        ResolveUnsure (§10), MISSED/UNSURE Hooks, Clock (Fake for tests).
+internal/wsproto/       §13 message structs + codec; StateMessage/RerouteMessage exporters.
+internal/rtfeed/        RT arrival Source iface; Middleware (30s poll) + Fake.
+internal/routeclient/   tranzit-route-service POST /route client iface + Fake.
+internal/session/       Per-trip actor: Manager (registry), Session (event loop), reroute (§9).
+internal/api/           HTTP/WS surface + StartRequest/Response.
+```
+
+### 18.2 Lifecycle (the client→server contract)
+
+1. Client fetches directions from Map Service itself, picks one route, then
+   **`POST /trips`** with body:
+   ```json
+   { "route": { /* single Google route object */ },
+     "destination_place_id": "ChIJ…",        // required; in-memory only, never persisted
+     "origin": {"lat":…,"lng":…},            // optional, record-keeping
+     "user_id": "…" }                        // optional, until Clerk
+   ```
+   → `201 { "session_id": "…", "ws_url": "/trips/<id>/ws" }`. The server parses the
+   route, resolves trips, loads stops, and **starts tracking immediately**.
+2. Client opens **`GET /trips/{id}/ws`** (WebSocket). Server pushes the initial
+   full `STATE`, then streams `STATE`/`REROUTE`/`NOTIFY`. Client sends `LOCATION`
+   (~5s), `UNSURE_RESPONSE`, `RESUME`. **Live location arrives only over the WS**,
+   not in the POST.
+3. Service takes over: 1s tick drives the machine, 30s poll refreshes RT ETAs, and
+   it reroutes itself via `/route` on MISSED.
+4. **`DELETE /trips/{id}`** or simply closing the socket tears the trip down. Also
+   `GET /health`.
+
+### 18.3 Concurrency model
+
+One **actor goroutine per session** owns *all* TripState mutation — there are no
+locks on trip state. It `select`s over: the 1s tick, the 30s RT trigger, decoded
+client frames, async reroute results, and WS attach. Around it: a WS reader
+goroutine (frames → loop), a WS writer goroutine (drains the send queue), and
+transient goroutines for the 30s RT fetch and the reroute `/route` call (network
+work is kept *off* the loop; results are posted back and applied on it). WS attach
+is routed through the loop so the first `STATE` export reads trip state on the loop
+goroutine. Verified with `go test -race`.
+
+### 18.4 Divergences from §1–§17 (intentional)
+
+- **§14 RT consumption is polling, not SSE.** Middleware's only RT SSE
+  (`/api/v1/stream/route`) is route+time scoped and re-runs its own trip
+  resolution; since we do our *own* resolution (§5.2), we instead **poll
+  `GET /api/v1/stop_time_updates?trip_id=` every 30s** for the trips we resolved.
+  Same data, deterministic mapping. Behind the `rtfeed.Source` interface, so a true
+  SSE impl can replace it later.
+- **§5.4 classification resolved.** Only the **boarding stop of each bus leg is
+  FETCHED**; every other loaded stop (ride-through + exit/handoff) is **TRANSFER**
+  (exempt from MISSED while ON_BUS). This matches §3's definition of FETCHED and
+  keeps the MISSED gate clean. The §11 wording (a transfer stop *also* being the
+  next leg's FETCHED entry) is the open ambiguity — revisit when multi-leg/transfer
+  reroute is exercised live.
+- **Leg = a run of Google `steps` by `travelMode`**, not Google's `legs` (Google
+  returns one `legs[0]` interleaving WALK/TRANSIT steps).
+- **Stop names come from GTFS** (covers intermediate stops the STATE export needs),
+  not Google (which only names entry/exit).
+- **Reroute Case 1 (on-bus) re-arm** (`REROUTE_REARM_RADIUS_M`) is **not yet
+  wired**; the realistic v1 path is Case 2 (off-bus, reroute from user location),
+  which is implemented and tested. Case 1 branch exists but is rarely reached given
+  the transfer-while-riding exemption.
+- **`RESUME` is acknowledged but deferred** (§16.1): the server just re-sends the
+  current `STATE`; no snapshot reconciliation yet.
+- **`TripState` is in-memory only** — no Postgres/snapshots yet (§12).
+
+### 18.5 Environment & sibling services
+
+| Var | Default | Purpose |
+|-----|---------|---------|
+| `PORT` | `:8090` | Route Save listen address (bare port is `:`-prefixed) |
+| `MIDDLEWARE_URL` | `https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app` | tranzit-db-middleware (RT + GTFS data) — live Cloud Run; override for local |
+| `ROUTE_SERVICE_URL` | `https://tranzit-route-service-qsv32inqpq-uc.a.run.app` | tranzit-route-service (`/route` directions) — live Cloud Run; override for local |
+| `SUPABASE_DIRECT_CONNECTION_STRING` | — | reserved for persistence (§12), unused today |
+
+Siblings: **tranzit-db-middleware** `:8080` (SSE + generic table queries, no auth),
+**tranzit-route-service** `:3100` (Google Routes/Places proxy; `/route` takes
+`{origin:{lat,lng}, destination_id:<placeId>}`), **tranzit-rt-service** `:8765`
+(raw GTFS-RT protobuf WS; Route Save does not consume it directly).
+
+### 18.6 Build, test, run
+
+```bash
+go build ./...
+go vet ./...
+gofmt -l .            # expect no output
+go test -race ./...   # all packages green
+go run .              # starts the server on $PORT (needs siblings for live data)
+```
+
+The HTTP/WS surface, state machine, and reroute splice are covered by unit and
+`httptest`+websocket-dialer tests using **fakes**; the `HTTPSource`, `rtfeed.Middleware`,
+and `routeclient.HTTPClient` adapters are wired but only fake-tested — they need a
+live smoke test against `:8080`/`:3100` (see `TODO.md`).
 
 

@@ -13,13 +13,22 @@ type Endpoints struct {
 	RouteServiceURL string
 }
 
+// Live Cloud Run URLs of the sibling services. Route Save connects to these by
+// default; set MIDDLEWARE_URL / ROUTE_SERVICE_URL to override (e.g. for local
+// instances).
+const (
+	defaultMiddlewareURL   = "https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app"
+	defaultRouteServiceURL = "https://tranzit-route-service-qsv32inqpq-uc.a.run.app"
+)
+
 // LoadEndpoints reads endpoint config from the environment, applying defaults.
 // PORT may be either ":8090" or "8090"; a bare port is prefixed with ":".
+// MIDDLEWARE_URL and ROUTE_SERVICE_URL default to the live Cloud Run instances.
 func LoadEndpoints() Endpoints {
 	return Endpoints{
 		ServerAddr:      normalizeAddr(getenv("PORT", "8090")),
-		MiddlewareURL:   getenv("MIDDLEWARE_URL", "http://localhost:8080"),
-		RouteServiceURL: getenv("ROUTE_SERVICE_URL", "http://localhost:3100"),
+		MiddlewareURL:   getenv("MIDDLEWARE_URL", defaultMiddlewareURL),
+		RouteServiceURL: getenv("ROUTE_SERVICE_URL", defaultRouteServiceURL),
 	}
 }
 
