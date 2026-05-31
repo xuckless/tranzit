@@ -275,6 +275,62 @@ func TestUnsure_FreshFixAutoResolves(t *testing.T) {
 	})
 }
 
+// TestUnsure_AnswerTimeoutEscalates pins §10: an UNSURE stop that gets neither an
+// answer nor a clarifying fix escalates to MISSED once the answer timeout passes.
+func TestUnsure_AnswerTimeoutEscalates(t *testing.T) {
+	ts := makeTrip(1000)
+	clk := &FakeClock{T: 1000} // armed
+	var rec recorder
+	m := New(ts, clk, rec.hooks())
+
+	m.OnTick() // no fix -> UNSURE, timeout armed at T=1000
+	if ts.Stops[0].Status != trip.StatusUnsure {
+		t.Fatalf("status = %s, want UNSURE", ts.Stops[0].Status)
+	}
+
+	// Just shy of the timeout: still UNSURE, no MISSED.
+	clk.Advance(config.UnsureAnswerTimeoutS - 1)
+	m.OnTick()
+	if ts.Stops[0].Status != trip.StatusUnsure {
+		t.Fatalf("status = %s, want UNSURE before timeout", ts.Stops[0].Status)
+	}
+	if len(rec.missed) != 0 {
+		t.Fatalf("MISSED fired before timeout: %v", rec.missed)
+	}
+
+	// Cross the timeout: escalate to MISSED exactly once and stay there.
+	clk.Advance(1)
+	m.OnTick()
+	m.OnTick()
+	if ts.Stops[0].Status != trip.StatusMissed {
+		t.Fatalf("status = %s, want MISSED after timeout", ts.Stops[0].Status)
+	}
+	if len(rec.missed) != 1 {
+		t.Errorf("OnMissed fired %d times, want exactly 1", len(rec.missed))
+	}
+}
+
+// TestUnsure_AnswerBeatsTimeout: a clarifying fix before the timeout resolves the
+// stop, so the timeout never fires.
+func TestUnsure_AnswerBeatsTimeout(t *testing.T) {
+	ts := makeTrip(1000)
+	clk := &FakeClock{T: 1000}
+	var rec recorder
+	m := New(ts, clk, rec.hooks())
+
+	m.OnTick() // UNSURE
+	clk.Advance(config.UnsureAnswerTimeoutS + 10)
+	setFix(m, 51.04505, -114.07) // ~6m: within boarding radius, arrives "late"
+	m.OnTick()
+
+	if ts.Stops[0].Status != trip.StatusActive {
+		t.Fatalf("status = %s, want ACTIVE (late fix resolves before MISSED)", ts.Stops[0].Status)
+	}
+	if len(rec.missed) != 0 {
+		t.Errorf("MISSED fired despite a resolving fix: %v", rec.missed)
+	}
+}
+
 // TestMissed_FiresOnce guards against duplicate reroutes: while a fresh-GPS
 // MISSED persists across ticks (reroute is async), OnMissed fires only once.
 func TestMissed_FiresOnce(t *testing.T) {

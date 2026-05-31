@@ -457,6 +457,7 @@ RT enrichment is what makes the static Google directions responsive — it is th
 | `CLIENT_PUSH_INTERVAL_S` | 2 | Downstream STATE push cadence (on-change, throttled; as-built) |
 | `LOCATION_STALE_AFTER_S` | 15 | `3×LOCATION_UPDATE_INTERVAL_S`; older fix counts as "no fix" (as-built) |
 | `MISSED_EVAL_THRESHOLD_S` | 1 | TimeRemaining at which MISSED arms |
+| `UNSURE_ANSWER_TIMEOUT_S` | 120 | UNSURE waits this long for an answer/clarifying fix, then escalates to MISSED (as-built) |
 | `MISSED_RADIUS_M` | 50 | Beyond this at trigger → MISSED |
 | `BOARDING_RADIUS_M` | 20 | Within this at trigger → ACTIVE (widened from 5m for GPS accuracy; tune in testing) |
 | `REROUTE_REARM_RADIUS_M` | 50 | On-bus reroute re-fetch distance |
@@ -512,7 +513,8 @@ internal/geo/           HaversineM over LatLng (decimal degrees, lat,lng order).
 internal/directions/    Parse Google Routes → WALK/BUS legs. Parse/Best ({routes:[…]} wrapper),
                         ParseSingle (single route object = the client start body).
 internal/datasource/    DataSource iface: own trip resolution (§5.2) + entry→exit stop load (§5).
-                        Fixture (tests) + HTTPSource (tranzit-db-middleware).
+                        Fixture (tests) + HTTPSource (tranzit-db-middleware). ResolveLeg
+                        dispatches to HTTPSource's stop-scoped fast path or the generic scan.
 internal/trip/          §4 model (StopRecord, TripState, Leg, enums), BuildTrip, Splice (§9.3).
 internal/state/         §7–§8 machine: OnRTUpdate/OnLocationUpdate/OnTick, missed rule,
                         ResolveUnsure (§10), MISSED/UNSURE Hooks, Clock (Fake for tests).
@@ -566,8 +568,24 @@ goroutine. Verified with `go test -race`.
 - **Direction-aware trip resolution.** A route runs both directions under one
   `route_id`, so matching only the entry stop + time can select a wrong-direction
   trip (symptom: `LoadLegStops` errors with "entry seq N is after exit seq M").
-  `ResolveTrip` therefore requires a candidate to serve **both** entry and exit
+  Resolution therefore requires a candidate to serve **both** entry and exit
   with `entry_seq < exit_seq`; only the correct-direction run qualifies.
+- **Stop-scoped resolution (build latency, as-built).** `trip_updates` carries the
+  whole service day for a route (100+ trips), and the naïve resolver loaded *every*
+  candidate's stops (`stop_time_updates` per trip) just to read two of them — an N+1
+  that made `POST /trips` block ~30 s (the client's "redirect" wait). `BuildTrip`
+  now calls `datasource.ResolveLeg`; `HTTPSource.resolveLeg` instead maps the
+  entry/exit coords → catalog `stop_id`s, queries `stop_time_updates` by those two
+  stops + `trip_updates` for the route **concurrently**, intersects them with the
+  `entry_seq < exit_seq` check, picks the nearest-ETA run, and loads only the
+  winner's stops (~3 queries vs 100+; **live: 14.5 s → 0.82 s** on route 3). It
+  falls back to the generic candidate scan on any miss (no catalog stop in range,
+  network error, no in-order match, or the winner failing `FilterLegStops`
+  validation), so correctness is unchanged. The generic scan's per-candidate
+  `TripStops` is itself parallelized (`maxResolveConcurrency=16`). The generic
+  `ResolveTrip` (used by the `Fixture`/CLI and as the fallback) is unchanged in
+  semantics; `ResolveTrip` now also returns the chosen trip's stops so the window
+  needs no re-fetch.
 - **§5.4 classification resolved.** Only the **boarding stop of each bus leg is
   FETCHED**; every other loaded stop (ride-through + exit/handoff) is **TRANSFER**
   (exempt from MISSED while ON_BUS). This matches §3's definition of FETCHED and
@@ -598,8 +616,10 @@ goroutine. Verified with `go test -race`.
   never reads as "boarded"); with a **fresh fix** → the distance tiers (`≤20m` ACTIVE/
   board, `20–50m` UNSURE, `>50m` MISSED). `UNSURE` is **not** locked — each tick
   re-evaluates, so a later clear fix auto-resolves it (`≤20m`→ACTIVE, `>50m`→MISSED),
-  and `UNSURE_RESPONSE{boarded}` resolves it explicitly (`ResolveUnsure`). There is no
-  UNSURE timeout: the user's answer or a clear fix are the only resolvers. `OnUnsure`
+  and `UNSURE_RESPONSE{boarded}` resolves it explicitly (`ResolveUnsure`). If neither
+  an answer nor a clarifying fix arrives within `UNSURE_ANSWER_TIMEOUT_S` (120s) the
+  server escalates UNSURE→MISSED and reroutes, so a trip can't hang on a silent rider
+  (`unsureSince` stamps the wait on the UNSURE transition; the 1s tick checks it). `OnUnsure`
   and `OnMissed` fire **once** on the transition into the state (`setUnsure`/`setMissed`
   guards) so the prompt isn't re-sent and the async reroute isn't double-queued each
   tick. `OnTick` recomputes the active stop's distance from the latest fresh fix every

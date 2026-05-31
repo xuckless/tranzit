@@ -31,7 +31,7 @@ func TestResolveTrip_PicksNearestDeparture(t *testing.T) {
 		tripAt("late", base+300),
 	}
 
-	got, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+40) // ETA closest to onTime
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+40) // ETA closest to onTime
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestResolveTrip_RejectsWrongDirection(t *testing.T) {
 	}}
 	f.TripsByRoute["303"] = []TripCandidate{wb, eb}
 
-	got, err := ResolveTrip(f, entryLoc, exitLoc, "303", base) // ETA nearest westbound
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "303", base) // ETA nearest westbound
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestResolveTrip_AdjacentRunEdge(t *testing.T) {
 		tripAt("late", base+300),
 	}
 
-	got, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+200) // past the midpoint
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+200) // past the midpoint
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestResolveTrip_NoServingTrip(t *testing.T) {
 		TripID: "elsewhere",
 		Stops:  []Stop{{StopID: "x", Loc: far, Sequence: 1, DepartureTime: 1}},
 	}}
-	if _, err := ResolveTrip(f, entryLoc, exitLoc, "2", 1); err == nil {
+	if _, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", 1); err == nil {
 		t.Fatal("expected error when no trip serves the entry stop")
 	}
 }

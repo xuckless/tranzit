@@ -33,11 +33,9 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		}
 
 		if pl.Mode == directions.ModeBus {
-			tripID, err := datasource.ResolveTrip(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch)
-			if err != nil {
-				return nil, fmt.Errorf("build trip: leg %d: %w", li, err)
-			}
-			stops, err := datasource.LoadLegStops(ds, tripID, pl.Entry.Loc, pl.Exit.Loc)
+			// Resolve the trip_id and load only its entry→exit stops (§5). HTTPSource
+			// uses a stop-scoped fast path; other sources scan candidates.
+			tripID, stops, err := datasource.ResolveLeg(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch)
 			if err != nil {
 				return nil, fmt.Errorf("build trip: leg %d: %w", li, err)
 			}

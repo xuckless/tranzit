@@ -20,13 +20,17 @@ import (
 // Known edge case (§5.2): on high-frequency routes (~5 min headway), if the
 // Google time is off by more than the headway we may match the adjacent run
 // ("right route, wrong trip"). Accepted for v1.
-func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleETAEpoch int64) (string, error) {
+// It also returns the chosen trip's full stop list — already loaded while ranking
+// candidates — so the caller can window it (FilterLegStops) without a second
+// TripStops fetch for the resolved trip.
+func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleETAEpoch int64) (string, []Stop, error) {
 	candidates, err := ds.CandidateTrips(routeID)
 	if err != nil {
-		return "", fmt.Errorf("resolve trip: candidates for route %q: %w", routeID, err)
+		return "", nil, fmt.Errorf("resolve trip: candidates for route %q: %w", routeID, err)
 	}
 
 	bestTrip := ""
+	var bestStops []Stop
 	bestDiff := int64(math.MaxInt64)
 	for _, c := range candidates {
 		entryIdx, entryD := nearestStop(c.Stops, entry)
@@ -50,14 +54,14 @@ func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleET
 			continue // no usable time to match against
 		}
 		if diff := absI64(t - googleETAEpoch); diff < bestDiff {
-			bestDiff, bestTrip = diff, c.TripID
+			bestDiff, bestTrip, bestStops = diff, c.TripID, c.Stops
 		}
 	}
 
 	if bestTrip == "" {
-		return "", fmt.Errorf("resolve trip: no candidate of route %q serves entry→exit in order", routeID)
+		return "", nil, fmt.Errorf("resolve trip: no candidate of route %q serves entry→exit in order", routeID)
 	}
-	return bestTrip, nil
+	return bestTrip, bestStops, nil
 }
 
 func absI64(v int64) int64 {
@@ -65,4 +69,25 @@ func absI64(v int64) int64 {
 		return -v
 	}
 	return v
+}
+
+// anyAfter reports whether any seq in seqs is strictly greater than n — i.e. the
+// exit stop is reached after the entry stop on the same run (correct direction).
+func anyAfter(seqs []int, n int) bool {
+	for _, s := range seqs {
+		if s > n {
+			return true
+		}
+	}
+	return false
+}
+
+// firstNonNil returns the first non-nil error, or nil.
+func firstNonNil(errs ...error) error {
+	for _, e := range errs {
+		if e != nil {
+			return e
+		}
+	}
+	return nil
 }

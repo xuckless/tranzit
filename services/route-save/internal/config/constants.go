@@ -26,6 +26,11 @@ const (
 	// check arms. Above this the active stop stays EXPECTED regardless of
 	// distance (§8).
 	MissedEvalThresholdS = 1
+	// UnsureAnswerTimeoutS bounds how long an UNSURE stop waits for resolution —
+	// either the rider's UNSURE_RESPONSE or a clarifying GPS fix — before the
+	// server escalates it to MISSED and reroutes (§10). Without this an UNSURE
+	// raised with GPS silent (and no answer) would hang the trip indefinitely.
+	UnsureAnswerTimeoutS = 120
 
 	// MissedRadiusM: beyond this distance (metres) from the active stop at
 	// trigger → MISSED (§7.2).

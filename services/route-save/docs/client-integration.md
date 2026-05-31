@@ -145,6 +145,54 @@ DELETE /trips/9f3c…
 ```
 Either tears the session down. The trip can be closed anytime.
 
+### Step 6 — Let it drive (automatic rerouting)
+
+After Step 4 you do **nothing** to re-plan a trip. Route Save runs the whole loop:
+it ticks every second, refreshes GTFS-RT ETAs every 30 s, watches the rider's
+location, and when a bus is missed (or a boarding isn't confirmed in 120 s) it calls
+Map Service itself, splices a new route, and pushes you `REROUTE` + a fresh `STATE`.
+You only ever **stream `LOCATION` up, render what comes down, and answer
+`CONFIRM_BOARDING`.** You never call `/route` again for the same trip.
+
+---
+
+## 3b. Full automatic route configuration — the contract
+
+End to end, "automatic route configuration" means: you supply a destination and a
+chosen first route once; from then on Route Save keeps the trip correct (re-resolving
+and rerouting) and streams it to you to render. Here's exactly who does what.
+
+### What **you** provide
+| When | What | Notes |
+|------|------|-------|
+| Step 1 | A **destination `place_id`** (+ coords) from Map Service | Session-scoped; never persist. |
+| Step 2 | A `/route` call to Map Service: `{ origin:{lat,lng}, destination_id }` | The client fetches directions directly. |
+| Step 3 | `POST /trips` with the **one chosen route object**, the **same `destination_place_id`**, and optional `origin`/`user_id` | The route object is `routes[i]` from Step 2 — *not* the wrapper. |
+| Step 4→on | **`LOCATION`** over the WebSocket, ~every 5 s | The trip's only live input. With no fix the server can't confirm boarding and will ask (UNSURE). |
+| On prompt | **`UNSURE_RESPONSE { stop_id, boarded }`** when you get `CONFIRM_BOARDING` | Optional but recommended; otherwise the server decides after 120 s. |
+| On reconnect | **`RESUME`** with last `session_id`, `state_version`, current GPS | After tunnels/backgrounding. |
+
+### What **we** (Route Save) provide
+| What | How |
+|------|-----|
+| **Trip resolution** | Maps your route's bus legs to concrete GTFS `trip_id`s (direction- and time-aware) and loads every stop entry→exit. |
+| **Live tracking** | Per-stop `status`, live `time_remaining_s`/`eta` for **all** stops, refreshed from GTFS-RT — pushed as full `STATE` snapshots (coalesced, ~2 s, on change). |
+| **Missed / unsure detection** | Timer-driven: at a boarding stop's predicted arrival we confirm via GPS, or ask you (`CONFIRM_BOARDING`) when GPS can't, with a 120 s answer timeout. |
+| **Automatic reroute** | On MISSED we call Map Service ourselves from the rider's location (or the planned stop if GPS is silent), splice the remaining journey, and push **`REROUTE` (with the raw `route`)** + a fresh `STATE`. |
+| **Resolved identifiers** | GTFS `stop_id`, `stop_name`, `route_id`, `trip_id` on every stop in `STATE` (you don't resolve these). |
+
+### What **you** parse / render
+| Message | Parse | Render |
+|---------|-------|--------|
+| `POST /trips` response | `session_id`, `ws_url` | open the WS at `ws_url`. |
+| **`STATE`** | full stop list (`stops[]`) + `overall` | replace the whole trip view; map each stop's **`status`** string (see §5); show `time_remaining_s`/`eta` verbatim; drop frames with stale `version`. |
+| **`REROUTE`** | **`route`** (raw Google route, remaining journey) + `from` + `reason` | re-render the remaining itinerary/map from `route` exactly as at trip start; keep completed history; the next `STATE` is the live view. |
+| **`NOTIFY`** | `kind`, `requires_response`, `message`, `stop_id` | `CONFIRM_BOARDING` → prompt + reply `UNSURE_RESPONSE`; others → toast. |
+
+> **No numeric status flag.** The whole contract rides on the `status` *string* per
+> stop (and `overall`). `UNSURE` means "ask the rider"; `MISSED` means "consume the
+> new directions". Don't look for a separate `0/1/2` field — map the strings.
+
 ---
 
 ## 4. WebSocket protocol
@@ -192,22 +240,44 @@ message; it carries every stop with all renderable fields.
   ] }
 ```
 
-**`REROUTE`** — Route Save dynamically switched the trip. A fresh `STATE` follows.
+**`REROUTE`** — Route Save dynamically switched the trip (the rider missed a bus,
+or didn't confirm boarding in time). A fresh `STATE` follows immediately.
 ```json
 { "type": "REROUTE", "reason": "MISSED",
   "from": { "lat": 51.05, "lng": -114.08 },
+  "route": { "distanceMeters": 4210, "duration": "1530s",
+             "legs": [ { "steps": [ … ] } ],
+             "polyline": { "encodedPolyline": "…" } },
   "legs": [ { "leg_index": 0, "mode": "BUS", "route_id": "2", "trip_id": "…" } ] }
 ```
+- **`route`** is the **raw Google route object** for the *remaining* journey
+  (`from` → original destination) — the **same shape** you got back from Map
+  Service `/route` and handed to `POST /trips`. Re-render your map/itinerary from
+  this exactly as you did at trip start (decode `polyline`, walk `legs[].steps`).
+  Route Save has already resolved it to GTFS trips and the next `STATE` reflects it.
+- **`from`** is the point the new route departs from: the rider's live GPS fix, or —
+  when GPS is silent — the planned stop they were meant to board.
+- **`legs`** is Route Save's parsed summary of the spliced trip (mode/route/trip per
+  leg); informational. Render from `route` + the following `STATE`, not from `legs`.
 
 **`NOTIFY`** — user-facing message; may require a response.
 ```json
-{ "type": "NOTIFY", "kind": "TRANSFER_AT_RISK", "stop_id": "21",
-  "requires_response": false,
-  "message": "Your transfer will be missed. Rerouting." }
+{ "type": "NOTIFY", "kind": "CONFIRM_BOARDING", "stop_id": "8123",
+  "requires_response": true,
+  "message": "Did you board the bus?" }
 ```
-- `kind: "CONFIRM_BOARDING"` with `requires_response: true` → prompt the user and
-  reply with `UNSURE_RESPONSE`.
-- `kind: "TRANSFER_AT_RISK"` → informational; a `REROUTE` will follow.
+- `kind: "CONFIRM_BOARDING"` with `requires_response: true` → the server is
+  **UNSURE** whether the rider boarded (the bus was due but GPS couldn't confirm —
+  no recent fix, or the rider is hovering 20–50 m from the stop). **Prompt the user**
+  and reply with `UNSURE_RESPONSE { boarded }`. `boarded:true` → the trip continues;
+  `boarded:false` → an immediate `REROUTE`.
+  - **You are not on a deadline to answer, but the server is.** If neither your
+    answer nor a clarifying GPS fix arrives within **120 s**, Route Save assumes the
+    bus was missed and reroutes on its own — so always be ready to handle a
+    `REROUTE` even if the prompt is still on screen, and dismiss the prompt when the
+    matching stop leaves `UNSURE`.
+- `kind: "TRANSFER_AT_RISK"` with `requires_response: false` → informational; a
+  `REROUTE` will follow.
 
 ### 4.3 Field reference
 
@@ -238,8 +308,19 @@ message; it carries every stop with all renderable fields.
 - **Don't compute ETAs/time client-side.** `time_remaining_s` and `eta` are
   server-authoritative (the server clock matches the GTFS-RT feed). Display them as
   given; the client clock is never the source of truth.
-- **Status colors** map cleanly: COMPLETED (done), ACTIVE (you're here / on this
-  bus), EXPECTED (upcoming), UNSURE (confirm boarding), MISSED (rerouting).
+- **`status` is the single source of truth for what to do** — there is no separate
+  numeric flag; you map the string yourself:
+  - `COMPLETED` — done (passed/alighted).
+  - `ACTIVE` — you're here / on this bus.
+  - `EXPECTED` — upcoming; not yet evaluated.
+  - `UNSURE` — the server is awaiting confirmation; **prompt the rider** (you'll also
+    get a `CONFIRM_BOARDING` `NOTIFY`). Reply with `UNSURE_RESPONSE`.
+  - `MISSED` — the bus was missed; a `REROUTE` is coming (or has come). **Consume the
+    `REROUTE.route` and re-render.**
+- **On `REROUTE`, re-render from `route`.** Treat `REROUTE.route` exactly like the
+  route object you started the trip with: it replaces the *remaining* journey. The
+  `STATE` that immediately follows is the authoritative live view for it; keep the
+  already-completed portion you've shown as history.
 
 ---
 
@@ -297,10 +378,15 @@ ws.onmessage = (e) => {
       renderTrip(msg);                           // full snapshot
       break;
     case "REROUTE":
-      showToast(`Rerouting (${msg.reason})`);    // STATE follows
+      // msg.route is the raw Google route for the remaining journey — render it the
+      // same way you rendered the route you started with. A STATE follows.
+      renderRoute(msg.route);                    // decode polyline, walk legs[].steps
+      showToast(`Rerouting (${msg.reason})`);
       break;
     case "NOTIFY":
       if (msg.kind === "CONFIRM_BOARDING" && msg.requires_response) {
+        // Server is UNSURE; it will auto-reroute in 120s if you don't answer, so
+        // also dismiss this prompt once the stop leaves UNSURE in a later STATE.
         promptBoarding(msg.stop_id, (boarded) =>
           ws.send(JSON.stringify({ type: "UNSURE_RESPONSE", stop_id: msg.stop_id, boarded })));
       } else {
@@ -341,6 +427,14 @@ function endTrip() {
   is normal, not an error.
 - **One WebSocket per trip.** Open it after `POST /trips`; tear it down on trip end
   or navigation away.
+- **Reroutes are automatic — never re-call `/route` for a live trip.** Render the
+  `route` object Route Save sends on `REROUTE`; the server already re-planned it.
+- **A `CONFIRM_BOARDING` prompt self-resolves after 120 s.** If the rider ignores it
+  and GPS stays ambiguous, the server reroutes anyway. Always handle a `REROUTE`
+  arriving while the prompt is still up, and dismiss the prompt when the stop leaves
+  `UNSURE` in a later `STATE`.
+- **Map by `status` string, not a flag.** There is no numeric status field; `UNSURE`
+  → prompt, `MISSED` → consume `REROUTE.route`.
 
 ---
 

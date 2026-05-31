@@ -16,6 +16,9 @@ type Machine struct {
 	ts    *trip.TripState
 	clock Clock
 	hooks Hooks
+	// unsureSince is the server time the active stop entered UNSURE; it arms the
+	// answer timeout (§10). Zero when the active stop is not UNSURE.
+	unsureSince int64
 }
 
 // New builds a Machine for the given trip. A nil clock defaults to SystemClock.
@@ -129,36 +132,47 @@ func (m *Machine) evaluate(idx int) {
 		return
 	}
 
-	// Armed, but with no fresh fix we cannot tell boarded from missed: a
-	// never-set distance is 0, which would auto-board the rider. The timer is the
-	// initiator (§8) and must not stall when GPS is silent (app backgrounded,
-	// tunnel, GPS not yet acquired), so escalate to UNSURE and ask the user (§10)
-	// rather than declaring MISSED blind. A later fresh fix re-evaluates below.
-	if _, ok := m.freshUserFix(); !ok {
-		m.setUnsure(stop, idx)
-		return
+	// Armed with a fresh fix: the distance call is unambiguous at the extremes —
+	// inside the boarding radius is a board, beyond the missed radius is a miss.
+	if _, ok := m.freshUserFix(); ok {
+		switch d := stop.UserDistanceM; {
+		case d > config.MissedRadiusM:
+			m.setMissed(stop, idx)
+			return
+		case d <= config.BoardingRadiusM:
+			stop.Status = trip.StatusActive
+			m.advance()
+			return
+		}
+		// In the ambiguous band (boarding, missed]: fall through to UNSURE.
 	}
 
-	// Armed with a fresh fix: make the call from the latest sampled distance.
-	switch d := stop.UserDistanceM; {
-	case d > config.MissedRadiusM:
-		m.setMissed(stop, idx)
-	case d > config.BoardingRadiusM:
-		m.setUnsure(stop, idx)
-	default:
-		stop.Status = trip.StatusActive
-		m.advance()
+	// Either no fresh fix — the timer is the initiator (§8) and must not stall when
+	// GPS is silent (backgrounded app, tunnel, GPS not yet acquired) — or a fresh
+	// fix sitting in the ambiguous band. Ask the user (§10) rather than declaring
+	// MISSED blind. If we already asked and neither a clarifying fix nor an answer
+	// arrived within UnsureAnswerTimeoutS, escalate to MISSED and reroute.
+	if stop.Status == trip.StatusMissed {
+		return // already escalated; awaiting the reroute splice
 	}
+	if stop.Status == trip.StatusUnsure &&
+		m.clock.Now()-m.unsureSince >= config.UnsureAnswerTimeoutS {
+		m.setMissed(stop, idx)
+		return
+	}
+	m.setUnsure(stop, idx)
 }
 
 // setUnsure marks the stop UNSURE and fires the OnUnsure hook only on the
 // transition into UNSURE, so the boarding prompt is sent once rather than on
-// every 1s tick while we wait for the answer or a clarifying fix.
+// every 1s tick while we wait for the answer or a clarifying fix. The transition
+// also stamps unsureSince to arm the answer timeout (§10).
 func (m *Machine) setUnsure(stop *trip.StopRecord, idx int) {
 	if stop.Status == trip.StatusUnsure {
 		return
 	}
 	stop.Status = trip.StatusUnsure
+	m.unsureSince = m.clock.Now()
 	if m.hooks.OnUnsure != nil {
 		m.hooks.OnUnsure(m.ts, idx)
 	}
