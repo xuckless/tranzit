@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
 	"github.com/tranzit-route-save/internal/datasource"
@@ -11,6 +12,7 @@ import (
 	"github.com/tranzit-route-save/internal/rtfeed"
 	"github.com/tranzit-route-save/internal/state"
 	"github.com/tranzit-route-save/internal/trip"
+	"github.com/tranzit-route-save/internal/wsproto"
 )
 
 // buildFixtureTrip returns a one-bus-leg trip plus the fixture and the route that
@@ -99,9 +101,9 @@ func TestReroute_OriginIsUserLocation(t *testing.T) {
 
 	var gotOrigin geo.LatLng
 	routeFake := &routeclient.Fake{
-		RouteFn: func(_ context.Context, origin geo.LatLng, _ string) (directions.Route, error) {
+		RouteFn: func(_ context.Context, origin geo.LatLng, _ string) (directions.Route, json.RawMessage, error) {
 			gotOrigin = origin
-			return route, nil
+			return route, nil, nil
 		},
 	}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
@@ -123,5 +125,80 @@ func TestReroute_OriginIsUserLocation(t *testing.T) {
 
 	if gotOrigin != userLoc {
 		t.Errorf("reroute origin = %+v, want the user's fix %+v", gotOrigin, userLoc)
+	}
+}
+
+// TestReroute_NoGPS_OriginIsPlannedStop covers the timer-driven path with GPS
+// silent: armed with no fix the boarding stop goes UNSURE; the rider answers
+// "didn't board", which resolves to MISSED. With no fresh fix the reroute must
+// originate from the planned (missed) stop, and the REROUTE frame must echo the
+// raw Google route for the client to re-render.
+func TestReroute_NoGPS_OriginIsPlannedStop(t *testing.T) {
+	ts, fx, route := buildFixtureTrip(t)
+	clk := &state.FakeClock{T: 1000}
+
+	var gotOrigin geo.LatLng
+	rawRoute := json.RawMessage(`{"distanceMeters":4321}`)
+	routeFake := &routeclient.Fake{
+		RouteFn: func(_ context.Context, origin geo.LatLng, _ string) (directions.Route, json.RawMessage, error) {
+			gotOrigin = origin
+			return route, rawRoute, nil
+		},
+	}
+	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
+	s := newSession(ts, "place-123", deps, NewManager(deps))
+
+	// Armed with no fix -> UNSURE (timer-driven, GPS silent).
+	s.machine.OnTick()
+	if ts.Stops[0].Status != trip.StatusUnsure {
+		t.Fatalf("boarding status = %s, want UNSURE with no fix", ts.Stops[0].Status)
+	}
+
+	boardingID := ts.Stops[0].StopID
+	plannedLoc := ts.Stops[0].Loc()
+	if !s.machine.ResolveUnsure(boardingID, false) {
+		t.Fatal("ResolveUnsure(false) should resolve the UNSURE stop")
+	}
+	if s.pending == nil {
+		t.Fatal("expected a pending reroute after the not-boarded answer")
+	}
+
+	req := *s.pending
+	s.pending = nil
+	if req.onBus {
+		t.Fatalf("expected Case 2 (off bus), got onBus=true")
+	}
+	s.fetchReroute(req, ts.SessionID, ts.Destination)
+	s.applyReroute(<-s.rerouteOut)
+
+	if gotOrigin != plannedLoc {
+		t.Errorf("reroute origin = %+v, want the planned stop %+v", gotOrigin, plannedLoc)
+	}
+
+	rr := drainReroute(t, s)
+	if string(rr.Route) != string(rawRoute) {
+		t.Errorf("REROUTE.route = %s, want %s", rr.Route, rawRoute)
+	}
+	if rr.From.Lat != plannedLoc.Lat || rr.From.Lng != plannedLoc.Lng {
+		t.Errorf("REROUTE.from = %+v, want planned stop %+v", rr.From, plannedLoc)
+	}
+}
+
+// drainReroute pops queued frames and returns the first REROUTE.
+func drainReroute(t *testing.T, s *Session) wsproto.RerouteMsg {
+	t.Helper()
+	for {
+		select {
+		case raw := <-s.send:
+			if typ, _ := wsproto.DecodeType(raw); typ == wsproto.TypeReroute {
+				var rr wsproto.RerouteMsg
+				if err := json.Unmarshal(raw, &rr); err != nil {
+					t.Fatalf("decode REROUTE: %v", err)
+				}
+				return rr
+			}
+		default:
+			t.Fatal("no REROUTE frame queued")
+		}
 	}
 }

@@ -2,6 +2,7 @@ package directions
 
 import (
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -63,5 +64,28 @@ func TestBest_SingleBusLeg(t *testing.T) {
 	}
 	if bus.Entry.Loc.Lat == 0 || bus.Entry.Loc.Lng == 0 {
 		t.Errorf("entry loc not parsed: %+v", bus.Entry.Loc)
+	}
+}
+
+func TestBestWithRaw_ReturnsChosenRouteJSON(t *testing.T) {
+	route, raw, err := BestWithRaw(loadSample(t))
+	if err != nil {
+		t.Fatalf("BestWithRaw: %v", err)
+	}
+	// Same selection as Best: the 1264s alternative.
+	if route.DurationS != 1264 {
+		t.Errorf("DurationS = %d, want 1264", route.DurationS)
+	}
+	// raw is the chosen route object (not the {routes:[…]} wrapper) and round-trips
+	// back to the same parsed route.
+	if !strings.Contains(string(raw), `"1264s"`) {
+		t.Errorf("raw does not carry the chosen route's duration: %s", raw)
+	}
+	again, err := ParseSingle(raw)
+	if err != nil {
+		t.Fatalf("ParseSingle(raw): %v", err)
+	}
+	if again.DurationS != route.DurationS || len(again.Legs) != len(route.Legs) {
+		t.Errorf("raw re-parse mismatch: %d/%d legs vs %d/%d", again.DurationS, len(again.Legs), route.DurationS, len(route.Legs))
 	}
 }

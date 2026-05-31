@@ -78,6 +78,11 @@ func (m *Machine) freshUserFix() (geo.LatLng, bool) {
 	return loc.Loc, true
 }
 
+// FreshUserFix is the exported form of freshUserFix. The reroute layer uses it to
+// choose the reroute origin: the rider's live fix when fresh, else the planned
+// stop (§9).
+func (m *Machine) FreshUserFix() (geo.LatLng, bool) { return m.freshUserFix() }
+
 // OnTick recomputes the active stop's TimeRemaining and evaluates it. It returns
 // true if any stop status or the current index changed, so a caller can decide
 // whether to push a new STATE frame.
@@ -125,28 +130,50 @@ func (m *Machine) evaluate(idx int) {
 	}
 
 	// Armed, but with no fresh fix we cannot tell boarded from missed: a
-	// never-set distance is 0, which would otherwise auto-board the rider and run
-	// the trip to completion. Hold EXPECTED until a fresh fix arrives (§6.2).
+	// never-set distance is 0, which would auto-board the rider. The timer is the
+	// initiator (§8) and must not stall when GPS is silent (app backgrounded,
+	// tunnel, GPS not yet acquired), so escalate to UNSURE and ask the user (§10)
+	// rather than declaring MISSED blind. A later fresh fix re-evaluates below.
 	if _, ok := m.freshUserFix(); !ok {
-		stop.Status = trip.StatusExpected
+		m.setUnsure(stop, idx)
 		return
 	}
 
-	// Armed: make the call from the latest sampled distance.
+	// Armed with a fresh fix: make the call from the latest sampled distance.
 	switch d := stop.UserDistanceM; {
 	case d > config.MissedRadiusM:
-		stop.Status = trip.StatusMissed
-		if m.hooks.OnMissed != nil {
-			m.hooks.OnMissed(m.ts, idx)
-		}
+		m.setMissed(stop, idx)
 	case d > config.BoardingRadiusM:
-		stop.Status = trip.StatusUnsure
-		if m.hooks.OnUnsure != nil {
-			m.hooks.OnUnsure(m.ts, idx)
-		}
+		m.setUnsure(stop, idx)
 	default:
 		stop.Status = trip.StatusActive
 		m.advance()
+	}
+}
+
+// setUnsure marks the stop UNSURE and fires the OnUnsure hook only on the
+// transition into UNSURE, so the boarding prompt is sent once rather than on
+// every 1s tick while we wait for the answer or a clarifying fix.
+func (m *Machine) setUnsure(stop *trip.StopRecord, idx int) {
+	if stop.Status == trip.StatusUnsure {
+		return
+	}
+	stop.Status = trip.StatusUnsure
+	if m.hooks.OnUnsure != nil {
+		m.hooks.OnUnsure(m.ts, idx)
+	}
+}
+
+// setMissed marks the stop MISSED and fires the OnMissed hook only on the
+// transition into MISSED. Without this guard a fresh-GPS MISSED re-fires every
+// tick until the async reroute splices the stop away, queuing duplicate reroutes.
+func (m *Machine) setMissed(stop *trip.StopRecord, idx int) {
+	if stop.Status == trip.StatusMissed {
+		return
+	}
+	stop.Status = trip.StatusMissed
+	if m.hooks.OnMissed != nil {
+		m.hooks.OnMissed(m.ts, idx)
 	}
 }
 

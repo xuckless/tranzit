@@ -18,9 +18,11 @@ import (
 	"github.com/tranzit-route-save/internal/geo"
 )
 
-// Client fetches a route from an origin to a place-ID destination.
+// Client fetches a route from an origin to a place-ID destination. It returns the
+// parsed best route plus that route's raw Google JSON object, so the reroute
+// export can echo Google's own shape downstream (§13.2).
 type Client interface {
-	Route(ctx context.Context, origin geo.LatLng, destPlaceID string) (directions.Route, error)
+	Route(ctx context.Context, origin geo.LatLng, destPlaceID string) (directions.Route, json.RawMessage, error)
 }
 
 // HTTPClient is the tranzit-route-service-backed implementation.
@@ -47,32 +49,32 @@ type location struct {
 	Lng float64 `json:"lng"`
 }
 
-func (c *HTTPClient) Route(ctx context.Context, origin geo.LatLng, destPlaceID string) (directions.Route, error) {
+func (c *HTTPClient) Route(ctx context.Context, origin geo.LatLng, destPlaceID string) (directions.Route, json.RawMessage, error) {
 	payload, err := json.Marshal(routeRequest{
 		Origin:        location{Lat: origin.Lat, Lng: origin.Lng},
 		DestinationID: destPlaceID,
 	})
 	if err != nil {
-		return directions.Route{}, err
+		return directions.Route{}, nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/route", bytes.NewReader(payload))
 	if err != nil {
-		return directions.Route{}, err
+		return directions.Route{}, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
-		return directions.Route{}, fmt.Errorf("routeclient: POST /route: %w", err)
+		return directions.Route{}, nil, fmt.Errorf("routeclient: POST /route: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return directions.Route{}, fmt.Errorf("routeclient: /route status %d", resp.StatusCode)
+		return directions.Route{}, nil, fmt.Errorf("routeclient: /route status %d", resp.StatusCode)
 	}
 	raw, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return directions.Route{}, err
+		return directions.Route{}, nil, err
 	}
 	// route-service returns the raw Google {routes:[…]} wrapper.
-	return directions.Best(raw)
+	return directions.BestWithRaw(raw)
 }

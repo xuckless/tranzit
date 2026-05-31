@@ -1,6 +1,10 @@
 package wsproto
 
-import "github.com/tranzit-route-save/internal/trip"
+import (
+	"encoding/json"
+
+	"github.com/tranzit-route-save/internal/trip"
+)
 
 // StateMessage builds the full read-only STATE export from a TripState (§13.0).
 // Each STATE carries the entire stop list so the client can redraw the whole
@@ -36,8 +40,11 @@ func StateMessage(ts *trip.TripState, now int64) StateMsg {
 	}
 }
 
-// RerouteMessage builds the REROUTE payload from the spliced trip (§13.2).
-func RerouteMessage(ts *trip.TripState, reason string, from LatLng) RerouteMsg {
+// RerouteMessage builds the REROUTE payload from the spliced trip (§13.2). route
+// is the chosen route's raw Google JSON for the remaining journey, echoed so the
+// client re-renders directly; it may be nil (e.g. resume) in which case the field
+// is omitted.
+func RerouteMessage(ts *trip.TripState, reason string, from LatLng, route json.RawMessage) RerouteMsg {
 	legs := make([]RouteLeg, len(ts.Legs))
 	for i, leg := range ts.Legs {
 		legs[i] = RouteLeg{
@@ -47,5 +54,5 @@ func RerouteMessage(ts *trip.TripState, reason string, from LatLng) RerouteMsg {
 			TripID:   leg.TripID,
 		}
 	}
-	return RerouteMsg{Type: TypeReroute, Reason: reason, From: from, Legs: legs}
+	return RerouteMsg{Type: TypeReroute, Reason: reason, From: from, Route: route, Legs: legs}
 }

@@ -187,28 +187,35 @@ func TestHappyPath_RunToCompletion(t *testing.T) {
 	}
 }
 
-func TestArmed_NoFix_HoldsExpected(t *testing.T) {
+func TestArmed_NoFix_UnsureAsksOnce(t *testing.T) {
 	ts := makeTrip(1000)
 	clk := &FakeClock{T: 1000} // armed
 	var rec recorder
 	m := New(ts, clk, rec.hooks())
 
-	// No LOCATION ever arrived: distance defaults to 0, which must NOT read as
-	// "boarded". The stop holds EXPECTED until a fresh fix arrives.
-	m.OnTick()
+	// No LOCATION ever arrived: a never-set distance of 0 must NOT read as
+	// "boarded". With the timer armed and no fresh fix we cannot confirm boarding,
+	// so escalate to UNSURE and ask the user — but only once, even across many
+	// ticks while we wait for the answer.
+	for i := 0; i < 5; i++ {
+		m.OnTick()
+	}
 
-	if got := ts.Stops[0].Status; got != trip.StatusExpected {
-		t.Fatalf("status = %s, want EXPECTED with no fix", got)
+	if got := ts.Stops[0].Status; got != trip.StatusUnsure {
+		t.Fatalf("status = %s, want UNSURE with no fix", got)
 	}
 	if ts.CurrentStopIndex != 0 {
 		t.Errorf("index = %d, want 0 (no auto-board without a fix)", ts.CurrentStopIndex)
 	}
-	if len(rec.missed)+len(rec.unsure) != 0 {
-		t.Errorf("hooks fired without a fix: missed=%v unsure=%v", rec.missed, rec.unsure)
+	if len(rec.missed) != 0 {
+		t.Errorf("MISSED fired without a fix: %v", rec.missed)
+	}
+	if len(rec.unsure) != 1 {
+		t.Errorf("OnUnsure fired %d times, want exactly 1", len(rec.unsure))
 	}
 }
 
-func TestArmed_StaleFix_HoldsExpected(t *testing.T) {
+func TestArmed_StaleFix_AsksUnsure(t *testing.T) {
 	ts := makeTrip(1000)
 	clk := &FakeClock{T: 1000}
 	var rec recorder
@@ -216,15 +223,72 @@ func TestArmed_StaleFix_HoldsExpected(t *testing.T) {
 	setFix(m, 51.046, -114.07) // ~111m, would be MISSED if fresh
 
 	// Let the fix age past the staleness window; the bus arrives (armed) but the
-	// only fix is stale, so we hold EXPECTED rather than declaring MISSED.
+	// only fix is stale, so we ask the user rather than declaring MISSED blind.
 	clk.Advance(config.LocationStaleAfterS + 5)
 	m.OnTick()
 
-	if got := ts.Stops[0].Status; got != trip.StatusExpected {
-		t.Fatalf("status = %s, want EXPECTED with a stale fix", got)
+	if got := ts.Stops[0].Status; got != trip.StatusUnsure {
+		t.Fatalf("status = %s, want UNSURE with a stale fix", got)
 	}
 	if len(rec.missed) != 0 {
 		t.Errorf("stale fix produced MISSED: %v", rec.missed)
+	}
+}
+
+// TestUnsure_FreshFixAutoResolves pins the "GPS can auto-resolve" decision: a
+// stop sitting UNSURE (no fix) re-evaluates each tick, so a later clear fix
+// settles it — ≤20m boards and advances, >50m misses and reroutes.
+func TestUnsure_FreshFixAutoResolves(t *testing.T) {
+	t.Run("near fix boards", func(t *testing.T) {
+		ts := makeTrip(1000)
+		clk := &FakeClock{T: 1000} // armed, no fix
+		var rec recorder
+		m := New(ts, clk, rec.hooks())
+		m.OnTick()
+		if ts.Stops[0].Status != trip.StatusUnsure {
+			t.Fatalf("status = %s, want UNSURE before fix", ts.Stops[0].Status)
+		}
+		setFix(m, 51.04505, -114.07) // ~6m: within boarding radius
+		m.OnTick()
+		if ts.Stops[0].Status != trip.StatusActive {
+			t.Fatalf("status = %s, want ACTIVE after near fix", ts.Stops[0].Status)
+		}
+		if ts.CurrentStopIndex != 1 {
+			t.Errorf("index = %d, want 1 (advanced)", ts.CurrentStopIndex)
+		}
+	})
+
+	t.Run("far fix misses", func(t *testing.T) {
+		ts := makeTrip(1000)
+		clk := &FakeClock{T: 1000}
+		var rec recorder
+		m := New(ts, clk, rec.hooks())
+		m.OnTick()
+		setFix(m, 51.046, -114.07) // ~111m: beyond missed radius
+		m.OnTick()
+		if ts.Stops[0].Status != trip.StatusMissed {
+			t.Fatalf("status = %s, want MISSED after far fix", ts.Stops[0].Status)
+		}
+		if len(rec.missed) != 1 {
+			t.Errorf("OnMissed fired %d times, want exactly 1", len(rec.missed))
+		}
+	})
+}
+
+// TestMissed_FiresOnce guards against duplicate reroutes: while a fresh-GPS
+// MISSED persists across ticks (reroute is async), OnMissed fires only once.
+func TestMissed_FiresOnce(t *testing.T) {
+	ts := makeTrip(1000)
+	clk := &FakeClock{T: 1000}
+	var rec recorder
+	m := New(ts, clk, rec.hooks())
+	setFix(m, 51.046, -114.07) // ~111m, beyond missed radius
+
+	for i := 0; i < 4; i++ {
+		m.OnTick()
+	}
+	if len(rec.missed) != 1 {
+		t.Errorf("OnMissed fired %d times across ticks, want exactly 1", len(rec.missed))
 	}
 }
 

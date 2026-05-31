@@ -74,6 +74,36 @@ func Best(raw []byte) (Route, error) {
 	return best, nil
 }
 
+// BestWithRaw is Best plus the *raw JSON object* of the chosen route, so callers
+// can echo Google's own route shape downstream (the REROUTE export, §13.2) for
+// the client to re-render without recomputing from our parsed model.
+func BestWithRaw(raw []byte) (Route, json.RawMessage, error) {
+	var resp struct {
+		Routes []json.RawMessage `json:"routes"`
+	}
+	if err := json.Unmarshal(raw, &resp); err != nil {
+		return Route{}, nil, fmt.Errorf("directions: decode response: %w", err)
+	}
+	if len(resp.Routes) == 0 {
+		return Route{}, nil, fmt.Errorf("directions: response contained no routes")
+	}
+	bestIdx := 0
+	best, err := ParseSingle(resp.Routes[0])
+	if err != nil {
+		return Route{}, nil, fmt.Errorf("directions: route 0: %w", err)
+	}
+	for i := 1; i < len(resp.Routes); i++ {
+		r, err := ParseSingle(resp.Routes[i])
+		if err != nil {
+			return Route{}, nil, fmt.Errorf("directions: route %d: %w", i, err)
+		}
+		if r.DurationS < best.DurationS {
+			best, bestIdx = r, i
+		}
+	}
+	return best, resp.Routes[bestIdx], nil
+}
+
 // segmentLegs walks the (single) Google leg's steps and collapses them into
 // mode segments: consecutive WALK steps become one walk leg, each TRANSIT step
 // becomes its own bus leg.

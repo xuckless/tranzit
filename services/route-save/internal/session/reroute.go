@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"log"
 
 	"github.com/tranzit-route-save/internal/geo"
@@ -17,10 +18,12 @@ type rerouteReq struct {
 	notify         *wsproto.NotifyMsg // sent on dispatch (Case 1)
 }
 
-// rerouteResult carries an async /route + rebuild back to the loop.
+// rerouteResult carries an async /route + rebuild back to the loop. raw is the
+// chosen route's Google JSON, echoed downstream on REROUTE (§13.2).
 type rerouteResult struct {
 	req     rerouteReq
 	newTrip *trip.TripState
+	raw     json.RawMessage
 	err     error
 }
 
@@ -48,8 +51,15 @@ func (s *Session) onMissed(ts *trip.TripState, stopIdx int) {
 			Message: "Your transfer will be missed. Rerouting.",
 		}
 	} else {
-		// Case 2 (§9.2): reroute from the user's current location.
-		req.origin = ts.UserLocation.Loc
+		// Case 2 (§9.2): reroute from the rider's live fix when it is fresh. With
+		// no fresh fix — the timer-driven MISSED with GPS silent, which is exactly
+		// when this fires — fall back to the planned stop they were meant to board,
+		// so the new route still has a valid origin.
+		if loc, ok := s.machine.FreshUserFix(); ok {
+			req.origin = loc
+		} else {
+			req.origin = ts.Stops[stopIdx].Loc()
+		}
 		req.keepThroughIdx = ts.CurrentStopIndex - 1
 	}
 
@@ -107,13 +117,13 @@ func (s *Session) dispatchPendingReroute() {
 // fetchReroute calls route-service and rebuilds the remaining legs off the loop,
 // then posts the result back for splicing.
 func (s *Session) fetchReroute(req rerouteReq, sessionID string, dest geo.LatLng) {
-	route, err := s.deps.Routes.Route(s.ctx, req.origin, s.destPlaceID)
+	route, raw, err := s.deps.Routes.Route(s.ctx, req.origin, s.destPlaceID)
 	var newTrip *trip.TripState
 	if err == nil {
 		newTrip, err = trip.BuildTrip(sessionID, req.origin, dest, route, s.deps.Data)
 	}
 	select {
-	case s.rerouteOut <- rerouteResult{req: req, newTrip: newTrip, err: err}:
+	case s.rerouteOut <- rerouteResult{req: req, newTrip: newTrip, raw: raw, err: err}:
 	case <-s.done:
 	}
 }
@@ -139,7 +149,7 @@ func (s *Session) applyReroute(res rerouteResult) {
 			res.req.origin.Lat, res.req.origin.Lng, len(s.trip.Legs))
 	}
 	s.enqueue(wsproto.RerouteMessage(s.trip, res.req.reason,
-		wsproto.LatLng{Lat: res.req.origin.Lat, Lng: res.req.origin.Lng}))
+		wsproto.LatLng{Lat: res.req.origin.Lat, Lng: res.req.origin.Lng}, res.raw))
 	s.forcePushState()
 }
 

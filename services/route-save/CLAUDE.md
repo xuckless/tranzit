@@ -589,13 +589,36 @@ goroutine. Verified with `go test -race`.
   wired**; the realistic v1 path is Case 2 (off-bus, reroute from user location),
   which is implemented and tested. Case 1 branch exists but is rarely reached given
   the transfer-while-riding exemption.
-- **GPS-gated evaluation (as-built, P0).** The MISSED/boarding call is made only
-  from a **fresh** fix: `UserLocation.RecvAt` is server-stamped and a fix older than
-  `LOCATION_STALE_AFTER_S` (or never set) holds the active stop `EXPECTED` instead of
-  auto-resolving — a zero `user_distance_m` no longer reads as "boarded". `OnTick`
-  recomputes the active stop's distance from the latest fresh fix every tick (not just
-  on the 5s LOCATION frame), so the reroute decision and origin track the rider's live
-  position. The `MISSED …` decision and the reroute origin are logged to `docker logs`.
+- **Timer-driven escalation, GPS as confirming signal (as-built, P0).** The timer
+  is the initiator (§8) and must not stall when GPS is silent (backgrounded app,
+  tunnel, GPS not yet acquired). At trigger (armed) on a FETCHED boarding stop,
+  `state.evaluate`: with **no fresh fix** (`UserLocation.RecvAt` server-stamped, older
+  than `LOCATION_STALE_AFTER_S` or never set) → `UNSURE` and prompt the user, rather
+  than declaring MISSED blind or holding `EXPECTED` forever (a zero `user_distance_m`
+  never reads as "boarded"); with a **fresh fix** → the distance tiers (`≤20m` ACTIVE/
+  board, `20–50m` UNSURE, `>50m` MISSED). `UNSURE` is **not** locked — each tick
+  re-evaluates, so a later clear fix auto-resolves it (`≤20m`→ACTIVE, `>50m`→MISSED),
+  and `UNSURE_RESPONSE{boarded}` resolves it explicitly (`ResolveUnsure`). There is no
+  UNSURE timeout: the user's answer or a clear fix are the only resolvers. `OnUnsure`
+  and `OnMissed` fire **once** on the transition into the state (`setUnsure`/`setMissed`
+  guards) so the prompt isn't re-sent and the async reroute isn't double-queued each
+  tick. `OnTick` recomputes the active stop's distance from the latest fresh fix every
+  tick (not just on the 5s LOCATION frame), so the decision and reroute origin track the
+  rider's live position. The `MISSED …` decision and the reroute origin are logged to
+  `docker logs`.
+- **Reroute origin falls back to the planned stop (as-built).** Case 2 (off-bus)
+  reroutes from the rider's **fresh fix** when available, else from the **planned
+  (missed) stop's lat-lng** (`Machine.FreshUserFix`) — the no-GPS MISSED is exactly when
+  this matters, and a `0,0` origin would otherwise be sent to `/route`. Destination is
+  always the session destination place ID.
+- **REROUTE echoes the raw Google route (as-built).** `/route` returns Google's
+  `{routes:[…]}`; `directions.BestWithRaw` keeps the chosen route's **raw JSON object**
+  alongside the parsed `Route`, threaded through `routeclient.Client`→`rerouteResult`→
+  `RerouteMessage` into `RerouteMsg.Route` (`json:"route,omitempty"`). The payload is the
+  remaining journey (origin→destination), so the client re-renders from the same shape it
+  originally fetched; the server keeps the COMPLETED prefix via `Splice`. STATE keeps the
+  existing string statuses — no new flag field; the client maps `UNSURE`→prompt,
+  `MISSED`→consume new directions.
 - **Downstream STATE push is throttled (as-built, P0).** The 1s tick drives the
   machine but no longer pushes inline; a `CLIENT_PUSH_INTERVAL_S` (2s) ticker flushes a
   single coalesced, version-bumped STATE only when state changed. `REROUTE`/`NOTIFY`

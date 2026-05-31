@@ -86,12 +86,16 @@ type StateStop struct {
 	Lng            float64 `json:"lng"`
 }
 
-// RerouteMsg announces a dynamic switch (§13.2).
+// RerouteMsg announces a dynamic switch (§13.2). Route is the raw Google route
+// object for the remaining journey (origin→destination), echoed verbatim so the
+// client re-renders from the same shape it originally fetched; Legs is the
+// server's parsed summary of the same spliced trip.
 type RerouteMsg struct {
-	Type   string     `json:"type"`
-	Reason string     `json:"reason"`
-	From   LatLng     `json:"from"`
-	Legs   []RouteLeg `json:"legs"`
+	Type   string          `json:"type"`
+	Reason string          `json:"reason"`
+	From   LatLng          `json:"from"`
+	Route  json.RawMessage `json:"route,omitempty"`
+	Legs   []RouteLeg      `json:"legs"`
 }
 
 // LatLng is a coordinate pair for the reroute origin.
