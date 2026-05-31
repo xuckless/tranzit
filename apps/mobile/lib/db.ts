@@ -31,14 +31,21 @@ export interface QuickAccessPlace {
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
+let _openPromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
-export async function getDb(): Promise<SQLite.SQLiteDatabase> {
-  if (_db) return _db;
-  _db = await SQLite.openDatabaseAsync("tranzit.db");
-  await _db.runAsync("PRAGMA journal_mode = WAL");
-  await _db.runAsync("PRAGMA foreign_keys = ON");
-  await _initSchema(_db);
-  return _db;
+export function getDb(): Promise<SQLite.SQLiteDatabase> {
+  if (_db) return Promise.resolve(_db);
+  if (!_openPromise) _openPromise = _openDb();
+  return _openPromise;
+}
+
+async function _openDb(): Promise<SQLite.SQLiteDatabase> {
+  const db = await SQLite.openDatabaseAsync("tranzit.db");
+  await db.runAsync("PRAGMA journal_mode = WAL");
+  await db.runAsync("PRAGMA foreign_keys = ON");
+  await _initSchema(db);
+  _db = db;
+  return db;
 }
 
 async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {

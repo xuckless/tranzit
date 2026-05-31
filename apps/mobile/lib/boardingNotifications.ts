@@ -39,10 +39,8 @@ export async function scheduleBoarding(
   stopName: string,
   sessionId: string,
 ): Promise<void> {
-  // expo doesn't re-export PermissionResponse, so NotificationPermissionsStatus
-  // loses its inherited fields at the type level — cast to access .granted
-  const perms = await Notifications.requestPermissionsAsync();
-  if (!(perms as unknown as { granted: boolean }).granted) return;
+  const { granted } = await Notifications.requestPermissionsAsync();
+  if (!granted) return;
 
   const data = { stopId, sessionId };
   const baseContent: Notifications.NotificationContentInput = {
