@@ -1,3 +1,5 @@
+import type { Route } from "@/types/places";
+
 export type ServerStopStatus =
   | "EXPECTED"
   | "ACTIVE"
@@ -29,6 +31,7 @@ export interface TripRerouteMsg {
   type: "REROUTE";
   reason: string;
   from: { lat: number; lng: number };
+  route: Route;
   legs: Array<{
     leg_index: number;
     mode: string;

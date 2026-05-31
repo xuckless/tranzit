@@ -414,10 +414,21 @@ export default function CommuteScreen() {
   // ── REROUTE handler ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastReroute) return;
+    setRoute(lastReroute.route);
+    setBoardingConfirmStop(null);
     setReroutingVisible(true);
     const t = setTimeout(() => setReroutingVisible(false), 3000);
     return () => clearTimeout(t);
   }, [lastReroute]);
+
+  // ── Auto-dismiss boarding prompt when stop leaves UNSURE ───────────────────
+  useEffect(() => {
+    if (!boardingConfirmStop || !tripState) return;
+    const stop = tripState.stops.find((s) => s.stop_id === boardingConfirmStop);
+    if (!stop || stop.status !== "UNSURE") {
+      setBoardingConfirmStop(null);
+    }
+  }, [tripState, boardingConfirmStop]);
 
   // ── GPS subscription ──────────────────────────────────────────────────────
   useEffect(() => {
