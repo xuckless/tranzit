@@ -102,6 +102,8 @@ export default function RouteScreen() {
   const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
   const [routeError, setRouteError] = useState<string | null>(null);
   const [activeFilter, setActiveFilter] = useState<FilterMode>("All");
+  const [isStarting, setIsStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
 
   const originSearch = useDestinationSearch(gpsLocation);
   const destinationSearch = useDestinationSearch(gpsLocation);
@@ -428,26 +430,68 @@ export default function RouteScreen() {
     router.navigate("/(tabs)/map" as never);
   }, [originSearch, destinationSearch, gpsLocation, router]);
 
-  const handleStart = useCallback(() => {
-    if (!selectedRoute || !destination || !origin) return;
-    routeStore.setSelectedRoute(selectedRoute);
-    routeStore.setDestination({
-      label: destinationLabel,
-      lat: destination.lat,
-      lng: destination.lng,
-      placeId: destination.placeId,
-    });
-    routeStore.setOrigin({
-      label: originLabel,
-      lat: origin.lat,
-      lng: origin.lng,
-      placeId: origin.placeId,
-    });
-    router.navigate("/(tabs)/commute" as never);
+  const handleStart = useCallback(async () => {
+    const effectiveOrigin =
+      origin ??
+      (gpsLocation
+        ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+        : null);
+    if (!selectedRoute || !destination?.placeId || !effectiveOrigin) return;
+
+    setIsStarting(true);
+    setStartError(null);
+
+    try {
+      const routeSaveUrl = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL;
+      if (!routeSaveUrl) throw new Error("ROUTE_SAVE_URL not configured");
+
+      const resp = await fetch(`${routeSaveUrl}/trips`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          route: selectedRoute,
+          destination_place_id: destination.placeId,
+          origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
+        }),
+      });
+
+      if (!resp.ok) {
+        const body = await resp.text().catch(() => "");
+        throw new Error(`${resp.status}${body ? `: ${body}` : ""}`);
+      }
+
+      const { session_id, ws_url } = (await resp.json()) as {
+        session_id: string;
+        ws_url: string;
+      };
+
+      routeStore.setSelectedRoute(selectedRoute);
+      routeStore.setDestination({
+        label: destinationLabel,
+        lat: destination.lat,
+        lng: destination.lng,
+        placeId: destination.placeId,
+      });
+      routeStore.setOrigin({
+        label: originLabel,
+        lat: effectiveOrigin.lat,
+        lng: effectiveOrigin.lng,
+        placeId: origin?.placeId,
+      });
+      routeStore.setTripSession({ sessionId: session_id, wsUrl: ws_url });
+
+      router.navigate("/(tabs)/commute" as never);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : "Unknown error";
+      setStartError(`Could not start trip: ${msg}`);
+    } finally {
+      setIsStarting(false);
+    }
   }, [
     selectedRoute,
     destination,
     origin,
+    gpsLocation,
     destinationLabel,
     originLabel,
     router,
@@ -815,13 +859,23 @@ export default function RouteScreen() {
 
       {selectedRoute && !focusedField && (
         <View style={styles.startWrap}>
+          {startError && (
+            <Text style={styles.startErrorText}>{startError}</Text>
+          )}
           <TouchableOpacity
-            style={styles.startBtn}
+            style={[styles.startBtn, isStarting && styles.startBtnDisabled]}
             onPress={handleStart}
+            disabled={isStarting}
             activeOpacity={0.85}
           >
-            <Ionicons name="navigate" size={18} color="white" />
-            <Text style={styles.startBtnText}>Start Journey</Text>
+            {isStarting ? (
+              <ActivityIndicator size="small" color="white" />
+            ) : (
+              <Ionicons name="navigate" size={18} color="white" />
+            )}
+            <Text style={styles.startBtnText}>
+              {isStarting ? "Starting…" : "Start Journey"}
+            </Text>
           </TouchableOpacity>
         </View>
       )}
@@ -976,5 +1030,13 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "white",
     letterSpacing: 0.3,
+  },
+  startBtnDisabled: { opacity: 0.6 },
+  startErrorText: {
+    fontSize: theme.fontSize.caption,
+    color: theme.colors.error,
+    textAlign: "center",
+    marginBottom: 8,
+    fontWeight: "600",
   },
 });

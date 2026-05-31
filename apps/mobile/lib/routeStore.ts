@@ -1,4 +1,5 @@
 import type { Route } from "@/types/places";
+import type { TripSession } from "@/types/trip";
 
 interface StoredLocation {
   label: string;
@@ -11,6 +12,7 @@ let _selectedRoute: Route | null = null;
 let _routes: Route[] = [];
 let _destination: StoredLocation | null = null;
 let _origin: StoredLocation | null = null;
+let _tripSession: TripSession | null = null;
 
 export const routeStore = {
   setSelectedRoute(r: Route | null): void {
@@ -41,10 +43,18 @@ export const routeStore = {
     return _origin;
   },
 
+  setTripSession(s: TripSession | null): void {
+    _tripSession = s;
+  },
+  getTripSession(): TripSession | null {
+    return _tripSession;
+  },
+
   /** Ends the active journey but keeps cached routes/origin/destination so the
    *  Routes screen can restore its previous results without re-fetching. */
   clearJourney(): void {
     _selectedRoute = null;
+    _tripSession = null;
   },
 
   clear(): void {
@@ -52,5 +62,6 @@ export const routeStore = {
     _routes = [];
     _destination = null;
     _origin = null;
+    _tripSession = null;
   },
 };
