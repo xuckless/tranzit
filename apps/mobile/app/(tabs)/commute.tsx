@@ -29,8 +29,10 @@ import { theme, PASTELS } from "@/styles/theme";
 import { routeStore } from "@/lib/routeStore";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
+import { scheduleBoarding, cancelBoarding } from "@/lib/boardingNotifications";
+import { startTripActivity, updateTripActivity, endTripActivity } from "@/lib/liveActivity";
 import type { Route } from "@/types/places";
-import type { ServerStopStatus } from "@/types/trip";
+import type { ServerStopStatus, TripStateMsg } from "@/types/trip";
 
 const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
 const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
@@ -372,6 +374,11 @@ export default function CommuteScreen() {
   // Throttle LOCATION sends to ~5 s
   const lastLocationSentRef = useRef<number>(0);
 
+  // Cross-effect refs (avoid stale deps)
+  const boardingConfirmStopRef = useRef<string | null>(null);
+  const tripStateRef = useRef<TripStateMsg | null>(null);
+  const activityStartedRef = useRef(false);
+
   const allVehicles = useVehicles();
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
@@ -397,24 +404,38 @@ export default function CommuteScreen() {
         setReportSelected(null);
         setReportSeverity(1);
         setReportSent(false);
+        activityStartedRef.current = false;
       }
     }, []),
   );
+
+  // ── Keep cross-effect refs in sync ────────────────────────────────────────
+  useEffect(() => { boardingConfirmStopRef.current = boardingConfirmStop; }, [boardingConfirmStop]);
+  useEffect(() => { tripStateRef.current = tripState; }, [tripState]);
 
   // ── NOTIFY handler ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastNotify) return;
     if (lastNotify.kind === "CONFIRM_BOARDING" && lastNotify.requires_response) {
       setBoardingConfirmStop(lastNotify.stop_id);
+      if (sessionId) {
+        const matchingStop = tripStateRef.current?.stops.find(
+          (s) => s.stop_id === lastNotify.stop_id,
+        );
+        const stopName = matchingStop?.stop_name ?? lastNotify.stop_id;
+        scheduleBoarding(lastNotify.stop_id, stopName, sessionId);
+      }
     } else {
       setNotifyBanner(lastNotify.message);
     }
-  }, [lastNotify]);
+  }, [lastNotify, sessionId]);
 
   // ── REROUTE handler ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastReroute) return;
     setRoute(lastReroute.route);
+    const prevStop = boardingConfirmStopRef.current;
+    if (prevStop) cancelBoarding(prevStop);
     setBoardingConfirmStop(null);
     setReroutingVisible(true);
     const t = setTimeout(() => setReroutingVisible(false), 3000);
@@ -426,6 +447,7 @@ export default function CommuteScreen() {
     if (!boardingConfirmStop || !tripState) return;
     const stop = tripState.stops.find((s) => s.stop_id === boardingConfirmStop);
     if (!stop || stop.status !== "UNSURE") {
+      cancelBoarding(boardingConfirmStop);
       setBoardingConfirmStop(null);
     }
   }, [tripState, boardingConfirmStop]);
@@ -654,6 +676,61 @@ export default function CommuteScreen() {
     [stops],
   );
 
+  // ── Live Activity / persistent trip notification ───────────────────────────
+  useEffect(() => {
+    if (!tripState?.stops?.length) return;
+
+    const activeIdx = tripState.stops.findIndex(
+      (s) => s.status === "ACTIVE" || s.status === "UNSURE",
+    );
+    const currentStop =
+      activeIdx >= 0 ? tripState.stops[activeIdx] : tripState.stops[0];
+    const nextStop = activeIdx >= 0 ? (tripState.stops[activeIdx + 1] ?? null) : null;
+    const lastStop = tripState.stops[tripState.stops.length - 1];
+    const etaMin = lastStop
+      ? Math.max(0, Math.round((lastStop.eta - Date.now() / 1000) / 60))
+      : 0;
+
+    const completedCount = tripState.stops.filter(
+      (s) => s.status === "COMPLETED" || s.status === "MISSED",
+    ).length;
+    const journeyFraction =
+      tripState.stops.length > 0 ? completedCount / tripState.stops.length : 0;
+
+    const windowStart = Math.max(0, activeIdx - 2);
+    const windowEnd = Math.min(tripState.stops.length, activeIdx < 0 ? 5 : activeIdx + 3);
+    const dotWindow = tripState.stops.slice(windowStart, windowEnd);
+    const progressDots = dotWindow.map(
+      (s): "departed" | "current" | "upcoming" => {
+        if (s.status === "COMPLETED" || s.status === "MISSED") return "departed";
+        if (s.status === "ACTIVE" || s.status === "UNSURE") return "current";
+        return "upcoming";
+      },
+    );
+
+    const routeName =
+      currentStop?.route_id ||
+      tripState.stops.find((s) => s.route_id)?.route_id ||
+      "Transit";
+
+    const input = {
+      routeName,
+      destination: destinationInfo?.label ?? "Destination",
+      currentStopName: currentStop?.stop_name ?? "—",
+      nextStopName: nextStop?.stop_name ?? destinationInfo?.label ?? "—",
+      etaMinutes: etaMin,
+      progressDots,
+      journeyFraction,
+    };
+
+    if (!activityStartedRef.current) {
+      activityStartedRef.current = true;
+      startTripActivity(input);
+    } else {
+      updateTripActivity(input);
+    }
+  }, [tripState, destinationInfo]);
+
   // ── ETA from server ────────────────────────────────────────────────────────
   const etaMinutes = useMemo(() => {
     const serverStops = tripState?.stops;
@@ -750,6 +827,8 @@ export default function CommuteScreen() {
 
   // ── End journey ───────────────────────────────────────────────────────────
   const handleExit = useCallback(async () => {
+    endTripActivity();
+    activityStartedRef.current = false;
     disconnect();
     if (sessionId && ROUTE_SAVE_URL) {
       fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, { method: "DELETE" }).catch(
@@ -809,6 +888,7 @@ export default function CommuteScreen() {
                 style={[styles.boardingConfirmBtn, styles.boardingConfirmYes]}
                 onPress={() => {
                   sendUnsureResponse(boardingConfirmStop, true);
+                  cancelBoarding(boardingConfirmStop);
                   setBoardingConfirmStop(null);
                 }}
                 activeOpacity={0.85}
@@ -819,6 +899,7 @@ export default function CommuteScreen() {
                 style={[styles.boardingConfirmBtn, styles.boardingConfirmNo]}
                 onPress={() => {
                   sendUnsureResponse(boardingConfirmStop, false);
+                  cancelBoarding(boardingConfirmStop);
                   setBoardingConfirmStop(null);
                 }}
                 activeOpacity={0.85}
