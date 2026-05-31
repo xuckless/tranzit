@@ -144,6 +144,18 @@ function formatTimeDelta(secs: number): string {
   return "On time";
 }
 
+// ─── DashedConnector ─────────────────────────────────────────────────────────
+
+function DashedConnector() {
+  return (
+    <View style={{ flex: 1, alignItems: "center", marginTop: 3 }}>
+      {Array.from({ length: 8 }).map((_, i) => (
+        <View key={i} style={{ width: 2, height: 4, backgroundColor: "#BBCBB9", marginBottom: 3, borderRadius: 1 }} />
+      ))}
+    </View>
+  );
+}
+
 // ─── ReportIcon ───────────────────────────────────────────────────────────────
 
 function ReportIcon({ lib, name, size, color }: { lib: "ionicons" | "fa5" | "fa6" | "mci"; name: string; size: number; color: string }) {
@@ -225,7 +237,7 @@ function StopItem({
 
         {connectorType !== "none" &&
           (connectorType === "dashed" ? (
-            <View style={styles.connectorDashed} />
+            <DashedConnector />
           ) : (
             <View
               style={[
@@ -703,6 +715,13 @@ export default function CommuteScreen() {
     );
   }, [completedStopCount, stops.length, progressLabels.length]);
 
+  const serverStopTotal = tripState?.stops?.length ?? 0;
+  const serverStopCompleted = useMemo(
+    () => (tripState?.stops ?? []).filter((s) => s.status === "COMPLETED").length,
+    [tripState],
+  );
+  const progressFillPct = serverStopTotal > 1 ? serverStopCompleted / (serverStopTotal - 1) : 0;
+
   // ── Boarding instruction ──────────────────────────────────────────────────
   const boardingStep = useMemo(() => {
     if (!route) return null;
@@ -940,24 +959,27 @@ export default function CommuteScreen() {
 
         {/* ── Hero Section ── */}
         <View style={styles.hero}>
-          {boardingStep && (
-            <View style={styles.lineBadge}>
-              <Ionicons name="bus-outline" size={13} color={theme.colors.primaryInk} />
-              <Text style={styles.lineBadgeText}>
-                {boardingStep.transitDetails?.transitLine?.nameShort ||
-                  boardingStep.transitDetails?.transitLine?.name ||
-                  "Transit"}
-                {boardingStep.transitDetails?.headsign
-                  ? ` · ${boardingStep.transitDetails.headsign}`
-                  : ""}
-              </Text>
-            </View>
-          )}
-
-          {co2Saved != null && (
-            <View style={styles.heroCo2Row}>
-              <MaterialCommunityIcons name="leaf" size={14} color={theme.colors.primaryInk} />
-              <Text style={styles.heroCo2Text}>{co2Saved} kg CO₂ saved</Text>
+          {(boardingStep || co2Saved != null) && (
+            <View style={styles.heroBadgeRow}>
+              {boardingStep ? (
+                <View style={styles.lineBadge}>
+                  <Ionicons name="bus-outline" size={13} color={theme.colors.primaryInk} />
+                  <Text style={styles.lineBadgeText}>
+                    {boardingStep.transitDetails?.transitLine?.nameShort ||
+                      boardingStep.transitDetails?.transitLine?.name ||
+                      "Transit"}
+                    {boardingStep.transitDetails?.headsign
+                      ? ` · ${boardingStep.transitDetails.headsign}`
+                      : ""}
+                  </Text>
+                </View>
+              ) : <View />}
+              {co2Saved != null ? (
+                <View style={styles.heroCo2Row}>
+                  <MaterialCommunityIcons name="leaf" size={14} color={theme.colors.primaryInk} />
+                  <Text style={styles.heroCo2Text}>{co2Saved} kg CO₂ saved</Text>
+                </View>
+              ) : <View />}
             </View>
           )}
 
@@ -1000,19 +1022,20 @@ export default function CommuteScreen() {
               </View>
             </View>
 
-            <View style={styles.progressRow}>
-              {progressLabels.map((_, i) => (
+            <View style={styles.progressBarTrack}>
+              <View style={[styles.progressBarFill, { width: `${progressFillPct * 100}%` as any }]} />
+              {progressFillPct > 0 && progressFillPct < 1 && (
+                <View style={[styles.progressThumb, { left: `${progressFillPct * 100}%` as any }]} />
+              )}
+              {serverStopTotal > 1 && Array.from({ length: serverStopTotal }).map((_, i) => (
                 <View
                   key={i}
                   style={[
-                    styles.progressSegment,
-                    i < completedProgressSteps && styles.progressSegmentDone,
+                    styles.progressTick,
+                    { left: `${(i / (serverStopTotal - 1)) * 100}%` as any },
+                    i < serverStopCompleted ? styles.progressTickDone : undefined,
                   ]}
-                >
-                  {i === completedProgressSteps - 1 && (
-                    <View style={styles.progressThumb} />
-                  )}
-                </View>
+                />
               ))}
             </View>
 
@@ -1349,6 +1372,12 @@ const styles = StyleSheet.create({
     paddingBottom: 18,
     backgroundColor: theme.colors.surface,
   },
+  heroBadgeRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
   lineBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1358,7 +1387,6 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 99,
     alignSelf: "flex-start",
-    marginBottom: 10,
   },
   lineBadgeText: {
     fontSize: 13,
@@ -1375,7 +1403,6 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 99,
     alignSelf: "flex-start",
-    marginBottom: 8,
   },
   heroCo2Text: {
     fontSize: 12,
@@ -1435,19 +1462,34 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
   },
   arrivalBadgeText: { fontSize: 18, fontWeight: "700", color: theme.colors.primary },
-  progressRow: { flexDirection: "row", gap: 4, alignItems: "center", marginBottom: 8 },
-  progressSegment: {
-    flex: 1,
+  progressBarTrack: {
     height: 10,
     backgroundColor: theme.colors.surface2,
     borderRadius: 99,
     position: "relative",
     justifyContent: "center",
+    marginBottom: 8,
+    overflow: "visible",
   },
-  progressSegmentDone: { backgroundColor: theme.colors.primary },
+  progressBarFill: {
+    height: 10,
+    backgroundColor: theme.colors.primary,
+    borderRadius: 99,
+    position: "absolute",
+    left: 0,
+  },
+  progressTick: {
+    position: "absolute",
+    width: 2,
+    height: 14,
+    marginLeft: -1,
+    backgroundColor: theme.colors.surface,
+    borderRadius: 1,
+  },
+  progressTickDone: { backgroundColor: theme.colors.primary },
   progressThumb: {
     position: "absolute",
-    right: -2,
+    marginLeft: -9,
     width: 18,
     height: 18,
     borderRadius: 9,
@@ -1553,14 +1595,6 @@ const styles = StyleSheet.create({
   },
 
   connectorSolid: { flex: 1, width: 2, marginTop: 3, borderRadius: 1 },
-  connectorDashed: {
-    flex: 1,
-    width: 0,
-    borderLeftWidth: 2,
-    borderLeftColor: "#BBCBB9",
-    borderStyle: "dashed",
-    marginTop: 3,
-  },
 
   stopContentOuter: { flex: 1, paddingBottom: 20, paddingTop: 6, gap: 3 },
   stopContentOuterCurrent: {
@@ -1592,7 +1626,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   stopName: { flex: 1, fontSize: 15, color: theme.colors.ink, lineHeight: 22 },
-  stopNameDeparted: { textDecorationLine: "line-through", color: theme.colors.ink3 },
+  stopNameDeparted: { color: theme.colors.ink3 },
   stopNameMissed: { color: "#EF4444" },
   stopNameDestination: { fontSize: 16, fontWeight: "700", color: theme.colors.ink },
   currentStopName: { flex: 1, fontSize: 16, fontWeight: "700", color: theme.colors.primary, lineHeight: 22 },
