@@ -69,6 +69,7 @@ interface CommuteStop {
   mode: "WALK" | "TRANSIT";
   transitName?: string;
   transitColor?: string;
+  timeRemaining?: number;
 }
 
 const REPORT_TYPES: ReportType[] = [
@@ -134,6 +135,13 @@ function formatEta(eta: number): string {
     minute: "2-digit",
     hour12: false,
   });
+}
+
+function formatTimeDelta(secs: number): string {
+  const mins = Math.round(Math.abs(secs) / 60);
+  if (secs > 60) return `+${mins} min`;
+  if (secs < -60) return `-${mins} min`;
+  return "On time";
 }
 
 // ─── ReportIcon ───────────────────────────────────────────────────────────────
@@ -260,6 +268,18 @@ function StopItem({
                   : `${stop.transitName ? `${stop.transitName} · ` : ""}Current Stop`}
               </Text>
             </View>
+            {stop.timeRemaining !== undefined && (
+              <View style={styles.stopMetaRow}>
+                <Text style={[
+                  styles.stopTimeDelta,
+                  stop.timeRemaining > 60 ? styles.stopTimeDeltaUpcoming
+                    : stop.timeRemaining < -60 ? styles.stopTimeDeltaPast
+                    : styles.stopTimeDeltaOnTime,
+                ]}>
+                  {formatTimeDelta(stop.timeRemaining)}
+                </Text>
+              </View>
+            )}
           </>
         ) : (
           <>
@@ -286,6 +306,26 @@ function StopItem({
             )}
             {isMissed && (
               <Text style={styles.missedLabel}>Missed</Text>
+            )}
+            {stop.mode === "TRANSIT" && (stop.transitName || stop.timeRemaining !== undefined) && (
+              <View style={styles.stopMetaRow}>
+                {stop.transitName && (
+                  <View style={styles.stopRouteBadge}>
+                    <Ionicons name="bus-outline" size={10} color={theme.colors.ink3} />
+                    <Text style={styles.stopRouteBadgeText}>{stop.transitName}</Text>
+                  </View>
+                )}
+                {stop.timeRemaining !== undefined && (
+                  <Text style={[
+                    styles.stopTimeDelta,
+                    stop.timeRemaining > 60 ? styles.stopTimeDeltaUpcoming
+                      : stop.timeRemaining < -60 ? styles.stopTimeDeltaPast
+                      : styles.stopTimeDeltaOnTime,
+                  ]}>
+                    {formatTimeDelta(stop.timeRemaining)}
+                  </Text>
+                )}
+              </View>
             )}
           </>
         )}
@@ -488,6 +528,7 @@ export default function CommuteScreen() {
       coordinate: { latitude: s.lat, longitude: s.lng },
       mode: "TRANSIT",
       transitName: s.route_id || undefined,
+      timeRemaining: s.eta > 0 ? s.time_remaining_s : undefined,
     }));
 
     return [
@@ -1573,6 +1614,24 @@ const styles = StyleSheet.create({
   },
   destinationLabel: { fontSize: 12, color: theme.colors.ink3, fontStyle: "italic" },
   missedLabel: { fontSize: 12, color: "#EF4444", fontWeight: "700" },
+
+  stopMetaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 },
+  stopRouteBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 3,
+    backgroundColor: theme.colors.surface2,
+    borderRadius: 99,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: theme.colors.divider,
+  },
+  stopRouteBadgeText: { fontSize: 10, fontWeight: "700", color: theme.colors.ink3, letterSpacing: 0.2 },
+  stopTimeDelta: { fontSize: 11, fontWeight: "600" },
+  stopTimeDeltaUpcoming: { color: theme.colors.primary },
+  stopTimeDeltaOnTime: { color: "#16A34A" },
+  stopTimeDeltaPast: { color: theme.colors.ink3 },
 
   // ── Boarding card ────────────────────────────────────────────────────────
   boardingCard: {
