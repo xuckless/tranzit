@@ -73,8 +73,12 @@ func (m *Middleware) fetchTrip(ctx context.Context, tripID string) ([]Arrival, e
 func (m *Middleware) queryPage(ctx context.Context, tripID string, offset int) ([]map[string]any, error) {
 	q := url.Values{
 		"trip_id": {tripID},
-		"limit":   {strconv.Itoa(pageSize)},
-		"offset":  {strconv.Itoa(offset)},
+		// active=1: server-now future-only filter. A reused trip_id can have stale
+		// rows from a previous service day in the table; without this an already-
+		// departed arrival_time could clobber a good ETA back into the past.
+		"active": {"1"},
+		"limit":  {strconv.Itoa(pageSize)},
+		"offset": {strconv.Itoa(offset)},
 	}
 	u := fmt.Sprintf("%s/api/v1/stop_time_updates?%s", m.BaseURL, q.Encode())
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)

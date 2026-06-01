@@ -15,7 +15,11 @@ import (
 //
 // Stop names come from the GTFS catalog (datasource), which—unlike Google—covers
 // the intermediate stops the STATE export needs (§13).
-func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route, ds datasource.DataSource) (*TripState, error) {
+//
+// now is the server clock, used by resolution to exclude already-departed runs
+// (§5.2). When no future run serves a bus leg, BuildTrip fails (surfacing as a 422
+// at POST /trips / a logged "reroute failed" rather than indexing a past bus).
+func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route, ds datasource.DataSource, now int64) (*TripState, error) {
 	ts := &TripState{
 		SessionID:        sessionID,
 		Origin:           origin,
@@ -35,7 +39,7 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		if pl.Mode == directions.ModeBus {
 			// Resolve the trip_id and load only its entry→exit stops (§5). HTTPSource
 			// uses a stop-scoped fast path; other sources scan candidates.
-			tripID, stops, err := datasource.ResolveLeg(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch)
+			tripID, stops, err := datasource.ResolveLeg(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch, now)
 			if err != nil {
 				return nil, fmt.Errorf("build trip: leg %d: %w", li, err)
 			}

@@ -50,6 +50,10 @@ func (m *Manager) Create(ts *trip.TripState, destPlaceID string) *Session {
 	return s
 }
 
+// Now returns the shared clock's current Unix time, so HTTP handlers building a
+// trip resolve against the same clock the sessions tick on.
+func (m *Manager) Now() int64 { return m.deps.Clock.Now() }
+
 // Get returns the session by id, or nil.
 func (m *Manager) Get(id string) *Session {
 	m.mu.RLock()

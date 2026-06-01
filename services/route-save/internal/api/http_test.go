@@ -21,14 +21,19 @@ import (
 	"github.com/tranzit-route-save/internal/state"
 )
 
+// fixtureNow pins the test clock; candidate boarding times sit ahead of it so the
+// run is an upcoming (boardable) trip rather than a departed one excluded by §5.2's
+// past-floor.
+const fixtureNow = 2_000_000_000
+
 // fixture matching testdata/route_single.json's entry/exit stops.
 func newFixture() *datasource.Fixture {
 	entry := geo.LatLng{Lat: 51.047742299999996, Lng: -114.07078329999999}
 	exit := geo.LatLng{Lat: 51.0379, Lng: -114.08972}
 	fx := datasource.NewFixture()
 	stops := []datasource.Stop{
-		{StopID: "e", Name: "WB 6 Av SW @ 3 St SW", Loc: entry, Sequence: 1, ArrivalTime: 1, DepartureTime: 1},
-		{StopID: "x", Name: "WB 17 AV SW @ 11 ST SW fs", Loc: exit, Sequence: 2, ArrivalTime: 1},
+		{StopID: "e", Name: "WB 6 Av SW @ 3 St SW", Loc: entry, Sequence: 1, ArrivalTime: fixtureNow + 600, DepartureTime: fixtureNow + 600},
+		{StopID: "x", Name: "WB 17 AV SW @ 11 ST SW fs", Loc: exit, Sequence: 2, ArrivalTime: fixtureNow + 1200},
 	}
 	fx.StopsByTrip["T"] = stops
 	fx.TripsByRoute["2"] = []datasource.TripCandidate{{TripID: "T", Stops: stops}}
@@ -42,7 +47,7 @@ func newTestServer(t *testing.T) (*httptest.Server, *session.Manager) {
 		Data:   fx,
 		RT:     &rtfeed.Fake{},
 		Routes: &routeclient.Fake{},
-		Clock:  state.SystemClock{},
+		Clock:  &state.FakeClock{T: fixtureNow},
 	})
 	return httptest.NewServer(api.NewServer(mgr, fx).Handler()), mgr
 }

@@ -37,7 +37,7 @@ func buildFixtureTrip(t *testing.T) (*trip.TripState, *datasource.Fixture, direc
 		Exit:    &directions.StopEndpoint{Name: "Exit", Loc: exit, TimeEpoch: 1000},
 	}}}
 
-	ts, err := trip.BuildTrip("sess", entry, exit, route, fx)
+	ts, err := trip.BuildTrip("sess", entry, exit, route, fx, 0) // now=0: candidate times are eligible
 	if err != nil {
 		t.Fatalf("BuildTrip: %v", err)
 	}

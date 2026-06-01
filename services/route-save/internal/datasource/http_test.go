@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sort"
 	"strconv"
 	"sync"
 	"testing"
@@ -19,14 +20,153 @@ import (
 type mockMiddleware struct {
 	tables map[string][]map[string]any
 
-	mu         sync.Mutex
-	stuByTrip  int // stop_time_updates?trip_id=
-	stuByStop  int // stop_time_updates?stop_id=
-	tripUpdate int // trip_updates?route_id=
+	mu           sync.Mutex
+	stuByTrip    int  // stop_time_updates?trip_id=
+	stuByStop    int  // stop_time_updates?stop_id=
+	tripUpdate   int  // trip_updates?route_id=
+	resolveCalls int  // /api/v1/resolve_trip
+	failResolve  bool // when set, resolve_trip returns 500 (exercises the fallback)
+}
+
+// mi64 coerces a raw mock-table value (stored as int/int64/float64) to int64. The
+// generic handler round-trips through JSON (asInt64 sees float64), but the
+// resolve_trip mock reads m.tables directly, so it needs this.
+func mi64(v any) int64 {
+	switch t := v.(type) {
+	case int:
+		return int64(t)
+	case int64:
+		return t
+	case float64:
+		return int64(t)
+	case string:
+		n, _ := strconv.ParseInt(t, 10, 64)
+		return n
+	default:
+		return 0
+	}
 }
 
 func (m *mockMiddleware) handler() http.Handler {
 	mux := http.NewServeMux()
+
+	// /api/v1/resolve_trip — mirrors the middleware's SQL resolution: the in-order,
+	// future-only (>= now-grace), nearest-time trip on the route, windowed entry→exit.
+	mux.HandleFunc("/api/v1/resolve_trip", func(w http.ResponseWriter, r *http.Request) {
+		m.mu.Lock()
+		m.resolveCalls++
+		fail := m.failResolve
+		m.mu.Unlock()
+		if fail {
+			http.Error(w, "forced failure", http.StatusInternalServerError)
+			return
+		}
+
+		q := r.URL.Query()
+		routeID, entryID, exitID := q.Get("route_id"), q.Get("entry_stop_id"), q.Get("exit_stop_id")
+		target, _ := strconv.ParseInt(q.Get("time"), 10, 64)
+		now, _ := strconv.ParseInt(q.Get("now"), 10, 64)
+		const grace = 120
+		floor := now - grace
+
+		onRoute := map[string]bool{}
+		for _, row := range m.tables["trip_updates"] {
+			if fmt.Sprint(row["route_id"]) == routeID {
+				onRoute[fmt.Sprint(row["trip_id"])] = true
+			}
+		}
+		exitSeqs := map[string][]int{}
+		for _, row := range m.tables["stop_time_updates"] {
+			if fmt.Sprint(row["stop_id"]) == exitID {
+				tid := fmt.Sprint(row["trip_id"])
+				exitSeqs[tid] = append(exitSeqs[tid], int(mi64(row["stop_sequence"])))
+			}
+		}
+		best, bestEseq, bestDiff := "", 0, int64(1)<<62
+		for _, row := range m.tables["stop_time_updates"] {
+			if fmt.Sprint(row["stop_id"]) != entryID {
+				continue
+			}
+			tid := fmt.Sprint(row["trip_id"])
+			if !onRoute[tid] {
+				continue
+			}
+			seq := int(mi64(row["stop_sequence"]))
+			t := mi64(row["departure_time"])
+			if t == 0 {
+				t = mi64(row["arrival_time"])
+			}
+			if t == 0 || t < floor {
+				continue
+			}
+			after := false
+			for _, xs := range exitSeqs[tid] {
+				if xs > seq {
+					after = true
+					break
+				}
+			}
+			if !after {
+				continue
+			}
+			d := t - target
+			if d < 0 {
+				d = -d
+			}
+			if d < bestDiff {
+				bestDiff, best, bestEseq = d, tid, seq
+			}
+		}
+		if best == "" {
+			http.Error(w, "no current in-order trip", http.StatusNotFound)
+			return
+		}
+		xseq := 1 << 30
+		for _, xs := range exitSeqs[best] {
+			if xs > bestEseq && xs < xseq {
+				xseq = xs
+			}
+		}
+
+		catLoc := map[string]geo.LatLng{}
+		catName := map[string]string{}
+		for _, row := range m.tables["calgary_transit_stops"] {
+			id := fmt.Sprint(row["teleride_number"])
+			if loc, ok := parsePointWKT(fmt.Sprint(row["point"])); ok {
+				catLoc[id] = loc
+			}
+			catName[id] = fmt.Sprint(row["stop_name"])
+		}
+		var data []map[string]any
+		for _, row := range m.tables["stop_time_updates"] {
+			if fmt.Sprint(row["trip_id"]) != best {
+				continue
+			}
+			seq := int(mi64(row["stop_sequence"]))
+			if seq < bestEseq || seq > xseq {
+				continue
+			}
+			sid := fmt.Sprint(row["stop_id"])
+			data = append(data, map[string]any{
+				"stop_id":        sid,
+				"stop_name":      catName[sid],
+				"stop_lat":       catLoc[sid].Lat,
+				"stop_lng":       catLoc[sid].Lng,
+				"stop_sequence":  seq,
+				"arrival_time":   mi64(row["arrival_time"]),
+				"departure_time": mi64(row["departure_time"]),
+			})
+		}
+		sort.Slice(data, func(i, j int) bool {
+			return data[i]["stop_sequence"].(int) < data[j]["stop_sequence"].(int)
+		})
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"trip_id": best, "entry_seq": bestEseq, "exit_seq": xseq,
+			"count": len(data), "data": data,
+		})
+	})
+
 	mux.HandleFunc("/api/v1/{table}", func(w http.ResponseWriter, r *http.Request) {
 		table := r.PathValue("table")
 		q := r.URL.Query()
@@ -130,13 +270,13 @@ func newTestSource(t *testing.T) (*HTTPSource, *mockMiddleware) {
 	return NewHTTPSource(srv.URL), mock
 }
 
-// TestResolveLeg_FastPathAvoidsNPlus1 pins the C win: the stop-scoped path resolves
-// the correct, correct-direction trip with only the two stop queries + one
-// stop_time_updates for the winner — not one per candidate.
-func TestResolveLeg_FastPathAvoidsNPlus1(t *testing.T) {
+// TestResolveLeg_UsesResolveEndpoint pins the C win: resolution goes through the
+// middleware's /api/v1/resolve_trip (one call), which returns the correct-direction
+// trip's entry→exit window — no per-candidate stop loads (the N+1).
+func TestResolveLeg_UsesResolveEndpoint(t *testing.T) {
 	src, mock := newTestSource(t)
 
-	tripID, stops, err := ResolveLeg(src, tEntry, tExit, "2", 1000)
+	tripID, stops, err := ResolveLeg(src, tEntry, tExit, "2", 1000, 0) // now=0: all runs eligible
 	if err != nil {
 		t.Fatalf("ResolveLeg: %v", err)
 	}
@@ -149,11 +289,52 @@ func TestResolveLeg_FastPathAvoidsNPlus1(t *testing.T) {
 
 	mock.mu.Lock()
 	defer mock.mu.Unlock()
-	if mock.stuByStop != 2 {
-		t.Errorf("stop_time_updates by stop_id = %d, want 2 (entry+exit)", mock.stuByStop)
+	if mock.resolveCalls != 1 {
+		t.Errorf("resolve_trip calls = %d, want 1", mock.resolveCalls)
 	}
-	if mock.stuByTrip != 1 {
-		t.Errorf("stop_time_updates by trip_id = %d, want 1 (winner only — no N+1)", mock.stuByTrip)
+	if mock.stuByTrip != 0 {
+		t.Errorf("stop_time_updates by trip_id = %d, want 0 (no client-side N+1)", mock.stuByTrip)
+	}
+}
+
+// TestResolveLeg_ExcludesDeparted: with now past T1's boarding time, the endpoint
+// skips the departed run and resolves the upcoming one (T3).
+func TestResolveLeg_ExcludesDeparted(t *testing.T) {
+	src, _ := newTestSource(t)
+
+	// now=1500: T1 (dep 1000) is departed beyond the grace; T3 (dep 2000) is upcoming.
+	tripID, _, err := ResolveLeg(src, tEntry, tExit, "2", 1000, 1500)
+	if err != nil {
+		t.Fatalf("ResolveLeg: %v", err)
+	}
+	if tripID != "T3" {
+		t.Errorf("resolved %q, want T3 (T1 departed)", tripID)
+	}
+}
+
+// TestResolveLeg_FallsBackOnEndpointError: when resolve_trip fails (e.g. 5xx), the
+// catalog-mapped path still falls back to the generic candidate scan and resolves.
+func TestResolveLeg_FallsBackOnEndpointError(t *testing.T) {
+	src, mock := newTestSource(t)
+	mock.failResolve = true
+
+	tripID, stops, err := ResolveLeg(src, tEntry, tExit, "2", 1000, 0)
+	if err != nil {
+		t.Fatalf("ResolveLeg: %v", err)
+	}
+	if tripID != "T1" {
+		t.Errorf("resolved %q, want T1 via generic fallback", tripID)
+	}
+	if len(stops) != 2 {
+		t.Errorf("windowed stops = %d, want 2", len(stops))
+	}
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if mock.resolveCalls == 0 {
+		t.Error("resolve_trip was not attempted before falling back")
+	}
+	if mock.stuByTrip == 0 {
+		t.Error("generic fallback did not load any trip stops")
 	}
 }
 
@@ -194,14 +375,14 @@ func TestResolveLeg_FallsBackWhenNoCatalogStop(t *testing.T) {
 
 	// Far from every catalog stop → nearestCatalogStop misses → generic fallback.
 	far := geo.LatLng{Lat: 60.0, Lng: -120.0}
-	_, _, err := ResolveLeg(src, far, far, "2", 1000)
+	_, _, err := ResolveLeg(src, far, far, "2", 1000, 0)
 	if err == nil {
 		t.Fatal("expected resolution to fail for off-grid coordinates")
 	}
 	mock.mu.Lock()
 	defer mock.mu.Unlock()
-	if mock.stuByStop != 0 {
-		t.Errorf("stop-scoped queries = %d, want 0 (fast path should have bailed)", mock.stuByStop)
+	if mock.resolveCalls != 0 {
+		t.Errorf("resolve_trip calls = %d, want 0 (catalog miss bails before the endpoint)", mock.resolveCalls)
 	}
 	if mock.stuByTrip == 0 {
 		t.Error("generic fallback did not load any trip stops — fallback not taken")

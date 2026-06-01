@@ -179,94 +179,88 @@ func (h *HTTPSource) tripStopsConcurrent(tripIDs []string) (map[string][]Stop, e
 	return out, nil
 }
 
-// stopVisit is one trip's call at a stop, from stop_time_updates.
-type stopVisit struct {
-	tripID string
-	seq    int
-	dep    int64
-	arr    int64
-}
-
-// resolveLeg is the fast path for §5.2 resolution. Rather than load every one of
-// the route's ~100+ daily trips' stops (the CandidateTrips N+1), it:
-//  1. maps the rider's entry/exit coordinates to GTFS stop_ids via the catalog,
-//  2. asks stop_time_updates which trips call at those two stops (one query each)
-//     and trip_updates which trips the route is running — all concurrently,
-//  3. intersects them, requiring entry before exit on the same trip, and picks the
-//     run whose entry time is closest to Google's ETA,
-//  4. loads only that winner's stops.
+// resolveLeg is the fast path for §5.2 resolution. It maps the rider's entry/exit
+// coordinates to GTFS stop_ids via the catalog, then hands those two stop_ids to the
+// middleware's /api/v1/resolve_trip, which selects the current, in-order, future-only
+// trip and returns its entry→exit windowed stops in one SQL round trip. Doing the
+// selection server-side (against the live table) is both fewer queries than the old
+// client-side candidate scan and immune to the stale cross-day rows that made
+// resolution "prefer past".
 //
-// It falls back to the generic candidate scan (still parallelized) whenever the
-// fast path can't safely decide: no catalog stop within range, a network error,
-// no in-order match, or the winner failing entry→exit validation. The fallback
-// keeps resolution exactly as correct as before; the fast path just avoids the
-// N+1 in the common case.
-func (h *HTTPSource) resolveLeg(entry, exit geo.LatLng, routeID string, googleETA int64) (string, []Stop, error) {
+// It falls back to the generic candidate scan whenever the fast path can't decide:
+// no catalog stop within range, or the endpoint can't resolve (404 / transport
+// error). The fallback keeps resolution as correct as before.
+func (h *HTTPSource) resolveLeg(entry, exit geo.LatLng, routeID string, googleETA, now int64) (string, []Stop, error) {
 	entryID, okEntry := h.nearestCatalogStop(entry)
 	exitID, okExit := h.nearestCatalogStop(exit)
 	if !okEntry || !okExit || entryID == exitID {
-		return resolveLegGeneric(h, entry, exit, routeID, googleETA)
+		return resolveLegGeneric(h, entry, exit, routeID, googleETA, now)
 	}
-
-	var (
-		routeIDs                    []string
-		entryVisits, exitVisits     []stopVisit
-		errRoute, errEntry, errExit error
-		wg                          sync.WaitGroup
-	)
-	wg.Add(3)
-	go func() { defer wg.Done(); routeIDs, errRoute = h.routeTripIDs(routeID) }()
-	go func() { defer wg.Done(); entryVisits, errEntry = h.tripsAtStop(entryID) }()
-	go func() { defer wg.Done(); exitVisits, errExit = h.tripsAtStop(exitID) }()
-	wg.Wait()
-	if err := firstNonNil(errRoute, errEntry, errExit); err != nil {
-		return "", nil, err
-	}
-
-	onRoute := make(map[string]bool, len(routeIDs))
-	for _, id := range routeIDs {
-		onRoute[id] = true
-	}
-	exitSeqs := make(map[string][]int, len(exitVisits))
-	for _, e := range exitVisits {
-		exitSeqs[e.tripID] = append(exitSeqs[e.tripID], e.seq)
-	}
-
-	best := ""
-	bestDiff := int64(math.MaxInt64)
-	for _, v := range entryVisits {
-		if !onRoute[v.tripID] {
-			continue
-		}
-		if !anyAfter(exitSeqs[v.tripID], v.seq) {
-			continue // exit not after entry on this run (wrong direction / not served)
-		}
-		t := v.dep
-		if t == 0 {
-			t = v.arr
-		}
-		if t == 0 {
-			continue
-		}
-		if diff := absI64(t - googleETA); diff < bestDiff {
-			bestDiff, best = diff, v.tripID
-		}
-	}
-	if best == "" {
-		return resolveLegGeneric(h, entry, exit, routeID, googleETA)
-	}
-
-	stops, err := h.TripStops(best)
+	tripID, stops, err := h.resolveTripHTTP(routeID, entryID, exitID, googleETA, now)
 	if err != nil {
-		return "", nil, err
+		// The middleware couldn't resolve (404 no in-order trip, or a transport
+		// error); fall back to the generic candidate scan, which applies the same
+		// future-only floor and may still match.
+		return resolveLegGeneric(h, entry, exit, routeID, googleETA, now)
 	}
-	window, err := FilterLegStops(stops, best, entry, exit)
+	return tripID, stops, nil
+}
+
+// resolveTripResponse mirrors the middleware's /api/v1/resolve_trip payload.
+type resolveTripResponse struct {
+	TripID string `json:"trip_id"`
+	Data   []struct {
+		StopID        string  `json:"stop_id"`
+		StopName      string  `json:"stop_name"`
+		StopLat       float64 `json:"stop_lat"`
+		StopLng       float64 `json:"stop_lng"`
+		StopSequence  int     `json:"stop_sequence"`
+		ArrivalTime   int64   `json:"arrival_time"`
+		DepartureTime int64   `json:"departure_time"`
+	} `json:"data"`
+}
+
+// resolveTripHTTP asks the middleware to resolve this leg's current trip and return
+// its entry→exit windowed stops. now is route-save's (authoritative) server clock,
+// passed so the future-only floor is judged against it, not the middleware's clock.
+// Any non-200 (notably 404 "no current in-order trip") is returned as an error so the
+// caller can fall back to the generic scan.
+func (h *HTTPSource) resolveTripHTTP(routeID, entryID, exitID string, googleETA, now int64) (string, []Stop, error) {
+	q := url.Values{
+		"route_id":      {routeID},
+		"entry_stop_id": {entryID},
+		"exit_stop_id":  {exitID},
+		"time":          {strconv.FormatInt(googleETA, 10)},
+		"now":           {strconv.FormatInt(now, 10)},
+	}
+	u := fmt.Sprintf("%s/api/v1/resolve_trip?%s", h.BaseURL, q.Encode())
+	resp, err := h.Client.Get(u)
 	if err != nil {
-		// The stop-scoped pick didn't validate against the trip's own stops; fall
-		// back to the proven scan rather than trust it.
-		return resolveLegGeneric(h, entry, exit, routeID, googleETA)
+		return "", nil, fmt.Errorf("resolve_trip: %w", err)
 	}
-	return best, window, nil
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", nil, fmt.Errorf("resolve_trip: status %d", resp.StatusCode)
+	}
+	var rt resolveTripResponse
+	if err := json.NewDecoder(resp.Body).Decode(&rt); err != nil {
+		return "", nil, fmt.Errorf("resolve_trip: decode: %w", err)
+	}
+	if rt.TripID == "" || len(rt.Data) == 0 {
+		return "", nil, fmt.Errorf("resolve_trip: empty result")
+	}
+	stops := make([]Stop, len(rt.Data))
+	for i, d := range rt.Data {
+		stops[i] = Stop{
+			StopID:        d.StopID,
+			Name:          d.StopName,
+			Loc:           geo.LatLng{Lat: d.StopLat, Lng: d.StopLng},
+			Sequence:      d.StopSequence,
+			ArrivalTime:   d.ArrivalTime,
+			DepartureTime: d.DepartureTime,
+		}
+	}
+	return rt.TripID, stops, nil
 }
 
 // nearestCatalogStop returns the catalog stop_id closest to loc, true when it is
@@ -283,28 +277,6 @@ func (h *HTTPSource) nearestCatalogStop(loc geo.LatLng) (string, bool) {
 		}
 	}
 	return best, best != "" && bestD <= stopMatchRadiusM
-}
-
-// tripsAtStop returns every trip's call at the stop, from stop_time_updates.
-func (h *HTTPSource) tripsAtStop(stopID string) ([]stopVisit, error) {
-	rows, err := h.queryAll("stop_time_updates", url.Values{"stop_id": {stopID}})
-	if err != nil {
-		return nil, err
-	}
-	out := make([]stopVisit, 0, len(rows))
-	for _, r := range rows {
-		id := asString(r["trip_id"])
-		if id == "" {
-			continue
-		}
-		out = append(out, stopVisit{
-			tripID: id,
-			seq:    int(asInt64(r["stop_sequence"])),
-			dep:    asInt64(r["departure_time"]),
-			arr:    asInt64(r["arrival_time"]),
-		})
-	}
-	return out, nil
 }
 
 func (h *HTTPSource) TripStops(tripID string) ([]Stop, error) {

@@ -59,6 +59,9 @@ type Session struct {
 	debug    bool // tabular STATE logging to stdout
 	tickSeen int  // tick counter for the heartbeat table
 	dirty    bool // a state change is pending a downstream STATE flush
+
+	createdAt int64 // server time the session was created (attach-grace watchdog)
+	attached  bool  // a client WebSocket has attached at least once
 }
 
 func newSession(ts *trip.TripState, destPlaceID string, deps Deps, mgr *Manager) *Session {
@@ -77,6 +80,7 @@ func newSession(ts *trip.TripState, destPlaceID string, deps Deps, mgr *Manager)
 		cancel:      cancel,
 		done:        make(chan struct{}),
 		debug:       stateLogEnabled(),
+		createdAt:   deps.Clock.Now(),
 	}
 	s.machine = state.New(ts, deps.Clock, state.Hooks{
 		OnMissed: s.onMissed,
@@ -103,6 +107,15 @@ func (s *Session) run() {
 			return
 
 		case <-tick.C:
+			// Tear down a session that POST /trips created but no client ever attached
+			// to, so an orphaned trip doesn't tick forever. A normal disconnect is
+			// caught by readLoop's error; the half-open peer by the ws read deadline.
+			if !s.attached && s.deps.Clock.Now()-s.createdAt > config.SessionAttachGraceS {
+				log.Printf("session %s: no client attached within %ds; closing",
+					shortID(s.trip.SessionID), config.SessionAttachGraceS)
+				s.Close()
+				return
+			}
 			if s.machine.OnTick() {
 				s.markDirty()
 			}
@@ -223,18 +236,31 @@ func (s *Session) Attach(conn *websocket.Conn) {
 // onAttach runs on the loop goroutine: it wires up the connection and pushes the
 // first full STATE export.
 func (s *Session) onAttach(conn *websocket.Conn) {
+	s.attached = true
 	go s.writeLoop(conn)
 	go s.readLoop(conn)
 	s.forcePushState()
 }
 
+// readLoop pumps client frames into the loop. It enforces a read deadline that the
+// pong handler extends on every keepalive pong, so a silently-dropped peer (no TCP
+// FIN) fails ReadMessage within WSPongWaitS and the deferred Close fires — instead
+// of blocking here forever and leaving the session ticking.
 func (s *Session) readLoop(conn *websocket.Conn) {
 	defer s.Close()
+	pongWait := config.WSPongWaitS * time.Second
+	conn.SetReadDeadline(time.Now().Add(pongWait))
+	conn.SetPongHandler(func(string) error {
+		conn.SetReadDeadline(time.Now().Add(pongWait))
+		return nil
+	})
 	for {
 		_, raw, err := conn.ReadMessage()
 		if err != nil {
 			return
 		}
+		// Any client frame also proves the peer is alive; extend the deadline.
+		conn.SetReadDeadline(time.Now().Add(pongWait))
 		select {
 		case s.clientMsgs <- raw:
 		case <-s.done:
@@ -243,13 +269,26 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 	}
 }
 
+// writeLoop drains the send queue and emits a keepalive ping every WSPingIntervalS
+// so the peer's pong keeps readLoop's deadline alive. Write deadlines keep a stuck
+// socket from blocking the loop indefinitely.
 func (s *Session) writeLoop(conn *websocket.Conn) {
+	ping := time.NewTicker(config.WSPingIntervalS * time.Second)
+	defer ping.Stop()
+	writeWait := config.WSPingIntervalS * time.Second
 	for {
 		select {
 		case <-s.done:
 			return
 		case msg := <-s.send:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
+				s.Close()
+				return
+			}
+		case <-ping.C:
+			conn.SetWriteDeadline(time.Now().Add(writeWait))
+			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
 				s.Close()
 				return
 			}

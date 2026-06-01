@@ -461,6 +461,10 @@ RT enrichment is what makes the static Google directions responsive — it is th
 | `MISSED_RADIUS_M` | 50 | Beyond this at trigger → MISSED |
 | `BOARDING_RADIUS_M` | 20 | Within this at trigger → ACTIVE (widened from 5m for GPS accuracy; tune in testing) |
 | `REROUTE_REARM_RADIUS_M` | 50 | On-bus reroute re-fetch distance |
+| `ResolveDepartureGraceS` | 120 | Resolution past-floor: a candidate run whose boarding time is older than `now − this` has departed and is excluded (as-built) |
+| `WSPongWaitS` | 60 | WS read deadline; no pong/frame within this tears the socket down (as-built) |
+| `WSPingIntervalS` | 25 | WS keepalive ping cadence; `< WSPongWaitS` (as-built) |
+| `SessionAttachGraceS` | 60 | A session POST-created but never WS-attached within this closes itself (as-built) |
 
 UNSURE band is implicitly `(BOARDING_RADIUS_M, MISSED_RADIUS_M]`.
 
@@ -562,30 +566,56 @@ goroutine. Verified with `go test -race`.
 - **§14 RT consumption is polling, not SSE.** Middleware's only RT SSE
   (`/api/v1/stream/route`) is route+time scoped and re-runs its own trip
   resolution; since we do our *own* resolution (§5.2), we instead **poll
-  `GET /api/v1/stop_time_updates?trip_id=` every 30s** for the trips we resolved.
-  Same data, deterministic mapping. Behind the `rtfeed.Source` interface, so a true
-  SSE impl can replace it later.
+  `GET /api/v1/stop_time_updates?trip_id=…&active=1` every 30s** for the trips we
+  resolved. `active=1` is the middleware's server-now future-only filter: a reused
+  GTFS `trip_id` can have stale rows from a prior service day lingering in the table,
+  and without it an already-departed `arrival_time` would clobber a good ETA back into
+  the past (the "prefers past" / `-286 min` symptom). Same data, deterministic mapping.
+  Behind the `rtfeed.Source` interface, so a true SSE impl can replace it later.
 - **Direction-aware trip resolution.** A route runs both directions under one
   `route_id`, so matching only the entry stop + time can select a wrong-direction
   trip (symptom: `LoadLegStops` errors with "entry seq N is after exit seq M").
   Resolution therefore requires a candidate to serve **both** entry and exit
   with `entry_seq < exit_seq`; only the correct-direction run qualifies.
-- **Stop-scoped resolution (build latency, as-built).** `trip_updates` carries the
-  whole service day for a route (100+ trips), and the naïve resolver loaded *every*
-  candidate's stops (`stop_time_updates` per trip) just to read two of them — an N+1
-  that made `POST /trips` block ~30 s (the client's "redirect" wait). `BuildTrip`
-  now calls `datasource.ResolveLeg`; `HTTPSource.resolveLeg` instead maps the
-  entry/exit coords → catalog `stop_id`s, queries `stop_time_updates` by those two
-  stops + `trip_updates` for the route **concurrently**, intersects them with the
-  `entry_seq < exit_seq` check, picks the nearest-ETA run, and loads only the
-  winner's stops (~3 queries vs 100+; **live: 14.5 s → 0.82 s** on route 3). It
-  falls back to the generic candidate scan on any miss (no catalog stop in range,
-  network error, no in-order match, or the winner failing `FilterLegStops`
-  validation), so correctness is unchanged. The generic scan's per-candidate
-  `TripStops` is itself parallelized (`maxResolveConcurrency=16`). The generic
-  `ResolveTrip` (used by the `Fixture`/CLI and as the fallback) is unchanged in
-  semantics; `ResolveTrip` now also returns the chosen trip's stops so the window
-  needs no re-fetch.
+- **Future-only trip resolution (as-built, P0).** `ResolveTrip`/`resolveLeg` rank by
+  `argmin |boardingTime − googleETA|`, which on its own will happily pick a run that has
+  **already departed** the boarding stop when its time is the closest match to a stale
+  Google ETA. Such a run is born with a past `bus_arrival_time` → `armed` on tick 1 → with
+  no GPS, `UNSURE` → (120s) `MISSED` → reroute → re-resolves another past run = a client
+  "rerouting" loop (the §6.4 goalpost can't slide a departed trip, since RT has no future
+  prediction for it). Resolution now takes a server `now` and **excludes any candidate
+  whose boarding time is older than `now − ResolveDepartureGraceS`**; among the remaining
+  future runs it picks the nearest to Google's ETA. If a leg is served only by departed
+  runs, resolution **fails loudly** ("no future run … all departed") rather than indexing
+  a past bus — surfacing as a `422` at `POST /trips` and a logged `reroute failed` (which
+  leaves the stop MISSED without looping) on a reroute. `now` threads from `Manager.Now()`
+  (HTTP path) / `deps.Clock.Now()` (reroute path) → `BuildTrip` → `ResolveLeg`.
+- **WebSocket keepalive + idle teardown (as-built, P0).** `readLoop` had no read deadline
+  or ping/pong, so a silently-killed client (half-open TCP, no FIN) left `ReadMessage`
+  blocked forever and the session ticking indefinitely. `writeLoop` now sends a
+  `WSPingIntervalS` ping; `readLoop` sets a `WSPongWaitS` read deadline that the pong
+  handler (and any client frame) extends, so a dead peer fails `ReadMessage` within
+  `WSPongWaitS` → the deferred `Close()` fires. Write deadlines keep a stuck socket off the
+  loop. Separately, a session POST-created but never WS-attached tears itself down after
+  `SessionAttachGraceS` (checked on the 1s tick, on the loop goroutine).
+- **Server-side resolution via `/api/v1/resolve_trip` (as-built, P0).** `trip_updates`
+  carries the whole service day for a route (100+ trips, **mixed with stale prior-day
+  rows** the middleware never purges), so resolving client-side both N+1'd and "preferred
+  past" (a stale row's boarding time matched the Google ETA and got indexed → past
+  `bus_arrival_time` → instant arm → reroute loop; and route 22 `422`'d with "no candidate
+  serves entry→exit in order" when the client-side candidate load/stop-match was
+  incomplete). `HTTPSource.resolveLeg` now maps the entry/exit coords → catalog `stop_id`s
+  (cached catalog) and hands them to the middleware's **`GET /api/v1/resolve_trip`**, which
+  in **one SQL query** picks the in-order (`entry_seq < exit_seq`), future-only
+  (`COALESCE(departure,arrival) ≥ now−grace`), nearest-`time` trip and returns its
+  entry→exit windowed stops with coords. Selecting in SQL against the live table drops the
+  stale rows at the source and is far fewer round trips. `now` is route-save's
+  authoritative clock, passed as `&now=` so the floor isn't judged by the middleware's
+  clock. On any miss (no catalog stop in range, `404` no in-order trip, transport error) it
+  **falls back to `resolveLegGeneric`** — the unchanged candidate scan, which keeps its own
+  build-time `now` floor (`ResolveDepartureGraceS`) and `ResolveTrip`/`FilterLegStops`
+  semantics — so correctness/degradation is graceful when pointed at an older middleware.
+  The generic scan's per-candidate `TripStops` stays parallelized (`maxResolveConcurrency=16`).
 - **§5.4 classification resolved.** Only the **boarding stop of each bus leg is
   FETCHED**; every other loaded stop (ride-through + exit/handoff) is **TRANSFER**
   (exempt from MISSED while ON_BUS). This matches §3's definition of FETCHED and

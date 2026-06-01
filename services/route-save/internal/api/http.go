@@ -80,7 +80,7 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	origin := latLng(req.Origin)
 	dest := latLng(req.Destination)
 
-	ts, err := trip.BuildTrip(sessionID, origin, dest, route, s.data)
+	ts, err := trip.BuildTrip(sessionID, origin, dest, route, s.data, s.mgr.Now())
 	if err != nil {
 		http.Error(w, fmt.Sprintf("build trip: %v", err), http.StatusUnprocessableEntity)
 		return

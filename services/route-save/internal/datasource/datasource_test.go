@@ -31,7 +31,7 @@ func TestResolveTrip_PicksNearestDeparture(t *testing.T) {
 		tripAt("late", base+300),
 	}
 
-	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+40) // ETA closest to onTime
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+40, base-1000) // ETA closest to onTime; now before all runs
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -59,7 +59,7 @@ func TestResolveTrip_RejectsWrongDirection(t *testing.T) {
 	}}
 	f.TripsByRoute["303"] = []TripCandidate{wb, eb}
 
-	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "303", base) // ETA nearest westbound
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "303", base, base-1000) // ETA nearest westbound; now before all runs
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestResolveTrip_AdjacentRunEdge(t *testing.T) {
 		tripAt("late", base+300),
 	}
 
-	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+200) // past the midpoint
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base+200, base-1000) // past the midpoint; now before all runs
 	if err != nil {
 		t.Fatalf("ResolveTrip: %v", err)
 	}
@@ -95,8 +95,41 @@ func TestResolveTrip_NoServingTrip(t *testing.T) {
 		TripID: "elsewhere",
 		Stops:  []Stop{{StopID: "x", Loc: far, Sequence: 1, DepartureTime: 1}},
 	}}
-	if _, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", 1); err == nil {
+	if _, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", 1, 0); err == nil {
 		t.Fatal("expected error when no trip serves the entry stop")
+	}
+}
+
+// A departed run (boarding time well in the past relative to now) must be excluded
+// even when its time is the closest match to a stale Google ETA — indexing it would
+// be born with a past ETA and drive the reroute loop.
+func TestResolveTrip_ExcludesDepartedRun(t *testing.T) {
+	const base = 1_700_000_000
+	f := NewFixture()
+	f.TripsByRoute["2"] = []TripCandidate{
+		tripAt("departed", base-3600),
+		tripAt("upcoming", base+300),
+	}
+	got, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base-3600, base) // ETA matches departed, but now=base
+	if err != nil {
+		t.Fatalf("ResolveTrip: %v", err)
+	}
+	if got != "upcoming" {
+		t.Errorf("resolved %q, want upcoming (departed run must be excluded)", got)
+	}
+}
+
+// When every serving run has already departed, resolution fails loudly rather than
+// indexing a past bus.
+func TestResolveTrip_AllDeparted(t *testing.T) {
+	const base = 1_700_000_000
+	f := NewFixture()
+	f.TripsByRoute["2"] = []TripCandidate{
+		tripAt("early", base-3600),
+		tripAt("late", base-1800),
+	}
+	if _, _, err := ResolveTrip(f, entryLoc, exitLoc, "2", base-3600, base); err == nil {
+		t.Fatal("expected error when every serving run has departed")
 	}
 }
 

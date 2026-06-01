@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 
+	"github.com/tranzit-route-save/internal/config"
 	"github.com/tranzit-route-save/internal/geo"
 )
 
@@ -20,15 +21,22 @@ import (
 // Known edge case (§5.2): on high-frequency routes (~5 min headway), if the
 // Google time is off by more than the headway we may match the adjacent run
 // ("right route, wrong trip"). Accepted for v1.
+//
+// now is the server clock: a candidate whose boarding time is already in the past
+// (older than now − config.ResolveDepartureGraceS) has departed and is excluded —
+// indexing it would be born with a past ETA and immediately trip the MISSED check.
+//
 // It also returns the chosen trip's full stop list — already loaded while ranking
 // candidates — so the caller can window it (FilterLegStops) without a second
 // TripStops fetch for the resolved trip.
-func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleETAEpoch int64) (string, []Stop, error) {
+func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleETAEpoch, now int64) (string, []Stop, error) {
 	candidates, err := ds.CandidateTrips(routeID)
 	if err != nil {
 		return "", nil, fmt.Errorf("resolve trip: candidates for route %q: %w", routeID, err)
 	}
 
+	floor := now - config.ResolveDepartureGraceS
+	servedInOrder := false // a candidate served entry→exit but every such run had departed
 	bestTrip := ""
 	var bestStops []Stop
 	bestDiff := int64(math.MaxInt64)
@@ -53,12 +61,19 @@ func ResolveTrip(ds DataSource, entry, exit geo.LatLng, routeID string, googleET
 		if t == 0 {
 			continue // no usable time to match against
 		}
+		servedInOrder = true
+		if t < floor {
+			continue // already departed; can never be boarded
+		}
 		if diff := absI64(t - googleETAEpoch); diff < bestDiff {
 			bestDiff, bestTrip, bestStops = diff, c.TripID, c.Stops
 		}
 	}
 
 	if bestTrip == "" {
+		if servedInOrder {
+			return "", nil, fmt.Errorf("resolve trip: no future run of route %q serves entry→exit (all departed)", routeID)
+		}
 		return "", nil, fmt.Errorf("resolve trip: no candidate of route %q serves entry→exit in order", routeID)
 	}
 	return bestTrip, bestStops, nil
@@ -69,25 +84,4 @@ func absI64(v int64) int64 {
 		return -v
 	}
 	return v
-}
-
-// anyAfter reports whether any seq in seqs is strictly greater than n — i.e. the
-// exit stop is reached after the entry stop on the same run (correct direction).
-func anyAfter(seqs []int, n int) bool {
-	for _, s := range seqs {
-		if s > n {
-			return true
-		}
-	}
-	return false
-}
-
-// firstNonNil returns the first non-nil error, or nil.
-func firstNonNil(errs ...error) error {
-	for _, e := range errs {
-		if e != nil {
-			return e
-		}
-	}
-	return nil
 }

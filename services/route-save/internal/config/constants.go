@@ -40,4 +40,24 @@ const (
 	BoardingRadiusM = 20.0
 	// RerouteRearmRadiusM: on-bus reroute re-fetch distance (metres) (§9.1).
 	RerouteRearmRadiusM = 50.0
+
+	// ResolveDepartureGraceS bounds how far in the past a candidate run's boarding
+	// time may be and still be eligible during trip resolution (§5.2). A run whose
+	// boarding time is older than server-now minus this grace has already departed
+	// and can never be boarded, so it is excluded — indexing it would be born with a
+	// past ETA, arm the MISSED check on tick 1, and drive a reroute loop. The grace
+	// tolerates a bus dwelling at / just leaving the stop. Tune in testing.
+	ResolveDepartureGraceS = 120
+
+	// WSPongWaitS is how long readLoop waits for a client pong (or any frame) before
+	// the read deadline fires and the connection is torn down. Detects half-open /
+	// silently-killed peers that never send a TCP FIN.
+	WSPongWaitS = 60
+	// WSPingIntervalS is how often writeLoop sends a keepalive ping. Must be shorter
+	// than WSPongWaitS so a live peer always answers within the read deadline.
+	WSPingIntervalS = 25
+	// SessionAttachGraceS bounds how long a session created by POST /trips may run
+	// before a client WebSocket attaches. A session never attached within this
+	// window tears itself down rather than ticking forever.
+	SessionAttachGraceS = 60
 )

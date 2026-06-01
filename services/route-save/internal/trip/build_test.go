@@ -35,7 +35,7 @@ func TestBuildTrip_ClassifiesAndStructures(t *testing.T) {
 		},
 	}
 
-	ts, err := BuildTrip("sess", entry, exit, route, f)
+	ts, err := BuildTrip("sess", entry, exit, route, f, 0) // now=0: candidate times are eligible
 	if err != nil {
 		t.Fatalf("BuildTrip: %v", err)
 	}

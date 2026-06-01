@@ -120,7 +120,7 @@ func (s *Session) fetchReroute(req rerouteReq, sessionID string, dest geo.LatLng
 	route, raw, err := s.deps.Routes.Route(s.ctx, req.origin, s.destPlaceID)
 	var newTrip *trip.TripState
 	if err == nil {
-		newTrip, err = trip.BuildTrip(sessionID, req.origin, dest, route, s.deps.Data)
+		newTrip, err = trip.BuildTrip(sessionID, req.origin, dest, route, s.deps.Data, s.deps.Clock.Now())
 	}
 	select {
 	case s.rerouteOut <- rerouteResult{req: req, newTrip: newTrip, raw: raw, err: err}:

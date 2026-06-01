@@ -10,25 +10,25 @@ import (
 // the generic candidate scan (e.g. HTTPSource's stop-scoped path). It is an
 // internal capability check, not part of the DataSource contract.
 type legResolver interface {
-	resolveLeg(entry, exit geo.LatLng, routeID string, googleETA int64) (string, []Stop, error)
+	resolveLeg(entry, exit geo.LatLng, routeID string, googleETA, now int64) (string, []Stop, error)
 }
 
 // ResolveLeg resolves one bus leg to its trip_id and entry→exit windowed stops
 // (§5.2 + §5 filter). It uses a source's fast path when available, else the
 // generic scan (ResolveTrip + FilterLegStops). This is the single entry point the
 // trip builder should call.
-func ResolveLeg(ds DataSource, entry, exit geo.LatLng, routeID string, googleETA int64) (string, []Stop, error) {
+func ResolveLeg(ds DataSource, entry, exit geo.LatLng, routeID string, googleETA, now int64) (string, []Stop, error) {
 	if r, ok := ds.(legResolver); ok {
-		return r.resolveLeg(entry, exit, routeID, googleETA)
+		return r.resolveLeg(entry, exit, routeID, googleETA, now)
 	}
-	return resolveLegGeneric(ds, entry, exit, routeID, googleETA)
+	return resolveLegGeneric(ds, entry, exit, routeID, googleETA, now)
 }
 
 // resolveLegGeneric is the portable resolution: rank all candidates, then window
 // the chosen trip's stops. ResolveTrip already returns the winner's stops, so this
 // adds no fetch beyond the candidate scan.
-func resolveLegGeneric(ds DataSource, entry, exit geo.LatLng, routeID string, googleETA int64) (string, []Stop, error) {
-	tripID, stops, err := ResolveTrip(ds, entry, exit, routeID, googleETA)
+func resolveLegGeneric(ds DataSource, entry, exit geo.LatLng, routeID string, googleETA, now int64) (string, []Stop, error) {
+	tripID, stops, err := ResolveTrip(ds, entry, exit, routeID, googleETA, now)
 	if err != nil {
 		return "", nil, err
 	}
