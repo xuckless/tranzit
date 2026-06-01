@@ -32,13 +32,48 @@ Query parameters:
 │ {column_name}=value │ Exact-match WHERE filter — any column in the table │
 └─────────────────────┴────────────────────────────────────────────────────┘
 
+Plus, on stop_time_updates only:
+  active=1   Server-now future-only filter: keeps rows whose boarding time
+             (COALESCE(departure_time, arrival_time)) is >= now()-grace. Lets a
+             caller drop already-departed rows without trusting its own clock.
+  grace=N    Seconds of slack for active= (default 120).
+
 Example:
 GET /api/v1/vehicle_positions?route_id=3&order_by=timestamp&order=DESC&limit=50
 GET /api/v1/calgary_transit_stops?status=ACTIVE&limit=200
+GET /api/v1/stop_time_updates?stop_id=6866&active=1&order_by=departure_time
 GET /api/v1/alerts
 
 Response shape:
 { "table": "vehicle_positions", "count": 50, "limit": 50, "offset": 0, "data": [...] }
+
+GET /api/v1/resolve_trip
+
+Resolves the single current trip a rider boards for one bus leg and returns its
+entry→exit windowed stops. Used by route-save instead of pulling every candidate
+trip for the route and filtering client-side.
+
+Query parameters:
+  route_id       (required) GTFS route id (bus number)
+  entry_stop_id  (required) teleride_number of the boarding stop
+  exit_stop_id   (required) teleride_number of the alighting stop
+  time           (required, unix epoch) target boarding time (Google's ETA), the
+                 nearest-run tie-break
+  now            (optional, unix epoch; default server clock) future-only reference
+  grace          (optional, seconds; default 120) boarding may be >= now-grace
+
+Picks the trip on route_id serving entry_stop_id before exit_stop_id (entry_seq <
+exit_seq), whose entry boarding time is at/after now-grace (not yet departed) and
+nearest to time. Stale cross-day rows for a reused trip_id are dropped by the floor.
+
+Response: { "route_id", "trip_id", "entry_seq", "exit_seq", "count",
+            "data": [ { stop_id, stop_name, stop_lat, stop_lng, stop_sequence,
+                        arrival_time, departure_time } … ] }
+
+400 if a required param is missing; 404 if no current in-order trip serves the stops.
+
+Example:
+GET /api/v1/resolve_trip?route_id=22&entry_stop_id=6866&exit_stop_id=8961&time=1780275000
 
 SSE — /api/v1/stream/route
 

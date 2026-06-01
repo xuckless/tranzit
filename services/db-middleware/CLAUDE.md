@@ -63,6 +63,21 @@ times change. Returns 400 if params missing, 404 if no matching trip exists.
 Example:
 GET /api/v1/stream/route?route_id=3&time=1748000000
 
+GET /api/v1/resolve_trip — resolve one bus leg to its current trip + windowed stops
+
+Params: route_id, entry_stop_id, exit_stop_id, time (target epoch) required;
+now (default server clock) and grace (default 120s) bound the future-only floor.
+Picks the trip serving entry before exit (entry_seq < exit_seq) whose entry boarding
+time is >= now-grace and nearest time; returns the entry→exit windowed stops:
+{ route_id, trip_id, entry_seq, exit_seq, count, data:[{stop_id, stop_name, stop_lat,
+stop_lng, stop_sequence, arrival_time, departure_time}…] }. 400 missing params,
+404 no current in-order trip. Selecting in SQL drops stale cross-day rows that a
+client-side scan would otherwise pick (route-save's "prefers past" bug).
+
+Generic query extra (stop_time_updates only): active=1 keeps rows whose boarding time
+(COALESCE(departure_time,arrival_time)) >= now()-grace — a server-now future-only
+filter so callers need not trust their own (possibly skewed) clock. grace=N (default 120).
+
 Security notes
 
 - Table name validated against a hard-coded whitelist (no SQL injection via table)

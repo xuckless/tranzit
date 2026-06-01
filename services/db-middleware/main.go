@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
 )
@@ -461,6 +463,149 @@ func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ── Trip resolution (for route-save) ──────────────────────────────────────────
+
+// resolvedStop is one stop on the resolved trip's entry→exit window, with its
+// static coordinates and the trip's predicted times.
+type resolvedStop struct {
+	StopID        string  `json:"stop_id"`
+	StopName      string  `json:"stop_name"`
+	StopLat       float64 `json:"stop_lat"`
+	StopLng       float64 `json:"stop_lng"`
+	StopSequence  int64   `json:"stop_sequence"`
+	ArrivalTime   *int64  `json:"arrival_time"`
+	DepartureTime *int64  `json:"departure_time"`
+}
+
+// resolveTrip picks the one trip on routeID that serves entryStopID before
+// exitStopID (correct direction) whose entry boarding time is at or after floor
+// (now-grace, i.e. not yet departed) and nearest to target (Google's ETA), then
+// returns that trip's entry→exit windowed stops. Doing this in SQL against the live
+// table means stale cross-day rows for a reused trip_id are dropped by the floor and
+// the nearest-time pick — the consumer gets the current run, not a departed one.
+// Returns pgx.ErrNoRows when nothing resolves.
+func resolveTrip(ctx context.Context, routeID, entryStopID, exitStopID string, target, floor int64) (tripID string, eseq, xseq int64, stops []resolvedStop, err error) {
+	row := db.QueryRow(ctx, `
+		SELECT e.trip_id, e.eseq, MIN(x.xseq) AS xseq
+		FROM (
+			SELECT stu.trip_id, stu.stop_sequence AS eseq,
+			       COALESCE(stu.departure_time, stu.arrival_time) AS etime
+			FROM stop_time_updates stu
+			JOIN trip_updates tu ON tu.trip_id = stu.trip_id
+			WHERE tu.route_id = $1 AND stu.stop_id = $2
+			  AND COALESCE(stu.departure_time, stu.arrival_time) >= $3
+		) e
+		JOIN (
+			SELECT trip_id, stop_sequence AS xseq
+			FROM stop_time_updates
+			WHERE stop_id = $4
+		) x ON x.trip_id = e.trip_id AND x.xseq > e.eseq
+		GROUP BY e.trip_id, e.eseq, e.etime
+		ORDER BY ABS(e.etime - $5)
+		LIMIT 1`,
+		routeID, entryStopID, floor, exitStopID, target,
+	)
+	if err = row.Scan(&tripID, &eseq, &xseq); err != nil {
+		return "", 0, 0, nil, err
+	}
+
+	rows, err := db.Query(ctx, `
+		SELECT stu.stop_id, stu.stop_sequence, stu.arrival_time, stu.departure_time,
+		       cts.stop_name, cts.point
+		FROM stop_time_updates stu
+		LEFT JOIN calgary_transit_stops cts ON cts.teleride_number::text = stu.stop_id
+		WHERE stu.trip_id = $1 AND stu.stop_sequence BETWEEN $2 AND $3
+		ORDER BY stu.stop_sequence`,
+		tripID, eseq, xseq,
+	)
+	if err != nil {
+		return "", 0, 0, nil, err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var s resolvedStop
+		var name, pointWKT *string
+		if err = rows.Scan(&s.StopID, &s.StopSequence, &s.ArrivalTime, &s.DepartureTime, &name, &pointWKT); err != nil {
+			return "", 0, 0, nil, err
+		}
+		if name != nil {
+			s.StopName = *name
+		}
+		if pointWKT != nil {
+			if lat, lon, ok := parseWKTPoint(*pointWKT); ok {
+				s.StopLat, s.StopLng = lat, lon
+			}
+		}
+		stops = append(stops, s)
+	}
+	if err = rows.Err(); err != nil {
+		return "", 0, 0, nil, err
+	}
+	return tripID, eseq, xseq, stops, nil
+}
+
+// handleResolveTrip is GET /api/v1/resolve_trip: route_id, entry_stop_id,
+// exit_stop_id and time (target epoch) are required; now (default server clock) and
+// grace (default 120s) bound the future-only floor. It returns the resolved trip and
+// its entry→exit windowed stops, or 404 when no current in-order trip serves them.
+func handleResolveTrip(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	q := r.URL.Query()
+	routeID := q.Get("route_id")
+	entryID := q.Get("entry_stop_id")
+	exitID := q.Get("exit_stop_id")
+	if routeID == "" || entryID == "" || exitID == "" {
+		jsonError(w, "route_id, entry_stop_id and exit_stop_id are required", http.StatusBadRequest)
+		return
+	}
+	target, err := strconv.ParseInt(q.Get("time"), 10, 64)
+	if err != nil {
+		jsonError(w, "time must be a unix timestamp integer", http.StatusBadRequest)
+		return
+	}
+	now := time.Now().Unix()
+	if v := q.Get("now"); v != "" {
+		if n, err2 := strconv.ParseInt(v, 10, 64); err2 == nil {
+			now = n
+		}
+	}
+	grace := int64(120)
+	if v := q.Get("grace"); v != "" {
+		if n, err2 := strconv.ParseInt(v, 10, 64); err2 == nil && n >= 0 {
+			grace = n
+		}
+	}
+
+	tripID, eseq, xseq, stops, err := resolveTrip(r.Context(), routeID, entryID, exitID, target, now-grace)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, "no current in-order trip found for that route and stops", http.StatusNotFound)
+			return
+		}
+		log.Printf("resolveTrip: %v", err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if len(stops) == 0 {
+		jsonError(w, "no current in-order trip found for that route and stops", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"route_id":  routeID,
+		"trip_id":   tripID,
+		"entry_seq": eseq,
+		"exit_seq":  xseq,
+		"count":     len(stops),
+		"data":      stops,
+	})
+}
+
 // ── Query filter helpers ──────────────────────────────────────────────────────
 
 // postgrestOps maps PostgREST operator names to their SQL equivalents.
@@ -568,6 +713,7 @@ func main() {
 	// Exact matches take precedence over the /api/v1/ prefix catch-all.
 	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
+	mux.HandleFunc("/api/v1/resolve_trip", withCORS(handleResolveTrip))
 	mux.HandleFunc("/api/v1/", withCORS(handleQuery))
 
 	port := os.Getenv("PORT")
@@ -668,7 +814,7 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 
 	for key, vals := range q {
 		switch key {
-		case "limit", "offset", "order_by", "order", "or":
+		case "limit", "offset", "order_by", "order", "or", "active", "grace":
 			continue
 		}
 		if _, ok := colSet[key]; !ok {
@@ -703,6 +849,21 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 			}
 			conds = append(conds, "("+strings.Join(orParts, " OR ")+")")
 		}
+	}
+
+	// active=1 (stop_time_updates only): a server-now future-only filter, so callers
+	// need not trust their own clock (relevant when the device clock is skewed). Drops
+	// rows whose boarding time (departure, fallback arrival) is older than now-grace.
+	if table == "stop_time_updates" && q.Get("active") == "1" {
+		grace := 120
+		if v := q.Get("grace"); v != "" {
+			if n, err2 := strconv.Atoi(v); err2 == nil && n >= 0 {
+				grace = n
+			}
+		}
+		conds = append(conds, fmt.Sprintf("COALESCE(departure_time, arrival_time) >= EXTRACT(EPOCH FROM now())::bigint - $%d", idx))
+		args = append(args, grace)
+		idx++
 	}
 
 	query := "SELECT * FROM " + table
