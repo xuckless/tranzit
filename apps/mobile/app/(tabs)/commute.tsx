@@ -700,7 +700,7 @@ export default function CommuteScreen() {
     const nextStop = activeIdx >= 0 ? (tripState.stops[activeIdx + 1] ?? null) : null;
     const lastStop = tripState.stops[tripState.stops.length - 1];
     const etaMin = lastStop
-      ? Math.max(0, Math.round((lastStop.eta - Date.now() / 1000) / 60))
+      ? Math.max(0, Math.round(lastStop.time_remaining_s / 60))
       : 0;
 
     const completedCount = tripState.stops.filter(
@@ -748,7 +748,7 @@ export default function CommuteScreen() {
     const serverStops = tripState?.stops;
     if (serverStops?.length) {
       const last = serverStops[serverStops.length - 1];
-      return Math.max(0, Math.round((last.eta - Date.now() / 1000) / 60));
+      return Math.max(0, Math.round(last.time_remaining_s / 60));
     }
     if (!route) return null;
     const secs = parseDurationSecs(route.duration);

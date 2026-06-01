@@ -59,6 +59,7 @@ export function useTripWebSocket(
   const wsRef = useRef<WebSocket | null>(null);
   const lastVersionRef = useRef<Map<string, number>>(new Map());
   const sessionStatesRef = useRef<Map<string, TripStateMsg>>(new Map());
+  const clockOffsetRef = useRef(0);
 
   // Reconnect / RESUME state
   const cancelledRef = useRef(false);
@@ -117,6 +118,15 @@ export function useTripWebSocket(
             sessionStatesRef.current.set(state.session_id, state);
             lastSessionIdRef.current = state.session_id;
             lastStateVersionRef.current = state.version;
+            const refStop = state.stops.find(
+              (s) =>
+                (s.status === "ACTIVE" || s.status === "EXPECTED" || s.status === "UNSURE") &&
+                s.time_remaining_s > 0,
+            );
+            if (refStop) {
+              clockOffsetRef.current =
+                (refStop.eta - refStop.time_remaining_s) - Date.now() / 1000;
+            }
             setTripState(mergeSessionStates(sessionStatesRef.current));
             break;
           }
@@ -176,7 +186,7 @@ export function useTripWebSocket(
         lng,
         speed_mps: speedMps ?? 0,
         heading_deg: headingDeg ?? 0,
-        ts: Math.floor(Date.now() / 1000),
+        ts: Math.floor(Date.now() / 1000 + clockOffsetRef.current),
       });
     },
     [send],
