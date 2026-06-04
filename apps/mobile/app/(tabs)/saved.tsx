@@ -1,16 +1,17 @@
 import {
   ActivityIndicator,
-  SafeAreaView,
   SectionList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { useState } from "react";
 import { theme, PASTELS } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import type { SavedPlace } from "@/lib/db";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
@@ -19,22 +20,19 @@ import { SavePlaceModal } from "@/components/SavePlaceModal";
 
 type PastelKey = keyof typeof PASTELS;
 
-const CATEGORY_STYLE: Record<
-  string,
-  { icon: string; pastel: PastelKey }
-> = {
-  home:       { icon: "home",         pastel: "lavender" },
-  work:       { icon: "briefcase",    pastel: "sky"      },
-  office:     { icon: "briefcase",    pastel: "sky"      },
-  school:     { icon: "university",   pastel: "butter"   },
-  university: { icon: "university",   pastel: "butter"   },
-  gym:        { icon: "dumbbell",     pastel: "rose"     },
-  food:       { icon: "utensils",     pastel: "peach"    },
-  restaurant: { icon: "utensils",     pastel: "peach"    },
-  health:     { icon: "heartbeat",    pastel: "rose"     },
-  hospital:   { icon: "hospital",     pastel: "rose"     },
-  shopping:   { icon: "shopping-bag", pastel: "lavender" },
-  park:       { icon: "tree",         pastel: "mint"     },
+const CATEGORY_STYLE: Record<string, { icon: string; pastel: PastelKey }> = {
+  home: { icon: "home", pastel: "lavender" },
+  work: { icon: "briefcase", pastel: "sky" },
+  office: { icon: "briefcase", pastel: "sky" },
+  school: { icon: "university", pastel: "butter" },
+  university: { icon: "university", pastel: "butter" },
+  gym: { icon: "dumbbell", pastel: "rose" },
+  food: { icon: "utensils", pastel: "peach" },
+  restaurant: { icon: "utensils", pastel: "peach" },
+  health: { icon: "heartbeat", pastel: "rose" },
+  hospital: { icon: "hospital", pastel: "rose" },
+  shopping: { icon: "shopping-bag", pastel: "lavender" },
+  park: { icon: "tree", pastel: "mint" },
 };
 
 function categoryStyle(name: string): { icon: string; pastel: PastelKey } {
@@ -59,6 +57,7 @@ function PlaceRow({
   categoryId: number;
   onSetDefault: (categoryId: number, placeId: string) => void;
 }) {
+  const { colors } = useTheme();
   const { icon, pastel } = categoryStyle(categoryName);
   const p = PASTELS[pastel];
   const displayName = place.label ?? place.address;
@@ -75,11 +74,11 @@ function PlaceRow({
       </View>
 
       <View style={styles.placeText}>
-        <Text style={styles.placeName} numberOfLines={1}>
+        <Text style={[styles.placeName, { color: colors.ink }]} numberOfLines={1}>
           {displayName}
         </Text>
         {subtitle && (
-          <Text style={styles.placeAddress} numberOfLines={1}>
+          <Text style={[styles.placeAddress, { color: colors.ink3 }]} numberOfLines={1}>
             {subtitle}
           </Text>
         )}
@@ -125,6 +124,7 @@ type Section = {
 };
 
 export default function SavedScreen() {
+  const { colors } = useTheme();
   const { data, loading, error, markDefault, refresh } = useSavedPlaces();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
@@ -153,16 +153,16 @@ export default function SavedScreen() {
   }
 
   return (
-    <SafeAreaView style={styles.screen}>
+    <SafeAreaView style={[styles.screen, { backgroundColor: colors.surface }]}>
       {/* Page header */}
-      <View style={styles.pageHeader}>
+      <View style={[styles.pageHeader, { backgroundColor: colors.surface }]}>
         <View>
-          <Text style={styles.pageTitle}>Saved Places</Text>
-          <Text style={styles.pageSubtitle}>
+          <Text style={[styles.pageTitle, { color: colors.ink }]}>Saved Places</Text>
+          <Text style={[styles.pageSubtitle, { color: colors.ink2 }]}>
             Tap a place to get there fast.
           </Text>
         </View>
-        <Text style={styles.placeCount}>
+        <Text style={[styles.placeCount, { color: colors.ink3 }]}>
           {sections.reduce((n, s) => n + s.data.length, 0)} places
         </Text>
       </View>
@@ -178,13 +178,13 @@ export default function SavedScreen() {
           stickySectionHeadersEnabled={false}
           renderSectionHeader={({ section }) => (
             <View style={styles.sectionHeader}>
-              <Text style={styles.sectionTitle}>
+              <Text style={[styles.sectionTitle, { color: colors.ink3 }]}>
                 {section.title.toUpperCase()}
               </Text>
             </View>
           )}
           renderItem={({ item, section }) => (
-            <View style={styles.rowWrap}>
+            <View style={[styles.rowWrap, { backgroundColor: colors.card, borderColor: colors.divider }]}>
               <PlaceRow
                 place={item}
                 categoryName={section.title}
@@ -194,9 +194,7 @@ export default function SavedScreen() {
             </View>
           )}
           SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
-          ItemSeparatorComponent={() => (
-            <View style={styles.itemSeparator} />
-          )}
+          ItemSeparatorComponent={() => <View style={[styles.itemSeparator, { backgroundColor: colors.divider }]} />}
         />
       )}
 

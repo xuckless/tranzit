@@ -12,6 +12,7 @@ import { middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
 import type { StopTimeUpdate, CalgaryTransitRoute } from "@/types/database";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -59,6 +60,7 @@ export function BusDetailsPanel({
   onClose,
   onStopTap,
 }: BusDetailsPanelProps) {
+  const { colors } = useTheme();
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -111,21 +113,21 @@ export function BusDetailsPanel({
   const isEmpty = !loading && tripStops.length === 0;
 
   return (
-    <View style={s.panel}>
-      <View style={s.panelHeader}>
+    <View style={[s.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[s.panelHeader, { borderBottomColor: colors.border }]}>
         <View style={s.panelHeaderLeft}>
           <View style={s.panelIconBox}>
             <Ionicons name="bus" size={16} color={theme.colors.primary} />
           </View>
           <View style={s.panelTitleBlock}>
-            <Text style={s.panelTitle}>Bus {routeId}</Text>
+            <Text style={[s.panelTitle, { color: colors.ink }]}>Bus {routeId}</Text>
             {routeName ? (
-              <Text style={s.panelSub} numberOfLines={1}>{routeName}</Text>
+              <Text style={[s.panelSub, { color: colors.ink3 }]} numberOfLines={1}>{routeName}</Text>
             ) : null}
           </View>
         </View>
         <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+          <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>
       </View>
 
@@ -143,14 +145,14 @@ export function BusDetailsPanel({
               return (
                 <TouchableOpacity
                   key={stop.stop_sequence}
-                  style={[s.stopRow, stop.passed && s.stopRowPassed]}
+                  style={[s.stopRow, { borderBottomColor: colors.border }, stop.passed && s.stopRowPassed]}
                   onPress={tappable ? () => onStopTap!(telerideNum, stop.stop_name) : undefined}
                   disabled={!tappable}
                   activeOpacity={tappable ? 0.65 : 1}
                 >
                   <View style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]} />
                   <View style={s.stopInfo}>
-                    <Text style={[s.stopName, stop.passed && s.passedText]} numberOfLines={1}>
+                    <Text style={[s.stopName, { color: colors.ink }, stop.passed && s.passedText]} numberOfLines={1}>
                       {stop.stop_name}
                     </Text>
                     <Text style={[s.stopTime, stop.passed && s.passedText]}>

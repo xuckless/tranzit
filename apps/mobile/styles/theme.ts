@@ -1,6 +1,39 @@
 // Tranzit design system — forest green primary, solar yellow secondary, alert red tertiary
 // oklch values converted to hex approximations for React Native compatibility
 
+export const darkColors = {
+  primary:    "#00b352",
+  secondary:  "#FFDE00",
+  tertiary:   "#FF3B30",
+  neutral:    "#FFFFFF",
+
+  primaryDim: "#0D2E1A",
+  primaryInk: "#6DD49A",
+
+  accent:    "#FFDE00",
+  accentInk: "#F5C800",
+
+  surface:  "#0F1410",
+  surface2: "#171D18",
+  card:     "#1E2620",
+
+  ink:     "#E8F0E9",
+  ink2:    "#A8B5AA",
+  ink3:    "#6A7870",
+  divider: "rgba(255, 255, 255, 0.08)",
+
+  success: "#00C45A",
+  warn:    "#E8C800",
+  danger:  "#FF3B30",
+
+  muted:      "#1A2E20",
+  text:       "#A8B5AA",
+  selected:   "#6DD49A",
+  background: "#0F1410",
+  border:     "rgba(255, 255, 255, 0.12)",
+  error:      "#FF3B30",
+};
+
 export const PASTELS = {
   peach:    { bg: "#FDEBD8", ink: "#7A3A10" },
   butter:   { bg: "#FFF4B0", ink: "#7A6200" },   // echoes secondary #FFDE00

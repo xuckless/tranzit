@@ -11,6 +11,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -65,6 +66,7 @@ function BusRow({
   dimmed: boolean;
   onPress?: () => void;
 }) {
+  const { colors } = useTheme();
   const now = Math.floor(Date.now() / 1000);
 
   let arrLine: string;
@@ -98,7 +100,7 @@ function BusRow({
 
   return (
     <TouchableOpacity
-      style={s.busRow}
+      style={[s.busRow, { borderBottomColor: colors.divider }]}
       onPress={onPress}
       disabled={!onPress}
       activeOpacity={onPress ? 0.65 : 1}
@@ -110,7 +112,7 @@ function BusRow({
       </View>
 
       <View style={s.timeBlock}>
-        <Text style={[s.timePrimary, dimmed && s.timeDimmed]} numberOfLines={1}>
+        <Text style={[s.timePrimary, { color: colors.ink }, dimmed && s.timeDimmed]} numberOfLines={1}>
           {arrLine}
         </Text>
         {depLine != null && (
@@ -227,6 +229,7 @@ export function StopDetailsPanel({
   onClose,
   onBusTap,
 }: StopDetailsPanelProps) {
+  const { colors } = useTheme();
   const [upcoming, setUpcoming] = useState<BusEntry[]>([]);
   const [past, setPast] = useState<BusEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -251,19 +254,19 @@ export function StopDetailsPanel({
   const isEmpty = !loading && upcoming.length === 0 && past.length === 0;
 
   return (
-    <View style={s.panel}>
-      <View style={s.panelHeader}>
+    <View style={[s.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[s.panelHeader, { borderBottomColor: colors.border }]}>
         <View style={s.panelHeaderLeft}>
           <View style={s.panelIconBox}>
             <Ionicons name="bus" size={16} color={theme.colors.primary} />
           </View>
           <View style={s.panelTitleBlock}>
-            <Text style={s.panelTitle} numberOfLines={1}>{stop_name}</Text>
-            <Text style={s.panelSub}>Stop #{teleride_number}</Text>
+            <Text style={[s.panelTitle, { color: colors.ink }]} numberOfLines={1}>{stop_name}</Text>
+            <Text style={[s.panelSub, { color: colors.ink3 }]}>Stop #{teleride_number}</Text>
           </View>
         </View>
         <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
-          <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+          <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>
       </View>
 

@@ -9,6 +9,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import type { SearchSuggestion } from "@/types/places";
 
 interface Props {
@@ -20,6 +21,7 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
   suggestions,
   onSelect,
 }) => {
+  const { colors } = useTheme();
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<SearchSuggestion>) => {
       // Heuristic: main text starting with a digit is likely a street address
@@ -41,11 +43,11 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
               />
             </View>
             <View style={styles.textWrap}>
-              <Text style={styles.primaryText} numberOfLines={1}>
+              <Text style={[styles.primaryText, { color: colors.ink }]} numberOfLines={1}>
                 {item.mainText}
               </Text>
               {item.secondaryText ? (
-                <Text style={styles.subText} numberOfLines={1}>
+                <Text style={[styles.subText, { color: colors.ink3 }]} numberOfLines={1}>
                   {item.secondaryText}
                 </Text>
               ) : null}

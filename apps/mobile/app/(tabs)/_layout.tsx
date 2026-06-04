@@ -1,9 +1,10 @@
-import { Tabs } from "expo-router";
+import { Tabs, useRouter } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 // Tranzit logo mark — bus body with wheels
@@ -31,17 +32,19 @@ function TranzitLogoMark({ size = 18 }: { size?: number }) {
 
 function HeaderBar() {
   const navigation = useNavigation();
+  const router = useRouter();
   const insets = useSafeAreaInsets();
+  const { colors } = useTheme();
 
   return (
-    <View style={[styles.headerContainer, { paddingTop: insets.top + 8 }]}>
+    <View style={[styles.headerContainer, { backgroundColor: colors.surface, borderBottomColor: colors.divider }]}>
       <View style={styles.headerLeft}>
         <TranzitLogoMark size={18} />
       </View>
       <Text style={styles.appName}>Tranzit</Text>
       <TouchableOpacity
         style={styles.settingsButton}
-        onPress={() => navigation.navigate("settings" as never)}
+        onPress={() => router.push("/settings")}
       >
         <Ionicons name="settings-outline" size={20} color="#fff" />
       </TouchableOpacity>
@@ -50,17 +53,19 @@ function HeaderBar() {
 }
 
 export default function RootLayout() {
+  const { colors, isDark } = useTheme();
+
   return (
     <Tabs
       screenOptions={({ route }) => ({
         headerShown: true,
         header: () => <HeaderBar />,
         tabBarActiveTintColor: theme.colors.primary,
-        tabBarInactiveTintColor: theme.colors.ink3,
-        tabBarStyle: styles.tabBar,
+        tabBarInactiveTintColor: colors.ink3,
+        tabBarStyle: [styles.tabBar, { backgroundColor: colors.card, borderTopColor: colors.divider }],
         tabBarLabelStyle: styles.tabBarLabel,
         tabBarItemStyle: styles.tabBarItem,
-        sceneContainerStyle: { backgroundColor: theme.colors.surface },
+        sceneContainerStyle: { backgroundColor: colors.surface },
       })}
     >
       <Tabs.Screen
@@ -114,10 +119,7 @@ export default function RootLayout() {
           ),
         }}
       />
-      <Tabs.Screen
-        name="report"
-        options={{ href: null }}
-      />
+      <Tabs.Screen name="report" options={{ href: null }} />
       <Tabs.Screen
         name="commute"
         options={{

@@ -26,6 +26,7 @@ import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { theme, PASTELS } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { routeStore } from "@/lib/routeStore";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
@@ -352,6 +353,7 @@ function StopItem({
 
 export default function CommuteScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
   const [reportSelected, setReportSelected] = useState<string | null>(null);
   const [reportSeverity, setReportSeverity] = useState(1);
   const [reportSent, setReportSent] = useState(false);
@@ -861,7 +863,7 @@ export default function CommuteScreen() {
   // ── Empty state ────────────────────────────────────────────────────────────
   if (!route) {
     return (
-      <View style={styles.emptyScreen}>
+      <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
         <Ionicons name="navigate-outline" size={48} color={theme.colors.text} />
         <Text style={styles.emptyTitle}>No Active Journey</Text>
         <Text style={styles.emptySubtitle}>
@@ -872,7 +874,7 @@ export default function CommuteScreen() {
   }
 
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: colors.surface }]}>
       {/* ── Rerouting banner ── */}
       {reroutingVisible && (
         <View style={styles.rerouteBanner}>
@@ -897,7 +899,7 @@ export default function CommuteScreen() {
       {/* ── Boarding confirm prompt ── */}
       {boardingConfirmStop && (
         <View style={styles.boardingConfirmOverlay}>
-          <View style={styles.boardingConfirmCard}>
+          <View style={[styles.boardingConfirmCard, { backgroundColor: colors.card }]}>
             <Text style={styles.boardingConfirmTitle}>Did you board?</Text>
             <Text style={styles.boardingConfirmSub}>
               Confirm whether you boarded the bus at stop {boardingConfirmStop}.
@@ -1050,7 +1052,7 @@ export default function CommuteScreen() {
         </View>
 
         {/* ── Hero Section ── */}
-        <View style={styles.hero}>
+        <View style={[styles.hero, { backgroundColor: colors.surface }]}>
           {(boardingStep || co2Saved != null) && (
             <View style={styles.heroBadgeRow}>
               {boardingStep ? (
@@ -1099,7 +1101,7 @@ export default function CommuteScreen() {
 
         <View style={styles.content}>
           {/* ── Journey summary + progress bar ── */}
-          <View style={styles.journeyCard}>
+          <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
             <View style={styles.journeyCardTop}>
               <View style={{ flex: 1, marginRight: 10 }}>
                 <Text style={styles.journeyDestination} numberOfLines={1}>
@@ -1147,7 +1149,7 @@ export default function CommuteScreen() {
           </View>
 
           {/* ── Route Progress Timeline ── */}
-          <View style={styles.timelineCard}>
+          <View style={[styles.timelineCard, { backgroundColor: colors.surface2, borderColor: colors.divider }]}>
             <View style={styles.sectionLabelRow}>
               <Ionicons name="navigate" size={15} color={theme.colors.primary} />
               <Text style={styles.sectionLabel}>ROUTE PROGRESS</Text>
@@ -1200,7 +1202,7 @@ export default function CommuteScreen() {
           )}
 
           {/* ── Community Reports ── */}
-          <View style={styles.communityCard}>
+          <View style={[styles.communityCard, { backgroundColor: colors.surface2, borderColor: colors.divider }]}>
             <View style={styles.communityHeader}>
               <MaterialCommunityIcons name="account-group" size={22} color={theme.colors.selected} />
               <Text style={styles.communityTitle}>Community Reports</Text>
@@ -1303,7 +1305,7 @@ export default function CommuteScreen() {
       </ScrollView>
 
       {/* ── End Journey Bar ── */}
-      <View style={styles.exitBar}>
+      <View style={[styles.exitBar, { backgroundColor: colors.surface, borderTopColor: colors.divider }]}>
         <TouchableOpacity style={styles.exitBtn} onPress={handleExit} activeOpacity={0.85}>
           <Ionicons name="stop-circle-outline" size={20} color="white" />
           <Text style={styles.exitBtnText}>End Journey</Text>

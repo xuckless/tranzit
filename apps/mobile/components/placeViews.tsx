@@ -10,6 +10,7 @@ import { ScrollView } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import type { PlaceDetails } from "@/types/places";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── PlaceDetailsPanel ────────────────────────────────────────────────────────
 
@@ -28,6 +29,7 @@ export function PlaceDetailsPanel({
   onDirections,
   onBack,
 }: PlaceDetailsPanelProps) {
+  const { colors } = useTheme();
   const openNow = place.regularOpeningHours?.openNow;
   const hours = place.regularOpeningHours?.weekdayDescriptions ?? [];
 
@@ -37,9 +39,9 @@ export function PlaceDetailsPanel({
   const todayApiIndex = jsDay === 0 ? 6 : jsDay - 1;
 
   return (
-    <View style={s.panel}>
+    <View style={[s.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
       {/* Header */}
-      <View style={s.panelHeader}>
+      <View style={[s.panelHeader, { borderBottomColor: colors.border }]}>
         {onBack && (
           <TouchableOpacity
             onPress={onBack}
@@ -54,11 +56,11 @@ export function PlaceDetailsPanel({
             <Ionicons name="location" size={16} color={theme.colors.primary} />
           </View>
           <View style={s.panelTitleBlock}>
-            <Text style={s.panelTitle} numberOfLines={1}>
+            <Text style={[s.panelTitle, { color: colors.ink }]} numberOfLines={1}>
               {place.displayName.text}
             </Text>
             {place.formattedAddress ? (
-              <Text style={s.panelSub} numberOfLines={1}>
+              <Text style={[s.panelSub, { color: colors.ink3 }]} numberOfLines={1}>
                 {place.formattedAddress}
               </Text>
             ) : null}
@@ -68,7 +70,7 @@ export function PlaceDetailsPanel({
           onPress={onClose}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
         >
-          <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+          <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>
       </View>
 
@@ -141,9 +143,9 @@ export function PlaceDetailsPanel({
                 {hours.map((line, i) => (
                   <View
                     key={i}
-                    style={[s.hoursRow, i === hours.length - 1 && s.hoursRowLast]}
+                    style={[s.hoursRow, { borderBottomColor: colors.border }, i === hours.length - 1 && s.hoursRowLast]}
                   >
-                    <Text style={[s.hoursText, i === todayApiIndex && s.hoursTodayText]}>
+                    <Text style={[s.hoursText, i === todayApiIndex && { color: colors.ink, fontWeight: "700" }]}>
                       {line}
                     </Text>
                   </View>
@@ -156,7 +158,7 @@ export function PlaceDetailsPanel({
 
       {/* Directions button */}
       {!isFetching && (
-        <View style={s.footer}>
+        <View style={[s.footer, { borderTopColor: colors.border }]}>
           <TouchableOpacity
             style={s.directionsBtn}
             activeOpacity={0.85}

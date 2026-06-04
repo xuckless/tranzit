@@ -34,6 +34,7 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { PlaceDetails } from "@/types/places";
@@ -120,6 +121,7 @@ function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: n
 export default function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const router = useRouter();
+  const { colors } = useTheme();
   const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
   const lastSnap = useRef(SNAP_COLLAPSED);
   const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
@@ -717,7 +719,7 @@ export default function MapScreen() {
 
       {/* Re-center button */}
       <TouchableOpacity
-        style={styles.recenterButton}
+        style={[styles.recenterButton, { backgroundColor: colors.card }]}
         onPress={fetchCurrentLocation}
         activeOpacity={0.85}
         disabled={loadingLocation}
@@ -737,10 +739,10 @@ export default function MapScreen() {
       )}
 
       {/* ════════ BOTTOM SHEET ════════ */}
-      <Animated.View style={[styles.sheet, { height: sheetAnim }]}>
+      <Animated.View style={[styles.sheet, { height: sheetAnim, backgroundColor: colors.card }]}>
         <View {...panResponder.panHandlers} style={styles.handleArea}>
-          <View style={styles.handle} />
-          <Text style={styles.handleHint}>
+          <View style={[styles.handle, { backgroundColor: colors.divider }]} />
+          <Text style={[styles.handleHint, { color: colors.ink3 }]}>
             {isExpanded ? "Nearby Stops" : "Explore"}
           </Text>
         </View>
@@ -765,7 +767,7 @@ export default function MapScreen() {
         )}
 
         {nearbyState && !isSearchActive && !placeDetails?.fromNearby && (
-          <View style={styles.nearbyPlacesPanel}>
+          <View style={[styles.nearbyPlacesPanel, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
             <View style={styles.nearbyPlacesHeader}>
               <View style={styles.nearbyPlacesTitleRow}>
                 <Ionicons name="location" size={14} color={theme.colors.primary} />
@@ -804,10 +806,10 @@ export default function MapScreen() {
                       <Ionicons name="storefront-outline" size={14} color={theme.colors.primary} />
                     </View>
                     <View style={styles.nearbyPlaceText}>
-                      <Text style={styles.nearbyPlaceName} numberOfLines={1}>
+                      <Text style={[styles.nearbyPlaceName, { color: colors.ink }]} numberOfLines={1}>
                         {place.displayName.text}
                       </Text>
-                      <Text style={styles.nearbyPlaceAddress} numberOfLines={1}>
+                      <Text style={[styles.nearbyPlaceAddress, { color: colors.ink3 }]} numberOfLines={1}>
                         {place.formattedAddress}
                       </Text>
                     </View>
@@ -872,7 +874,7 @@ export default function MapScreen() {
 
         {!isSearchActive && (
           <View style={styles.sectionWrap}>
-            <Text style={styles.sectionLabel}>Quick Access</Text>
+            <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Quick Access</Text>
             <ScrollView
               horizontal
               showsHorizontalScrollIndicator={false}
@@ -911,7 +913,7 @@ export default function MapScreen() {
                     >
                       <FontAwesome5 name={icon as any} size={14} color={color} />
                     </View>
-                    <Text style={styles.quickLabel}>{item.categoryName}</Text>
+                    <Text style={[styles.quickLabel, { color: colors.ink2 }]}>{item.categoryName}</Text>
                   </TouchableOpacity>
                 );
               })}
@@ -923,23 +925,23 @@ export default function MapScreen() {
                 <View
                   style={[
                     styles.quickIconBox,
-                    { backgroundColor: theme.colors.muted },
+                    { backgroundColor: colors.surface2 },
                   ]}
                 >
-                  <Ionicons name="add" size={16} color={theme.colors.text} />
+                  <Ionicons name="add" size={16} color={colors.ink2} />
                 </View>
-                <Text style={styles.quickLabel}>Add</Text>
+                <Text style={[styles.quickLabel, { color: colors.ink2 }]}>Add</Text>
               </TouchableOpacity>
             </ScrollView>
           </View>
         )}
 
         {isExpanded && !isSearchActive && (
-          <View style={styles.nearbyWrap}>
+          <View style={[styles.nearbyWrap, { borderTopColor: colors.divider }]}>
             <View style={styles.nearbyHeader}>
               <View style={styles.nearbyTitleRow}>
                 <Ionicons name="radio-button-on" size={14} color={theme.colors.primary} />
-                <Text style={styles.sectionLabel}>Nearby Stops</Text>
+                <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Nearby Stops</Text>
               </View>
             </View>
             <ScrollView
@@ -957,6 +959,7 @@ export default function MapScreen() {
                       key={String(stop.teleride_number)}
                       style={[
                         styles.stopRow,
+                        { borderBottomColor: colors.divider },
                         i === nearbyTransitStops.length - 1 && { borderBottomWidth: 0 },
                       ]}
                       activeOpacity={0.75}
@@ -979,10 +982,10 @@ export default function MapScreen() {
                         />
                       </View>
                       <View style={styles.stopInfo}>
-                        <Text style={styles.stopName} numberOfLines={1}>
+                        <Text style={[styles.stopName, { color: colors.ink }]} numberOfLines={1}>
                           {stop.stop_name ?? "Unknown Stop"}
                         </Text>
-                        <Text style={styles.stopRoute}>Stop #{stop.teleride_number}</Text>
+                        <Text style={[styles.stopRoute, { color: colors.ink3 }]}>Stop #{stop.teleride_number}</Text>
                       </View>
                     </TouchableOpacity>
                   );

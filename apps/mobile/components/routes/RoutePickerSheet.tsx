@@ -10,6 +10,7 @@ import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import type { Route, RouteStep } from "@/types/places";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { useRouteLiveStops } from "@/lib/routeSSE";
 import type { RouteSSEStop } from "@/lib/routeSSE";
 
@@ -197,6 +198,7 @@ function RouteCard({
   isSelected: boolean;
   onSelect: () => void;
 }) {
+  const { colors } = useTheme();
   const allSteps = route.legs.flatMap((l) => l.steps);
   const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
   const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
@@ -205,7 +207,7 @@ function RouteCard({
 
   return (
     <TouchableOpacity
-      style={[styles.card, isSelected && styles.cardSelected]}
+      style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, isSelected && styles.cardSelected]}
       onPress={onSelect}
       activeOpacity={0.85}
     >
@@ -217,11 +219,11 @@ function RouteCard({
 
       <View style={styles.cardHeader}>
         <Text
-          style={[styles.duration, isSelected && { color: theme.colors.primary }]}
+          style={[styles.duration, { color: colors.ink }, isSelected && { color: theme.colors.primary }]}
         >
           {formatDuration(route.duration)}
         </Text>
-        <Text style={styles.distance}>
+        <Text style={[styles.distance, { color: colors.ink3 }]}>
           {formatDistance(route.distanceMeters)}
         </Text>
       </View>
@@ -258,11 +260,12 @@ interface Props {
 }
 
 export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
+  const { colors } = useTheme();
   return (
     <View style={styles.container}>
       <View style={styles.header}>
-        <Ionicons name="git-branch-outline" size={14} color={theme.colors.text} />
-        <Text style={styles.headerLabel}>
+        <Ionicons name="git-branch-outline" size={14} color={colors.ink3} />
+        <Text style={[styles.headerLabel, { color: colors.ink3 }]}>
           {routes.length} route{routes.length !== 1 ? "s" : ""} available
         </Text>
       </View>

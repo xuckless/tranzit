@@ -16,6 +16,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { AutocompletePrediction } from "@/types/places";
 import {
@@ -60,6 +61,8 @@ export function SavePlaceModal({
   preselectedPlace,
   userLocation,
 }: Props) {
+  const { colors } = useTheme();
+
   // ── Phase ──
   const [phase, setPhase] = useState<"search" | "details">(
     preselectedPlace ? "details" : "search"
@@ -242,14 +245,14 @@ export function SavePlaceModal({
         style={styles.keyboardView}
         pointerEvents="box-none"
       >
-        <View style={styles.sheet}>
+        <View style={[styles.sheet, { backgroundColor: colors.card }]}>
           {/* Handle */}
           <View style={styles.handleRow}>
-            <View style={styles.handle} />
+            <View style={[styles.handle, { backgroundColor: colors.divider }]} />
           </View>
 
           {/* Header */}
-          <View style={styles.header}>
+          <View style={[styles.header, { borderBottomColor: colors.divider }]}>
             {phase === "details" && !preselectedPlace && (
               <TouchableOpacity
                 onPress={() => setPhase("search")}
@@ -262,7 +265,7 @@ export function SavePlaceModal({
                 />
               </TouchableOpacity>
             )}
-            <Text style={styles.title}>Save Place</Text>
+            <Text style={[styles.title, { color: colors.ink }]}>Save Place</Text>
             <TouchableOpacity
               onPress={onClose}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -279,21 +282,21 @@ export function SavePlaceModal({
           {phase === "search" && (
             <>
               <View style={styles.searchRow}>
-                <View style={styles.searchBox}>
+                <View style={[styles.searchBox, { backgroundColor: colors.surface2, borderColor: colors.divider }]}>
                   {isSearching ? (
                     <ActivityIndicator
                       size="small"
                       color={theme.colors.primary}
                     />
                   ) : (
-                    <Ionicons name="search" size={18} color="#8a8f9e" />
+                    <Ionicons name="search" size={18} color={colors.ink3} />
                   )}
                   <TextInput
-                    style={styles.searchInput}
+                    style={[styles.searchInput, { color: colors.ink }]}
                     value={searchQuery}
                     onChangeText={setSearchQuery}
                     placeholder="Search for a place…"
-                    placeholderTextColor="#8a8f9e"
+                    placeholderTextColor={colors.ink3}
                     autoFocus
                     returnKeyType="search"
                     autoCorrect={false}
@@ -328,7 +331,7 @@ export function SavePlaceModal({
                   style={styles.resultsList}
                   renderItem={({ item }) => (
                     <TouchableOpacity
-                      style={styles.resultRow}
+                      style={[styles.resultRow, { borderBottomColor: colors.divider }]}
                       onPress={() => handleSelectResult(item)}
                       activeOpacity={0.75}
                     >
@@ -340,10 +343,10 @@ export function SavePlaceModal({
                         />
                       </View>
                       <View style={styles.resultText}>
-                        <Text style={styles.resultName} numberOfLines={1}>
+                        <Text style={[styles.resultName, { color: colors.ink }]} numberOfLines={1}>
                           {item.structured_formatting.main_text}
                         </Text>
-                        <Text style={styles.resultAddress} numberOfLines={1}>
+                        <Text style={[styles.resultAddress, { color: colors.ink3 }]} numberOfLines={1}>
                           {item.structured_formatting.secondary_text ?? item.description}
                         </Text>
                       </View>
@@ -391,11 +394,11 @@ export function SavePlaceModal({
               <View style={styles.field}>
                 <Text style={styles.fieldLabel}>Label (optional)</Text>
                 <TextInput
-                  style={styles.textInput}
+                  style={[styles.textInput, { color: colors.ink, backgroundColor: colors.surface2, borderColor: colors.border }]}
                   value={label}
                   onChangeText={setLabel}
                   placeholder="e.g. Mom's House, My Office…"
-                  placeholderTextColor="#8a8f9e"
+                  placeholderTextColor={colors.ink3}
                   returnKeyType="done"
                   maxLength={60}
                 />
@@ -464,11 +467,11 @@ export function SavePlaceModal({
                 {/* New category name input */}
                 {isCreatingCategory && (
                   <TextInput
-                    style={[styles.textInput, { marginTop: 10 }]}
+                    style={[styles.textInput, { marginTop: 10, color: colors.ink, backgroundColor: colors.surface2, borderColor: colors.border }]}
                     value={newCategoryName}
                     onChangeText={setNewCategoryName}
                     placeholder="Category name…"
-                    placeholderTextColor="#8a8f9e"
+                    placeholderTextColor={colors.ink3}
                     returnKeyType="done"
                     autoFocus
                     maxLength={40}
@@ -506,7 +509,7 @@ export function SavePlaceModal({
 
           {/* Save button — only in details phase */}
           {phase === "details" && (
-            <View style={styles.saveRow}>
+            <View style={[styles.saveRow, { borderTopColor: colors.divider }]}>
               <TouchableOpacity
                 style={[styles.saveBtn, !canSave && styles.saveBtnDisabled]}
                 onPress={handleSave}

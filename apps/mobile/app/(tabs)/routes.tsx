@@ -29,6 +29,7 @@ import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import * as Location from "expo-location";
 import { theme } from "@/styles/theme";
+import { useTheme } from "@/contexts/ThemeContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import { useDestinationSearch } from "@/hooks/useDestinationSearch";
 import { DestinationSuggestionsList } from "@/components/search/DestinationSuggestionsList";
@@ -68,6 +69,7 @@ const FILTERS: { mode: FilterMode; icon: string }[] = [
 
 export default function RouteScreen() {
   const router = useRouter();
+  const { colors } = useTheme();
   const {
     destinationId,
     destinationLat,
@@ -499,7 +501,7 @@ export default function RouteScreen() {
 
   // ─── Render ──────────────────────────────────────────────────────────────────
   return (
-    <View style={styles.screen}>
+    <View style={[styles.screen, { backgroundColor: colors.surface }]}>
       <Map
         style={styles.map}
         mapStyle={STYLE_URL}
@@ -572,7 +574,7 @@ export default function RouteScreen() {
       </Map>
 
       {/* ── Search panel ── */}
-      <View style={styles.searchPanel}>
+      <View style={[styles.searchPanel, { backgroundColor: colors.card }]}>
         <View style={styles.searchRows}>
           <View style={styles.searchRow}>
             <AntDesign
@@ -583,7 +585,7 @@ export default function RouteScreen() {
             />
             <TextInput
               ref={originInputRef}
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: colors.ink }]}
               value={originLabel}
               onChangeText={handleOriginChange}
               onFocus={() => {
@@ -628,7 +630,7 @@ export default function RouteScreen() {
             )}
           </View>
 
-          <View style={styles.searchDivider} />
+          <View style={[styles.searchDivider, { backgroundColor: colors.divider }]} />
 
           <View style={styles.searchRow}>
             <Ionicons
@@ -639,7 +641,7 @@ export default function RouteScreen() {
             />
             <TextInput
               ref={destInputRef}
-              style={styles.searchInput}
+              style={[styles.searchInput, { color: colors.ink }]}
               value={destinationLabel}
               onChangeText={handleDestChange}
               onFocus={() => {
@@ -676,7 +678,7 @@ export default function RouteScreen() {
 
           {!focusedField && destinationLabel.length > 0 && (
             <>
-              <View style={styles.searchDivider} />
+              <View style={[styles.searchDivider, { backgroundColor: colors.divider }]} />
               <TouchableOpacity
                 style={[
                   styles.findRoutesBtn,
@@ -767,7 +769,7 @@ export default function RouteScreen() {
           {isLoadingRoutes && (
             <View style={styles.centerState}>
               <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={styles.stateText}>Finding routes…</Text>
+              <Text style={[styles.stateText, { color: colors.ink }]}>Finding routes…</Text>
             </View>
           )}
 
