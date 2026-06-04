@@ -15,7 +15,6 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import type { SavedPlace } from "@/lib/db";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
-
 // ─── Category → pastel + icon ─────────────────────────────────────────────────
 
 type PastelKey = keyof typeof PASTELS;
@@ -74,11 +73,17 @@ function PlaceRow({
       </View>
 
       <View style={styles.placeText}>
-        <Text style={[styles.placeName, { color: colors.ink }]} numberOfLines={1}>
+        <Text
+          style={[styles.placeName, { color: colors.ink }]}
+          numberOfLines={1}
+        >
           {displayName}
         </Text>
         {subtitle && (
-          <Text style={[styles.placeAddress, { color: colors.ink3 }]} numberOfLines={1}>
+          <Text
+            style={[styles.placeAddress, { color: colors.ink3 }]}
+            numberOfLines={1}
+          >
             {subtitle}
           </Text>
         )}
@@ -153,50 +158,61 @@ export default function SavedScreen() {
   }
 
   return (
-    <SafeAreaView style={[styles.screen, { backgroundColor: colors.surface }]}>
-      {/* Page header */}
-      <View style={[styles.pageHeader, { backgroundColor: colors.surface }]}>
-        <View>
-          <Text style={[styles.pageTitle, { color: colors.ink }]}>Saved Places</Text>
-          <Text style={[styles.pageSubtitle, { color: colors.ink2 }]}>
-            Tap a place to get there fast.
-          </Text>
-        </View>
-        <Text style={[styles.placeCount, { color: colors.ink3 }]}>
-          {sections.reduce((n, s) => n + s.data.length, 0)} places
-        </Text>
-      </View>
-
-      {sections.length === 0 ? (
-        <EmptyState />
-      ) : (
-        <SectionList
-          sections={sections}
-          keyExtractor={(item) => item.googlePlaceId}
-          contentContainerStyle={styles.list}
-          showsVerticalScrollIndicator={false}
-          stickySectionHeadersEnabled={false}
-          renderSectionHeader={({ section }) => (
-            <View style={styles.sectionHeader}>
-              <Text style={[styles.sectionTitle, { color: colors.ink3 }]}>
-                {section.title.toUpperCase()}
+    <View style={[styles.screen, { backgroundColor: colors.surface }]}>
+      <SectionList
+        sections={sections}
+        keyExtractor={(item) => item.googlePlaceId}
+        contentContainerStyle={styles.list}
+        showsVerticalScrollIndicator={false}
+        stickySectionHeadersEnabled={false}
+        ListHeaderComponent={
+          <View style={[styles.pageHeader, { backgroundColor: colors.surface }]}>
+            <View>
+              <Text style={[styles.pageTitle, { color: colors.ink }]}>
+                Saved Places
+              </Text>
+              <Text style={[styles.pageSubtitle, { color: colors.ink2 }]}>
+                Tap a place to get there fast.
               </Text>
             </View>
-          )}
-          renderItem={({ item, section }) => (
-            <View style={[styles.rowWrap, { backgroundColor: colors.card, borderColor: colors.divider }]}>
-              <PlaceRow
-                place={item}
-                categoryName={section.title}
-                categoryId={section.categoryId}
-                onSetDefault={markDefault}
-              />
-            </View>
-          )}
-          SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
-          ItemSeparatorComponent={() => <View style={[styles.itemSeparator, { backgroundColor: colors.divider }]} />}
-        />
-      )}
+            <Text style={[styles.placeCount, { color: colors.ink3 }]}>
+              {sections.reduce((n, s) => n + s.data.length, 0)} places
+            </Text>
+          </View>
+        }
+        ListEmptyComponent={<EmptyState />}
+        renderSectionHeader={({ section }) => (
+          <View style={styles.sectionHeader}>
+            <Text style={[styles.sectionTitle, { color: colors.ink3 }]}>
+              {section.title.toUpperCase()}
+            </Text>
+          </View>
+        )}
+        renderItem={({ item, section }) => (
+          <View
+            style={[
+              styles.rowWrap,
+              { backgroundColor: colors.card, borderColor: colors.divider },
+            ]}
+          >
+            <PlaceRow
+              place={item}
+              categoryName={section.title}
+              categoryId={section.categoryId}
+              onSetDefault={markDefault}
+            />
+          </View>
+        )}
+        SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
+        ItemSeparatorComponent={() => (
+          <View
+            style={[
+              styles.itemSeparator,
+              { backgroundColor: colors.divider },
+            ]}
+          />
+        )}
+      />
 
       {/* FAB */}
       <TouchableOpacity
@@ -212,7 +228,7 @@ export default function SavedScreen() {
         onClose={() => setShowSaveModal(false)}
         onSaved={refresh}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
