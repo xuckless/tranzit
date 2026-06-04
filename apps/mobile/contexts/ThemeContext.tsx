@@ -3,6 +3,7 @@ import React, {
   useCallback,
   useContext,
   useEffect,
+  useMemo,
   useState,
 } from "react";
 import * as SecureStore from "expo-secure-store";
@@ -27,26 +28,34 @@ const ThemeContext = createContext<ThemeContextValue>({
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [isDark, setIsDark] = useState(false);
 
+  // Load persisted preference on mount
   useEffect(() => {
     SecureStore.getItemAsync(DARK_MODE_KEY).then((val) => {
       if (val === "true") setIsDark(true);
     });
   }, []);
 
+  // Persist whenever isDark changes (separated from the state updater)
+  useEffect(() => {
+    SecureStore.setItemAsync(DARK_MODE_KEY, String(isDark));
+  }, [isDark]);
+
+  // Pure toggle — no side effects inside the updater
   const toggle = useCallback(() => {
-    setIsDark((prev) => {
-      const next = !prev;
-      SecureStore.setItemAsync(DARK_MODE_KEY, String(next));
-      return next;
-    });
+    setIsDark((prev) => !prev);
   }, []);
 
-  const colors = isDark ? (darkColors as ThemeColors) : theme.colors;
+  const value = useMemo<ThemeContextValue>(
+    () => ({
+      isDark,
+      toggle,
+      colors: isDark ? (darkColors as ThemeColors) : theme.colors,
+    }),
+    [isDark, toggle],
+  );
 
   return (
-    <ThemeContext.Provider value={{ isDark, toggle, colors }}>
-      {children}
-    </ThemeContext.Provider>
+    <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
   );
 }
 

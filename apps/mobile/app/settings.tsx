@@ -28,7 +28,11 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>Preferences</Text>
 
         <View style={styles.settingItem}>
-          <Ionicons name="moon-outline" size={22} color={theme.colors.primary} />
+          <Ionicons
+            name="moon-outline"
+            size={22}
+            color={theme.colors.primary}
+          />
           <Text style={styles.settingText}>Dark Mode</Text>
           <Switch
             value={isDark}
@@ -40,13 +44,21 @@ export default function SettingsScreen() {
         </View>
 
         <TouchableOpacity style={styles.settingItem}>
-          <Ionicons name="color-palette-outline" size={22} color={theme.colors.primary} />
+          <Ionicons
+            name="color-palette-outline"
+            size={22}
+            color={theme.colors.primary}
+          />
           <Text style={styles.settingText}>Choose your theme</Text>
           <Ionicons name="chevron-forward" size={18} color={colors.ink3} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.settingItem}>
-          <Ionicons name="notifications-outline" size={22} color={theme.colors.primary} />
+          <Ionicons
+            name="notifications-outline"
+            size={22}
+            color={theme.colors.primary}
+          />
           <Text style={styles.settingText}>Notifications</Text>
           <Ionicons name="chevron-forward" size={18} color={colors.ink3} />
         </TouchableOpacity>
@@ -56,13 +68,21 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>Account</Text>
 
         <TouchableOpacity style={styles.settingItem}>
-          <Ionicons name="person-outline" size={22} color={theme.colors.primary} />
+          <Ionicons
+            name="person-outline"
+            size={22}
+            color={theme.colors.primary}
+          />
           <Text style={styles.settingText}>Profile</Text>
           <Ionicons name="chevron-forward" size={18} color={colors.ink3} />
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.settingItem}>
-          <Ionicons name="help-circle-outline" size={22} color={theme.colors.primary} />
+          <Ionicons
+            name="help-circle-outline"
+            size={22}
+            color={theme.colors.primary}
+          />
           <Text style={styles.settingText}>Help & Support</Text>
           <Ionicons name="chevron-forward" size={18} color={colors.ink3} />
         </TouchableOpacity>
