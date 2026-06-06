@@ -129,6 +129,7 @@ function TransitChipLive({ step }: { step: RouteStep }) {
 // ─── Step Chips row ───────────────────────────────────────────────────────────
 
 export function StepChips({ steps }: { steps: RouteStep[] }) {
+  const { colors } = useTheme();
   const condensed = condense(steps);
 
   return (
@@ -136,15 +137,15 @@ export function StepChips({ steps }: { steps: RouteStep[] }) {
       {condensed.map((step, i) => (
         <React.Fragment key={i}>
           {step.travelMode === "WALK" ? (
-            <View style={chipStyles.walkChip}>
-              <FontAwesome5 name="walking" size={10} color="#757575" />
+            <View style={[chipStyles.walkChip, { backgroundColor: colors.surface2 }]}>
+              <FontAwesome5 name="walking" size={10} color={colors.ink3} />
             </View>
           ) : (
             <TransitChipLive step={step} />
           )}
 
           {i < condensed.length - 1 && (
-            <Ionicons name="chevron-forward" size={10} color="#BDBDBD" />
+            <Ionicons name="chevron-forward" size={10} color={colors.ink3} />
           )}
         </React.Fragment>
       ))}
@@ -207,7 +208,12 @@ function RouteCard({
 
   return (
     <TouchableOpacity
-      style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }, isSelected && styles.cardSelected]}
+      style={[
+        styles.card,
+        { backgroundColor: colors.card, borderColor: colors.border },
+        isSelected && styles.cardSelected,
+        isSelected && { backgroundColor: colors.surface2 },
+      ]}
       onPress={onSelect}
       activeOpacity={0.85}
     >
@@ -231,17 +237,17 @@ function RouteCard({
       {(firstDept || lastArr) && (
         <View style={styles.timeRow}>
           {firstDept && (
-            <Text style={styles.timeText}>{fmtTime(firstDept)}</Text>
+            <Text style={[styles.timeText, { color: colors.ink2 }]}>{fmtTime(firstDept)}</Text>
           )}
           {firstDept && lastArr && (
             <Ionicons
               name="arrow-forward"
               size={11}
-              color={theme.colors.text}
+              color={colors.ink3}
             />
           )}
           {lastArr && (
-            <Text style={styles.timeText}>{fmtTime(lastArr)}</Text>
+            <Text style={[styles.timeText, { color: colors.ink2 }]}>{fmtTime(lastArr)}</Text>
           )}
         </View>
       )}

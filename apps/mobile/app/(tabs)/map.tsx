@@ -62,7 +62,9 @@ const CALGARY_MAX_BOUNDS: [number, number, number, number] = [-115.5, 50.147, -1
 // MapLibre's minZoomLevel is enforced in the shader — no React unmount cost.
 const MIN_MARKER_ZOOM = 12;
 
-const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
+const MAPTILER_KEY = process.env.EXPO_PUBLIC_MAPTILER_KEY;
+const STYLE_URL_LIGHT = `https://api.maptiler.com/maps/positron/style.json?key=${MAPTILER_KEY}`;
+const STYLE_URL_DARK = `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`;
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -121,7 +123,11 @@ function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: n
 export default function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const router = useRouter();
-  const { colors } = useTheme();
+  const { colors, isDark } = useTheme();
+  const styleUrl = useMemo(
+    () => (isDark ? STYLE_URL_DARK : STYLE_URL_LIGHT),
+    [isDark],
+  );
   const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
   const lastSnap = useRef(SNAP_COLLAPSED);
   const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
@@ -170,27 +176,46 @@ export default function MapScreen() {
   const layerTappedRef = useRef(false);
 
   // ── Load active transit stops with imminent-arrival filter ───────────────────
-  // Same filtering logic as before — keeps stop set to ~500-800 instead of ~3000.
+  // When the live arrival feed is fresh, the stop set is narrowed to stops with an
+  // imminent arrival (~500-800 of ~3000). When the feed is stale/empty/errored we
+  // fall back to showing all ACTIVE stops rather than zero — the arrival gate must
+  // never be able to silently wipe every dot off the map.
   useEffect(() => {
     const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
-    Promise.all([
-      loadAndCacheStops(),
-      middlewareQuery<{ stop_id: string | null }>("stop_time_updates", {
-        schedule_relationship: "neq.NO_DATA",
-        or: `(arrival_time.gte.${fiveMinAgo},arrival_time.eq.-1)`,
-        limit: 5000,
-      }),
-    ]).then(([allStops, scheduledStus]) => {
-      const scheduled = new Set(scheduledStus.map((s) => s.stop_id));
+    (async () => {
+      let activeStops: CalgaryTransitStop[] = [];
+      try {
+        const allStops = await loadAndCacheStops();
+        activeStops = allStops.filter(
+          (s) => s.status?.toLowerCase() === "active" && s.teleride_number != null,
+        );
+      } catch (e) {
+        console.warn("[map] stop cache load failed", e);
+        return; // nothing to render
+      }
+
+      let scheduled = new Set<string | null>();
+      try {
+        const scheduledStus = await middlewareQuery<{ stop_id: string | null }>(
+          "stop_time_updates",
+          {
+            schedule_relationship: "neq.NO_DATA",
+            or: `(arrival_time.gte.${fiveMinAgo},arrival_time.eq.-1)`,
+            limit: 5000,
+          },
+        );
+        scheduled = new Set(scheduledStus.map((s) => s.stop_id));
+      } catch (e) {
+        console.warn("[map] stop_time_updates gate failed; showing all active stops", e);
+      }
+
+      // Stale/empty feed → show all active stops instead of zero.
       setTransitStops(
-        allStops.filter(
-          (s) =>
-            s.status?.toLowerCase() === "active" &&
-            s.teleride_number != null &&
-            scheduled.has(String(s.teleride_number)),
-        ),
+        scheduled.size === 0
+          ? activeStops
+          : activeStops.filter((s) => scheduled.has(String(s.teleride_number))),
       );
-    });
+    })();
   }, []);
 
   // ── Stops GeoJSON ─────────────────────────────────────────────────────────────
@@ -615,7 +640,7 @@ export default function MapScreen() {
     <View style={styles.container}>
       <Map
         style={styles.map}
-        mapStyle={STYLE_URL}
+        mapStyle={styleUrl}
         onPress={onMapPress}
         onLongPress={onMapLongPress}
         compass={true}

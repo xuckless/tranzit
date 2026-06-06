@@ -105,18 +105,21 @@ function BusRow({
       disabled={!onPress}
       activeOpacity={onPress ? 0.65 : 1}
     >
-      <View style={[s.routeBadge, dimmed && s.routeBadgeDimmed]}>
+      <View style={[s.routeBadge, dimmed && { backgroundColor: colors.ink3 }]}>
         <Text style={s.routeLabel} numberOfLines={1}>
           {bus.route_id}
         </Text>
       </View>
 
       <View style={s.timeBlock}>
-        <Text style={[s.timePrimary, { color: colors.ink }, dimmed && s.timeDimmed]} numberOfLines={1}>
+        <Text
+          style={[s.timePrimary, { color: dimmed ? colors.ink3 : colors.ink }]}
+          numberOfLines={1}
+        >
           {arrLine}
         </Text>
         {depLine != null && (
-          <Text style={[s.timeSecondary, dimmed && s.timeDimmed]} numberOfLines={1}>
+          <Text style={[s.timeSecondary, { color: colors.ink3 }]} numberOfLines={1}>
             {depLine}
           </Text>
         )}
@@ -129,8 +132,8 @@ function BusRow({
       )}
 
       {(dimmed || isDeparted) && (
-        <View style={s.pastPill}>
-          <Text style={s.pastPillText}>Past</Text>
+        <View style={[s.pastPill, { backgroundColor: colors.surface2 }]}>
+          <Text style={[s.pastPillText, { color: colors.ink3 }]}>Past</Text>
         </View>
       )}
     </TouchableOpacity>
@@ -274,12 +277,12 @@ export function StopDetailsPanel({
         {loading ? (
           <ActivityIndicator size="small" color={theme.colors.primary} />
         ) : isEmpty ? (
-          <Text style={s.empty}>No service data</Text>
+          <Text style={[s.empty, { color: colors.ink3 }]}>No service data</Text>
         ) : (
           <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
             {upcoming.length > 0 && (
               <>
-                <Text style={s.sectionLabel}>Upcoming</Text>
+                <Text style={[s.sectionLabel, { color: colors.ink3 }]}>Upcoming</Text>
                 {upcoming.map((bus) => (
                   <BusRow
                     key={bus.key}
@@ -292,8 +295,10 @@ export function StopDetailsPanel({
             )}
             {past.length > 0 && (
               <>
-                {upcoming.length > 0 && <View style={s.sectionDivider} />}
-                <Text style={s.sectionLabel}>Past</Text>
+                {upcoming.length > 0 && (
+                  <View style={[s.sectionDivider, { backgroundColor: colors.divider }]} />
+                )}
+                <Text style={[s.sectionLabel, { color: colors.ink3 }]}>Past</Text>
                 {past.map((bus) => (
                   <BusRow key={bus.key} bus={bus} dimmed />
                 ))}

@@ -135,7 +135,7 @@ export function BusDetailsPanel({
         {loading ? (
           <ActivityIndicator size="small" color={theme.colors.primary} />
         ) : isEmpty ? (
-          <Text style={s.empty}>No schedule data</Text>
+          <Text style={[s.empty, { color: colors.ink3 }]}>No schedule data</Text>
         ) : (
           <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
             {tripStops.map((stop) => {
@@ -150,18 +150,26 @@ export function BusDetailsPanel({
                   disabled={!tappable}
                   activeOpacity={tappable ? 0.65 : 1}
                 >
-                  <View style={[s.sequenceDot, stop.passed && s.sequenceDotPassed]} />
+                  <View
+                    style={[
+                      s.sequenceDot,
+                      stop.passed && { backgroundColor: colors.ink3 },
+                    ]}
+                  />
                   <View style={s.stopInfo}>
-                    <Text style={[s.stopName, { color: colors.ink }, stop.passed && s.passedText]} numberOfLines={1}>
+                    <Text
+                      style={[s.stopName, { color: stop.passed ? colors.ink3 : colors.ink }]}
+                      numberOfLines={1}
+                    >
                       {stop.stop_name}
                     </Text>
-                    <Text style={[s.stopTime, stop.passed && s.passedText]}>
+                    <Text style={[s.stopTime, { color: colors.ink3 }]}>
                       {fmtEpoch(stop.arrival_time)}
                     </Text>
                   </View>
                   {stop.passed ? (
-                    <View style={s.passedPill}>
-                      <Text style={s.passedPillText}>Passed</Text>
+                    <View style={[s.passedPill, { backgroundColor: colors.surface2 }]}>
+                      <Text style={[s.passedPillText, { color: colors.ink3 }]}>Passed</Text>
                     </View>
                   ) : (
                     <Text style={[s.delayLabel, { color: delay.color }]} numberOfLines={1}>

@@ -48,7 +48,7 @@ export function PlaceDetailsPanel({
             style={s.backBtn}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
-            <Ionicons name="chevron-back" size={20} color={theme.colors.text} />
+            <Ionicons name="chevron-back" size={20} color={colors.ink3} />
           </TouchableOpacity>
         )}
         <View style={s.panelHeaderLeft}>
@@ -97,7 +97,7 @@ export function PlaceDetailsPanel({
                 {place.rating != null && (
                   <View style={s.ratingRow}>
                     <Ionicons name="star" size={12} color={theme.colors.secondary} />
-                    <Text style={s.ratingText}>
+                    <Text style={[s.ratingText, { color: colors.ink2 }]}>
                       {place.rating.toFixed(1)}
                       {place.userRatingCount != null
                         ? `  (${place.userRatingCount.toLocaleString()})`
@@ -117,8 +117,8 @@ export function PlaceDetailsPanel({
                   Linking.openURL(`tel:${place.nationalPhoneNumber!.replace(/[\s()]/g, "")}`)
                 }
               >
-                <Ionicons name="call-outline" size={14} color={theme.colors.text} />
-                <Text style={s.infoText}>{place.nationalPhoneNumber}</Text>
+                <Ionicons name="call-outline" size={14} color={colors.ink3} />
+                <Text style={[s.infoText, { color: colors.ink2 }]}>{place.nationalPhoneNumber}</Text>
               </TouchableOpacity>
             ) : null}
 
@@ -129,8 +129,8 @@ export function PlaceDetailsPanel({
                 activeOpacity={0.7}
                 onPress={() => Linking.openURL(place.websiteUri!)}
               >
-                <Ionicons name="globe-outline" size={14} color={theme.colors.text} />
-                <Text style={s.infoText} numberOfLines={1}>
+                <Ionicons name="globe-outline" size={14} color={colors.ink3} />
+                <Text style={[s.infoText, { color: colors.ink2 }]} numberOfLines={1}>
                   {place.websiteUri.replace(/^https?:\/\//, "").replace(/\/$/, "")}
                 </Text>
               </TouchableOpacity>
@@ -139,13 +139,13 @@ export function PlaceDetailsPanel({
             {/* Opening hours */}
             {hours.length > 0 && (
               <>
-                <Text style={s.sectionLabel}>Hours</Text>
+                <Text style={[s.sectionLabel, { color: colors.ink3 }]}>Hours</Text>
                 {hours.map((line, i) => (
                   <View
                     key={i}
                     style={[s.hoursRow, { borderBottomColor: colors.border }, i === hours.length - 1 && s.hoursRowLast]}
                   >
-                    <Text style={[s.hoursText, i === todayApiIndex && { color: colors.ink, fontWeight: "700" }]}>
+                    <Text style={[s.hoursText, { color: colors.ink2 }, i === todayApiIndex && { color: colors.ink, fontWeight: "700" }]}>
                       {line}
                     </Text>
                   </View>

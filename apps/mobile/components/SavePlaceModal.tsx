@@ -261,7 +261,7 @@ export function SavePlaceModal({
                 <Ionicons
                   name="arrow-back"
                   size={20}
-                  color={theme.colors.text}
+                  color={colors.ink}
                 />
               </TouchableOpacity>
             )}
@@ -273,7 +273,7 @@ export function SavePlaceModal({
               <Ionicons
                 name="close"
                 size={22}
-                color={theme.colors.text}
+                color={colors.ink3}
               />
             </TouchableOpacity>
           </View>
@@ -354,9 +354,9 @@ export function SavePlaceModal({
                   )}
                   ListEmptyComponent={
                     selectionError ? (
-                      <Text style={styles.emptyResults}>{selectionError}</Text>
+                      <Text style={[styles.emptyResults, { color: colors.ink3 }]}>{selectionError}</Text>
                     ) : searchQuery.length > 0 && !isSearching ? (
-                      <Text style={styles.emptyResults}>No results found.</Text>
+                      <Text style={[styles.emptyResults, { color: colors.ink3 }]}>No results found.</Text>
                     ) : null
                   }
                 />
@@ -381,10 +381,10 @@ export function SavePlaceModal({
                   />
                 </View>
                 <View style={styles.placeTextBlock}>
-                  <Text style={styles.placeName} numberOfLines={1}>
+                  <Text style={[styles.placeName, { color: colors.ink }]} numberOfLines={1}>
                     {chosenPlace.displayName}
                   </Text>
-                  <Text style={styles.placeAddress} numberOfLines={1}>
+                  <Text style={[styles.placeAddress, { color: colors.ink3 }]} numberOfLines={1}>
                     {chosenPlace.address}
                   </Text>
                 </View>
@@ -392,7 +392,7 @@ export function SavePlaceModal({
 
               {/* Label input */}
               <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Label (optional)</Text>
+                <Text style={[styles.fieldLabel, { color: colors.ink3, opacity: 1 }]}>Label (optional)</Text>
                 <TextInput
                   style={[styles.textInput, { color: colors.ink, backgroundColor: colors.surface2, borderColor: colors.border }]}
                   value={label}
@@ -406,7 +406,7 @@ export function SavePlaceModal({
 
               {/* Category picker */}
               <View style={styles.field}>
-                <Text style={styles.fieldLabel}>Category</Text>
+                <Text style={[styles.fieldLabel, { color: colors.ink3, opacity: 1 }]}>Category</Text>
                 <ScrollView
                   horizontal
                   showsHorizontalScrollIndicator={false}
@@ -482,10 +482,10 @@ export function SavePlaceModal({
               {/* Default toggle */}
               <View style={styles.toggleRow}>
                 <View style={styles.toggleText}>
-                  <Text style={styles.toggleLabel}>
+                  <Text style={[styles.toggleLabel, { color: colors.ink }]}>
                     Set as default for this category
                   </Text>
-                  <Text style={styles.toggleSub}>
+                  <Text style={[styles.toggleSub, { color: colors.ink3, opacity: 1 }]}>
                     Appears in Quick Access on the Map
                   </Text>
                 </View>
