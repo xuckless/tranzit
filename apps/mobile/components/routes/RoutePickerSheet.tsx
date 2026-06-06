@@ -96,7 +96,15 @@ function TransitChipLive({ step }: { step: RouteStep }) {
         closest = s;
       }
     }
-    if (closest?.departure_time != null) {
+    // Prefer the feed's authoritative GTFS-RT delay; fall back to diffing the
+    // predicted departure against Google's scheduled time only when the stream
+    // carries no delay. Guard the -1 "no data" sentinel so it never renders as
+    // a wildly-early time.
+    if (closest?.departure_delay != null) {
+      delay = fmtDelay(closest.departure_delay);
+    } else if (closest?.arrival_delay != null) {
+      delay = fmtDelay(closest.arrival_delay);
+    } else if (closest?.departure_time != null && closest.departure_time > 0) {
       delay = fmtDelay(closest.departure_time - deptEpoch);
     }
   }

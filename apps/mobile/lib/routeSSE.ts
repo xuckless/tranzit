@@ -12,6 +12,11 @@ export interface RouteSSEStop {
   stop_lng: number;
   arrival_time: number | null;
   departure_time: number | null;
+  // Feed-authoritative GTFS-RT delay (seconds, nullable). Added to the route
+  // stream by the middleware — prefer these over diffing predicted vs. scheduled
+  // timestamps client-side.
+  arrival_delay: number | null;
+  departure_delay: number | null;
 }
 
 // Per-instance hook — each TRANSIT step opens its own connection to a unique

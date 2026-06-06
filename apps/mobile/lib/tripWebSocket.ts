@@ -10,6 +10,34 @@ const STATUS_PRIORITY: Record<ServerStopStatus, number> = {
 
 const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 
+// ─── Module-level outbox for out-of-component sends ───────────────────────────
+// An UNSURE_RESPONSE can originate from a boarding push-notification action that
+// is handled in the root layout — outside the screen that owns the socket. Route
+// Save's only client-input channel is the trip WebSocket (there is no REST
+// unsure-response endpoint), so queue such messages here and flush them over the
+// live socket. If the socket is momentarily down, the message waits and is
+// flushed by the hook on the next connect.
+let _activeWs: WebSocket | null = null;
+const _outbox: object[] = [];
+
+function flushOutbox(): void {
+  if (!_activeWs || _activeWs.readyState !== WebSocket.OPEN) return;
+  while (_outbox.length) {
+    _activeWs.send(JSON.stringify(_outbox.shift()));
+  }
+}
+
+/**
+ * Send an UNSURE_RESPONSE from outside the commute screen (e.g. a boarding
+ * notification action handled in the root layout). Delivered over the live trip
+ * WebSocket per the Route Save protocol; queued and flushed on reconnect if the
+ * socket is briefly unavailable.
+ */
+export function submitUnsureResponse(stopId: string, boarded: boolean): void {
+  _outbox.push({ type: "UNSURE_RESPONSE", stop_id: stopId, boarded });
+  flushOutbox();
+}
+
 function mergeSessionStates(map: Map<string, TripStateMsg>): TripStateMsg {
   const sessions = Array.from(map.values());
   if (sessions.length === 1) return sessions[0];
@@ -83,9 +111,13 @@ export function useTripWebSocket(
       const url = `${ROUTE_SAVE_WS}${wsPath}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
+      _activeWs = ws;
 
       ws.onopen = () => {
         setIsConnected(true);
+
+        // Deliver any UNSURE_RESPONSE captured out-of-component (notification action).
+        flushOutbox();
 
         // On reconnect (not first connect), send RESUME
         if (retryCountRef.current > 0 && lastSessionIdRef.current) {
@@ -146,6 +178,7 @@ export function useTripWebSocket(
       ws.onclose = () => {
         setIsConnected(false);
         wsRef.current = null;
+        if (_activeWs === ws) _activeWs = null;
 
         if (cancelledRef.current) return;
 
@@ -165,6 +198,7 @@ export function useTripWebSocket(
       }
       wsRef.current?.close();
       wsRef.current = null;
+      _activeWs = null;
       lastVersionRef.current.clear();
       sessionStatesRef.current.clear();
     };

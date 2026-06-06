@@ -11,8 +11,7 @@ import {
   cancelBoarding,
 } from "@/lib/boardingNotifications";
 import { setupTripProgressChannel } from "@/lib/liveActivity";
-
-const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
+import { submitUnsureResponse } from "@/lib/tripWebSocket";
 
 // Notification handlers
 Notifications.setNotificationHandler({
@@ -48,13 +47,10 @@ export default function RootLayout() {
 
         const boarded = actionIdentifier === ACTION_YES;
 
-        if (ROUTE_SAVE_URL) {
-          fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}/unsure-response`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ stop_id: stopId, boarded }),
-          }).catch(() => {});
-        }
+        // UNSURE_RESPONSE is a WebSocket message — Route Save exposes no REST
+        // endpoint for it. Deliver over the live trip socket (queued + flushed on
+        // connect if it is momentarily down).
+        submitUnsureResponse(stopId, boarded);
 
         cancelBoarding(stopId);
       },
