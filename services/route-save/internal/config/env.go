@@ -17,8 +17,8 @@ type Endpoints struct {
 // default; set MIDDLEWARE_URL / ROUTE_SERVICE_URL to override (e.g. for local
 // instances).
 const (
-	defaultMiddlewareURL   = "https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app"
-	defaultRouteServiceURL = "https://tranzit-route-service-qsv32inqpq-uc.a.run.app"
+	defaultMiddlewareURL   = "https://tranzit-db-middleware-000000000000.us-central1.run.app"
+	defaultRouteServiceURL = "https://tranzit-route-service-000000000000.us-central1.run.app"
 )
 
 // LoadEndpoints reads endpoint config from the environment, applying defaults.

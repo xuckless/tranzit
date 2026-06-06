@@ -1,0 +1,10 @@
+# gcloud uses .gitignore rules automatically; list extras here.
+.git
+.gitignore
+.env
+docs/
+testdata/
+*.md
+.idea/
+.vscode/
+.DS_Store
