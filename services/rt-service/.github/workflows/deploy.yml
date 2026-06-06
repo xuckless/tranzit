@@ -1,0 +1,35 @@
+name: Deploy to Cloud Run
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - id: auth
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy to Cloud Run
+        run: |
+          gcloud run deploy tranzit-rt-service \
+            --source . \
+            --region us-central1 \
+            --platform managed \
+            --project tranzit-example-project \
+            --allow-unauthenticated \
+            --min-instances 1 \
+            --timeout 3600 \
+            --set-env-vars "SUPABASE_DIRECT_CONNECTION_STRING=${{ secrets.SUPABASE_DIRECT_CONNECTION_STRING }},APP_TOKEN=${{ secrets.APP_TOKEN }}"
