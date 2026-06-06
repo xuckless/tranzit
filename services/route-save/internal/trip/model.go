@@ -100,6 +100,13 @@ type Leg struct {
 	// StopStart/StopEnd bound this leg's stops within TripState.Stops.
 	StopStart int
 	StopEnd   int // exclusive
+
+	// WalkFrom/WalkTo bound a WALK leg's segment (geo, lat-lng); zero for bus
+	// legs. Derived from adjacent bus stops / trip origin+destination in
+	// BuildTrip, so the trip is self-describing (the reroute A/B choice is
+	// leg-mode based, §9) and the STATE/REROUTE exports can draw the walk.
+	WalkFrom geo.LatLng
+	WalkTo   geo.LatLng
 }
 
 // UserLocation is the latest reported client fix (§4.2).

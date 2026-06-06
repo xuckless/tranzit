@@ -71,6 +71,22 @@ type StateMsg struct {
 	Version   int         `json:"version"`
 	Overall   string      `json:"overall"`
 	Stops     []StateStop `json:"stops"`
+	// Legs is the leg-level view: bus legs window into Stops via stop_start/
+	// stop_end, walk legs carry their endpoints so the client can draw the walk.
+	Legs []StateLeg `json:"legs,omitempty"`
+}
+
+// StateLeg is one leg as rendered by the client. For walk legs WalkFrom/WalkTo
+// bound the segment; bus legs omit them and instead index Stops[stop_start:stop_end].
+type StateLeg struct {
+	LegIndex  int     `json:"leg_index"`
+	Mode      string  `json:"mode"`
+	RouteID   string  `json:"route_id,omitempty"`
+	TripID    string  `json:"trip_id,omitempty"`
+	StopStart int     `json:"stop_start"`
+	StopEnd   int     `json:"stop_end"`
+	WalkFrom  *LatLng `json:"walk_from,omitempty"`
+	WalkTo    *LatLng `json:"walk_to,omitempty"`
 }
 
 // StateStop is one stop as rendered by the client.
@@ -104,12 +120,15 @@ type LatLng struct {
 	Lng float64 `json:"lng"`
 }
 
-// RouteLeg summarises a spliced leg for the REROUTE payload.
+// RouteLeg summarises a spliced leg for the REROUTE payload. Walk legs carry
+// their endpoints; bus legs omit them.
 type RouteLeg struct {
-	LegIndex int    `json:"leg_index"`
-	Mode     string `json:"mode"`
-	RouteID  string `json:"route_id"`
-	TripID   string `json:"trip_id"`
+	LegIndex int     `json:"leg_index"`
+	Mode     string  `json:"mode"`
+	RouteID  string  `json:"route_id"`
+	TripID   string  `json:"trip_id"`
+	WalkFrom *LatLng `json:"walk_from,omitempty"`
+	WalkTo   *LatLng `json:"walk_to,omitempty"`
 }
 
 // NotifyMsg is a user-facing notification, optionally requiring a response (§13.2).

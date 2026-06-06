@@ -3,6 +3,7 @@ package wsproto
 import (
 	"testing"
 
+	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/trip"
 )
 
@@ -43,6 +44,41 @@ func TestStateMessage_FullExport(t *testing.T) {
 	}
 	if s.TimeRemainingS != 240 {
 		t.Errorf("time_remaining_s = %d, want 240 (eta − now)", s.TimeRemainingS)
+	}
+}
+
+func TestStateMessage_ExportsLegsWithWalkEndpoints(t *testing.T) {
+	from := geo.LatLng{Lat: 51.000, Lng: -114.000}
+	to := geo.LatLng{Lat: 51.010, Lng: -114.010}
+	ts := &trip.TripState{
+		Stops: []trip.StopRecord{{StopID: "1", BusArrivalTime: 0}},
+		Legs: []trip.Leg{
+			{LegIndex: 0, Mode: trip.ModeWalk, WalkFrom: from, WalkTo: to},
+			{LegIndex: 1, Mode: trip.ModeBus, RouteID: "3", TripID: "T", StopStart: 0, StopEnd: 1},
+		},
+	}
+	msg := StateMessage(ts, 0)
+	if len(msg.Legs) != 2 {
+		t.Fatalf("legs = %d, want 2", len(msg.Legs))
+	}
+
+	walk := msg.Legs[0]
+	if walk.Mode != "WALK" {
+		t.Errorf("walk leg mode = %q, want WALK", walk.Mode)
+	}
+	if walk.WalkFrom == nil || *walk.WalkFrom != (LatLng{Lat: from.Lat, Lng: from.Lng}) {
+		t.Errorf("walk_from = %+v, want %+v", walk.WalkFrom, from)
+	}
+	if walk.WalkTo == nil || *walk.WalkTo != (LatLng{Lat: to.Lat, Lng: to.Lng}) {
+		t.Errorf("walk_to = %+v, want %+v", walk.WalkTo, to)
+	}
+
+	bus := msg.Legs[1]
+	if bus.Mode != "BUS" || bus.RouteID != "3" || bus.StopStart != 0 || bus.StopEnd != 1 {
+		t.Errorf("bus leg = %+v", bus)
+	}
+	if bus.WalkFrom != nil || bus.WalkTo != nil {
+		t.Errorf("bus leg must omit walk endpoints, got %+v→%+v", bus.WalkFrom, bus.WalkTo)
 	}
 }
 

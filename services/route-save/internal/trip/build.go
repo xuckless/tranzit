@@ -69,6 +69,20 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 				ts.Stops = append(ts.Stops, rec)
 			}
 			leg.StopEnd = len(ts.Stops)
+		} else {
+			// Walk leg: it carries no stops, but record its endpoints so the trip
+			// is self-describing. The segment runs from the previous bus leg's exit
+			// (or the trip origin if this is the leading walk) to the next bus leg's
+			// entry (or the destination if this is the trailing walk). segmentLegs
+			// never emits adjacent walk legs, so the neighbours are bus legs.
+			leg.WalkFrom = origin
+			if prev := prevBusExit(route.Legs, li); prev != nil {
+				leg.WalkFrom = *prev
+			}
+			leg.WalkTo = dest
+			if next := nextBusEntry(route.Legs, li); next != nil {
+				leg.WalkTo = *next
+			}
 		}
 
 		ts.Legs = append(ts.Legs, leg)
@@ -78,4 +92,26 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		return nil, fmt.Errorf("build trip: route produced no bus stops")
 	}
 	return ts, nil
+}
+
+// prevBusExit returns the exit-stop location of the nearest bus leg before idx,
+// or nil if none precedes it (the walk leg starts at the trip origin).
+func prevBusExit(legs []directions.ParsedLeg, idx int) *geo.LatLng {
+	for i := idx - 1; i >= 0; i-- {
+		if legs[i].Mode == directions.ModeBus && legs[i].Exit != nil {
+			return &legs[i].Exit.Loc
+		}
+	}
+	return nil
+}
+
+// nextBusEntry returns the entry-stop location of the nearest bus leg after idx,
+// or nil if none follows it (the walk leg ends at the trip destination).
+func nextBusEntry(legs []directions.ParsedLeg, idx int) *geo.LatLng {
+	for i := idx + 1; i < len(legs); i++ {
+		if legs[i].Mode == directions.ModeBus && legs[i].Entry != nil {
+			return &legs[i].Entry.Loc
+		}
+	}
+	return nil
 }

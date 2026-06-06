@@ -73,4 +73,84 @@ func TestBuildTrip_ClassifiesAndStructures(t *testing.T) {
 	if ts.Legs[0].StopStart != ts.Legs[0].StopEnd {
 		t.Errorf("walk leg 0 should be empty, got [%d:%d]", ts.Legs[0].StopStart, ts.Legs[0].StopEnd)
 	}
+	if ts.Legs[2].StopStart != ts.Legs[2].StopEnd {
+		t.Errorf("walk leg 2 should be empty, got [%d:%d]", ts.Legs[2].StopStart, ts.Legs[2].StopEnd)
+	}
+
+	// Leading walk: origin → first bus entry. Here origin == entry == bus entry.
+	if ts.Legs[0].WalkFrom != entry || ts.Legs[0].WalkTo != entry {
+		t.Errorf("leading walk endpoints = %+v→%+v, want %+v→%+v",
+			ts.Legs[0].WalkFrom, ts.Legs[0].WalkTo, entry, entry)
+	}
+	// Trailing walk: last bus exit → destination. Here exit == dest == bus exit.
+	if ts.Legs[2].WalkFrom != exit || ts.Legs[2].WalkTo != exit {
+		t.Errorf("trailing walk endpoints = %+v→%+v, want %+v→%+v",
+			ts.Legs[2].WalkFrom, ts.Legs[2].WalkTo, exit, exit)
+	}
+}
+
+// TestBuildTrip_WalkEndpointsMultiLeg exercises endpoint derivation with distinct
+// coordinates and a transfer walk between two buses: walk → bus1 → walk → bus2 →
+// walk. The middle walk must chain bus1's exit to bus2's entry.
+func TestBuildTrip_WalkEndpointsMultiLeg(t *testing.T) {
+	origin := geo.LatLng{Lat: 51.000, Lng: -114.000}
+	b1Entry := geo.LatLng{Lat: 51.010, Lng: -114.010}
+	b1Exit := geo.LatLng{Lat: 51.020, Lng: -114.020}
+	b2Entry := geo.LatLng{Lat: 51.030, Lng: -114.030}
+	b2Exit := geo.LatLng{Lat: 51.040, Lng: -114.040}
+	dest := geo.LatLng{Lat: 51.050, Lng: -114.050}
+
+	f := datasource.NewFixture()
+	s1 := []datasource.Stop{
+		{StopID: "1e", Name: "1Entry", Loc: b1Entry, Sequence: 1, ArrivalTime: 100, DepartureTime: 100},
+		{StopID: "1x", Name: "1Exit", Loc: b1Exit, Sequence: 2, ArrivalTime: 200},
+	}
+	s2 := []datasource.Stop{
+		{StopID: "2e", Name: "2Entry", Loc: b2Entry, Sequence: 1, ArrivalTime: 300, DepartureTime: 300},
+		{StopID: "2x", Name: "2Exit", Loc: b2Exit, Sequence: 2, ArrivalTime: 400},
+	}
+	f.StopsByTrip["T1"] = s1
+	f.StopsByTrip["T2"] = s2
+	f.TripsByRoute["A"] = []datasource.TripCandidate{{TripID: "T1", Stops: s1}}
+	f.TripsByRoute["B"] = []datasource.TripCandidate{{TripID: "T2", Stops: s2}}
+
+	route := directions.Route{Legs: []directions.ParsedLeg{
+		{Mode: directions.ModeWalk},
+		{Mode: directions.ModeBus, RouteID: "A",
+			Entry: &directions.StopEndpoint{Name: "1Entry", Loc: b1Entry, TimeEpoch: 100},
+			Exit:  &directions.StopEndpoint{Name: "1Exit", Loc: b1Exit, TimeEpoch: 200}},
+		{Mode: directions.ModeWalk},
+		{Mode: directions.ModeBus, RouteID: "B",
+			Entry: &directions.StopEndpoint{Name: "2Entry", Loc: b2Entry, TimeEpoch: 300},
+			Exit:  &directions.StopEndpoint{Name: "2Exit", Loc: b2Exit, TimeEpoch: 400}},
+		{Mode: directions.ModeWalk},
+	}}
+
+	ts, err := BuildTrip("sess", origin, dest, route, f, 0)
+	if err != nil {
+		t.Fatalf("BuildTrip: %v", err)
+	}
+	if len(ts.Legs) != 5 {
+		t.Fatalf("legs = %d, want 5", len(ts.Legs))
+	}
+
+	cases := []struct {
+		idx      int
+		from, to geo.LatLng
+		label    string
+	}{
+		{0, origin, b1Entry, "leading walk (origin→bus1 entry)"},
+		{2, b1Exit, b2Entry, "transfer walk (bus1 exit→bus2 entry)"},
+		{4, b2Exit, dest, "trailing walk (bus2 exit→dest)"},
+	}
+	for _, c := range cases {
+		leg := ts.Legs[c.idx]
+		if leg.Mode != ModeWalk {
+			t.Errorf("%s: leg %d mode = %s, want WALK", c.label, c.idx, leg.Mode)
+		}
+		if leg.WalkFrom != c.from || leg.WalkTo != c.to {
+			t.Errorf("%s: endpoints = %+v→%+v, want %+v→%+v",
+				c.label, leg.WalkFrom, leg.WalkTo, c.from, c.to)
+		}
+	}
 }

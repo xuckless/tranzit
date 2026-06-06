@@ -624,6 +624,20 @@ goroutine. Verified with `go test -race`.
   reroute is exercised live.
 - **Leg = a run of Google `steps` by `travelMode`**, not Google's `legs` (Google
   returns one `legs[0]` interleaving WALK/TRANSIT steps).
+- **Walk legs carry endpoints (as-built).** Walk legs still hold no stops
+  (`StopStart == StopEnd`; the state machine is untouched), but `BuildTrip` now
+  records each walk leg's segment on `trip.Leg.WalkFrom`/`WalkTo`: from the
+  preceding bus leg's exit (or trip origin for the leading walk) to the next bus
+  leg's entry (or destination for the trailing walk). Endpoints are *derived* from
+  adjacent bus stops — the proxied Google response's WALK steps carry only
+  `navigationInstruction`+`travelMode` (no per-step geometry/distance/duration),
+  so distance/duration are intentionally **not** captured. Both the STATE export
+  (new `legs[]` with `mode`/`stop_start`/`stop_end` and, for walk legs,
+  `walk_from`/`walk_to`) and the REROUTE export (`walk_from`/`walk_to` on each
+  walk `RouteLeg`) now surface the walk segments; `Splice` carries the fields
+  through reroutes by value. The reroute A/B choice was already leg-mode based
+  (`Machine.OnBus()` reads `leg.Mode`), so no reroute-logic change was needed —
+  walking → Case 2 (from GPS), on-bus → Case 1 (from next stop).
 - **MAX BRT route_id aliasing.** Google labels Calgary's MAX lines by letter code
   in `transitLine.nameShort` (`MG`, `MO`, `MY`, `MT`, `MP`), but the GTFS-RT feed
   (`trip_updates.route_id`) uses numeric ids. `directions.canonicalRouteID` maps

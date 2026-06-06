@@ -1,6 +1,10 @@
 package trip
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/tranzit-route-save/internal/geo"
+)
 
 func TestSplice_KeepsPrefixAndRebases(t *testing.T) {
 	mk := func(id string) StopRecord { return StopRecord{StopID: id, Status: StatusExpected} }
@@ -44,5 +48,41 @@ func TestSplice_KeepsPrefixAndRebases(t *testing.T) {
 	}
 	if ts.StateVersion != 6 {
 		t.Errorf("StateVersion = %d, want 6 (bumped)", ts.StateVersion)
+	}
+}
+
+// TestSplice_RetainsWalkEndpoints checks that a kept leading walk leg and an
+// appended trailing walk leg carry their endpoints through the splice.
+func TestSplice_RetainsWalkEndpoints(t *testing.T) {
+	mk := func(id string) StopRecord { return StopRecord{StopID: id, Status: StatusExpected} }
+	keptWalkFrom := geo.LatLng{Lat: 51.0, Lng: -114.0}
+	keptWalkTo := geo.LatLng{Lat: 51.1, Lng: -114.1}
+	ts := &TripState{
+		Stops: []StopRecord{mk("a"), mk("b")},
+		Legs: []Leg{
+			{LegIndex: 0, Mode: ModeWalk, StopStart: 0, StopEnd: 0, WalkFrom: keptWalkFrom, WalkTo: keptWalkTo},
+			{LegIndex: 1, Mode: ModeBus, RouteID: "2", TripID: "T1", StopStart: 0, StopEnd: 2},
+		},
+		CurrentStopIndex: 0,
+	}
+
+	newWalkFrom := geo.LatLng{Lat: 51.2, Lng: -114.2}
+	newWalkTo := geo.LatLng{Lat: 51.3, Lng: -114.3}
+	newTrip := &TripState{
+		Stops: []StopRecord{mk("x")},
+		Legs: []Leg{
+			{LegIndex: 0, Mode: ModeBus, RouteID: "9", TripID: "T2", StopStart: 0, StopEnd: 1},
+			{LegIndex: 1, Mode: ModeWalk, StopStart: 1, StopEnd: 1, WalkFrom: newWalkFrom, WalkTo: newWalkTo},
+		},
+	}
+
+	Splice(ts, 0, newTrip) // keep stop "a"; the leading walk leg falls in the kept region
+
+	if ts.Legs[0].Mode != ModeWalk || ts.Legs[0].WalkFrom != keptWalkFrom || ts.Legs[0].WalkTo != keptWalkTo {
+		t.Errorf("kept walk leg endpoints lost: %+v", ts.Legs[0])
+	}
+	last := ts.Legs[len(ts.Legs)-1]
+	if last.Mode != ModeWalk || last.WalkFrom != newWalkFrom || last.WalkTo != newWalkTo {
+		t.Errorf("appended walk leg endpoints lost: %+v", last)
 	}
 }

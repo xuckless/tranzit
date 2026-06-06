@@ -3,8 +3,20 @@ package wsproto
 import (
 	"encoding/json"
 
+	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/trip"
 )
+
+// walkEndpoints returns the leg's walk segment endpoints as *LatLng for export,
+// or (nil, nil) for a bus leg so the JSON fields are omitted.
+func walkEndpoints(leg trip.Leg) (from, to *LatLng) {
+	if leg.Mode != trip.ModeWalk {
+		return nil, nil
+	}
+	return latLngPtr(leg.WalkFrom), latLngPtr(leg.WalkTo)
+}
+
+func latLngPtr(p geo.LatLng) *LatLng { return &LatLng{Lat: p.Lat, Lng: p.Lng} }
 
 // StateMessage builds the full read-only STATE export from a TripState (§13.0).
 // Each STATE carries the entire stop list so the client can redraw the whole
@@ -31,12 +43,27 @@ func StateMessage(ts *trip.TripState, now int64) StateMsg {
 			Lng:            s.StopLng,
 		}
 	}
+	legs := make([]StateLeg, len(ts.Legs))
+	for i, leg := range ts.Legs {
+		from, to := walkEndpoints(leg)
+		legs[i] = StateLeg{
+			LegIndex:  leg.LegIndex,
+			Mode:      leg.Mode.String(),
+			RouteID:   leg.RouteID,
+			TripID:    leg.TripID,
+			StopStart: leg.StopStart,
+			StopEnd:   leg.StopEnd,
+			WalkFrom:  from,
+			WalkTo:    to,
+		}
+	}
 	return StateMsg{
 		Type:      TypeState,
 		SessionID: ts.SessionID,
 		Version:   ts.StateVersion,
 		Overall:   ts.OverallStatus.String(),
 		Stops:     stops,
+		Legs:      legs,
 	}
 }
 
@@ -47,11 +74,14 @@ func StateMessage(ts *trip.TripState, now int64) StateMsg {
 func RerouteMessage(ts *trip.TripState, reason string, from LatLng, route json.RawMessage) RerouteMsg {
 	legs := make([]RouteLeg, len(ts.Legs))
 	for i, leg := range ts.Legs {
+		from, to := walkEndpoints(leg)
 		legs[i] = RouteLeg{
 			LegIndex: leg.LegIndex,
 			Mode:     leg.Mode.String(),
 			RouteID:  leg.RouteID,
 			TripID:   leg.TripID,
+			WalkFrom: from,
+			WalkTo:   to,
 		}
 	}
 	return RerouteMsg{Type: TypeReroute, Reason: reason, From: from, Route: route, Legs: legs}
