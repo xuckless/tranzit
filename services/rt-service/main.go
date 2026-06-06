@@ -26,6 +26,15 @@ func main() {
 		}
 	}
 
+	// Start the WebSocket server immediately so Cloud Run's startup probe passes
+	// before the potentially long SODA2 scrape runs.
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = fmt.Sprintf("%d", wsPort)
+	}
+	hub := newHub()
+	startWSServer(hub, "0.0.0.0:"+port)
+
 	ctx := context.Background()
 
 	pool, err := newPool(ctx, dsn)
@@ -58,15 +67,6 @@ func main() {
 	} else {
 		fmt.Println("SODA2 data already loaded. Use --force-reload to refresh.")
 	}
-
-	// Cloud Run injects PORT; fall back to wsPort for local dev.
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = fmt.Sprintf("%d", wsPort)
-	}
-
-	hub := newHub()
-	startWSServer(hub, "0.0.0.0:"+port)
 
 	fmt.Printf("Starting real-time polling every %ds. Ctrl+C to stop.\n", realtimeInterval)
 	for {
