@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 
 	"github.com/gorilla/websocket"
@@ -82,6 +83,9 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 
 	ts, err := trip.BuildTrip(sessionID, origin, dest, route, s.data, s.mgr.Now())
 	if err != nil {
+		// Log the build failure: without this a 422 leaves no trace in docker logs,
+		// so a resolution gap (e.g. no in-order trip for a route) is invisible.
+		log.Printf("POST /trips: build failed: %v", err)
 		http.Error(w, fmt.Sprintf("build trip: %v", err), http.StatusUnprocessableEntity)
 		return
 	}
@@ -90,6 +94,8 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mgr.Create(ts, req.DestinationPlaceID)
+	log.Printf("POST /trips: session %s started — %d stops across %d legs",
+		sessionID, len(ts.Stops), len(ts.Legs))
 	writeJSON(w, http.StatusCreated, StartResponse{
 		SessionID: sessionID,
 		WSURL:     "/trips/" + sessionID + "/ws",
