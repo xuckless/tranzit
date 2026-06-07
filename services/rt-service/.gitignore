@@ -3,7 +3,6 @@
 .idea/
 *.exe
 *.test
-go.sum
 
 
 .dockerignore
