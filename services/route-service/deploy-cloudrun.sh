@@ -10,11 +10,14 @@ REGION="${REGION:-us-central1}"
 SERVICE="${SERVICE:-tranzit-route-service}"
 REPO="${REPO:-tranzit}"
 OTP_URL="${OTP_BASE_URL:-http://tranzit-otp.tailnet-example.ts.net:8080}"
+# Public Cloud Run URL of tranzit-db-middleware (used to look up live vehicle_id per trip).
+MIDDLEWARE_URL="${MIDDLEWARE_BASE_URL:-https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app}"
 IMAGE="${REGION}-docker.pkg.dev/${PROJECT}/${REPO}/${SERVICE}:latest"
 
 echo "Project=$PROJECT Region=$REGION Service=$SERVICE"
 echo "Image=$IMAGE"
 echo "OTP_BASE_URL=$OTP_URL"
+echo "MIDDLEWARE_BASE_URL=$MIDDLEWARE_URL"
 
 # Ensure the Artifact Registry repo exists (no-op if already there).
 gcloud artifacts repositories create "$REPO" \
@@ -31,7 +34,7 @@ gcloud run deploy "$SERVICE" \
   --allow-unauthenticated \
   --port 8080 \
   --no-cpu-throttling \
-  --set-env-vars "OTP_BASE_URL=${OTP_URL},OTP_HTTP_PROXY=http://localhost:1055,TS_HOSTNAME=${SERVICE}" \
+  --set-env-vars "OTP_BASE_URL=${OTP_URL},OTP_HTTP_PROXY=http://localhost:1055,TS_HOSTNAME=${SERVICE},MIDDLEWARE_BASE_URL=${MIDDLEWARE_URL}" \
   --set-secrets "TS_AUTHKEY=tailscale-authkey:latest,GMAPS_API_KEY=gmaps-api-key:latest"
 
 echo "==> Done. Service URL:"

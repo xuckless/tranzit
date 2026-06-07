@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
@@ -57,6 +58,26 @@ func otpGraphQLPath() string {
 		v = "/otp/routers/default/index/graphql"
 	}
 	return v
+}
+
+// middlewareBaseURL returns the tranzit-db-middleware origin (no trailing slash). It is a
+// public Cloud Run service, so requests go direct over HTTPS — NOT through OTP_HTTP_PROXY,
+// which only exists to reach the private OTP node on the tailnet.
+func middlewareBaseURL() string {
+	v := os.Getenv("MIDDLEWARE_BASE_URL")
+	if v == "" {
+		v = "http://localhost:8080"
+	}
+	return strings.TrimRight(v, "/")
+}
+
+// stripGTFSFeedPrefix turns an OTP gtfsId ("<feedId>:<rawId>", e.g. "1:12345678") into the
+// raw GTFS id stored in vehicle_positions.trip_id. If there is no ":" it is returned as-is.
+func stripGTFSFeedPrefix(gtfsID string) string {
+	if i := strings.IndexByte(gtfsID, ':'); i >= 0 {
+		return gtfsID[i+1:]
+	}
+	return gtfsID
 }
 
 // OTPRouteRequest is the body accepted by POST /route/otp.
@@ -203,6 +224,8 @@ type CleanLeg struct {
 	RouteShortName    string    `json:"route_short_name,omitempty"`
 	RouteLongName     string    `json:"route_long_name,omitempty"`
 	Headsign          string    `json:"headsign,omitempty"`
+	TripID            string    `json:"trip_id,omitempty"`
+	VehicleID         string    `json:"vehicle_id,omitempty"`
 	RealTime          bool      `json:"realtime"`
 	ArrivalDelaySec   int       `json:"arrival_delay_seconds,omitempty"`
 	DepartureDelaySec int       `json:"departure_delay_seconds,omitempty"`
@@ -294,12 +317,108 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 			}
 			if l.Trip != nil {
 				cl.Headsign = l.Trip.TripHeadsign
+				cl.TripID = stripGTFSFeedPrefix(l.Trip.GtfsID)
 			}
 			ci.Legs = append(ci.Legs, cl)
 		}
 		out = append(out, ci)
 	}
+
+	enrichVehicleIDs(out)
 	return out, nil
+}
+
+// enrichVehicleIDs fills in CleanLeg.VehicleID for transit legs by looking up the live
+// vehicle currently running each trip in the vehicle_positions table (via tranzit-db-
+// middleware). It is best-effort: any failure (no MIDDLEWARE_BASE_URL, network error,
+// trip with no live vehicle) leaves VehicleID empty and never fails the route — trip_id
+// is already populated regardless.
+func enrichVehicleIDs(itineraries []CleanItinerary) {
+	// Collect unique trip ids across all transit legs.
+	tripIDs := make(map[string]struct{})
+	for _, it := range itineraries {
+		for _, l := range it.Legs {
+			if l.TripID != "" {
+				tripIDs[l.TripID] = struct{}{}
+			}
+		}
+	}
+	if len(tripIDs) == 0 {
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var (
+		mu      sync.Mutex
+		wg      sync.WaitGroup
+		results = make(map[string]string, len(tripIDs))
+	)
+	for tripID := range tripIDs {
+		wg.Add(1)
+		go func(tripID string) {
+			defer wg.Done()
+			vid, err := fetchVehicleIDByTrip(ctx, tripID)
+			if err != nil {
+				log.Printf("[/route/otp] vehicle lookup for trip %s failed: %v", tripID, err)
+				return
+			}
+			if vid == "" {
+				return
+			}
+			mu.Lock()
+			results[tripID] = vid
+			mu.Unlock()
+		}(tripID)
+	}
+	wg.Wait()
+
+	if len(results) == 0 {
+		return
+	}
+	for i := range itineraries {
+		for j := range itineraries[i].Legs {
+			if vid, ok := results[itineraries[i].Legs[j].TripID]; ok {
+				itineraries[i].Legs[j].VehicleID = vid
+			}
+		}
+	}
+}
+
+// fetchVehicleIDByTrip returns the vehicle_id currently assigned to tripID, or "" if no
+// live vehicle is reporting that trip. It queries tranzit-db-middleware's generic table API.
+func fetchVehicleIDByTrip(ctx context.Context, tripID string) (string, error) {
+	u := fmt.Sprintf("%s/api/v1/vehicle_positions?trip_id=%s&limit=1",
+		middlewareBaseURL(), url.QueryEscape(tripID))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("middleware http %d", resp.StatusCode)
+	}
+
+	var parsed struct {
+		Data []struct {
+			VehicleID string `json:"vehicle_id"`
+			TripID    string `json:"trip_id"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", err
+	}
+	if len(parsed.Data) == 0 {
+		return "", nil
+	}
+	return parsed.Data[0].VehicleID, nil
 }
 
 // msToTime converts OTP epoch milliseconds to a time.Time (UTC).
