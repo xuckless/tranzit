@@ -26,11 +26,33 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Ensure Artifact Registry repo exists
+        run: |
+          gcloud artifacts repositories create tranzit \
+            --repository-format=docker \
+            --location=us-central1 \
+            --project=tranzit-example-project 2>/dev/null || true
+
+      - name: Build image via Cloud Build
+        run: |
+          IMAGE="us-central1-docker.pkg.dev/tranzit-example-project/tranzit/tranzit-route-service:latest"
+          gcloud builds submit \
+            --config cloudbuild.yaml \
+            --substitutions=_IMAGE="${IMAGE}" \
+            --project=tranzit-example-project
+
       - name: Deploy to Cloud Run
         run: |
+          IMAGE="us-central1-docker.pkg.dev/tranzit-example-project/tranzit/tranzit-route-service:latest"
           gcloud run deploy tranzit-route-service \
-            --source . \
+            --image "${IMAGE}" \
             --region us-central1 \
             --platform managed \
             --allow-unauthenticated \
-            --set-env-vars GMAPS_API_KEY=${{ secrets.GMAPS_API_KEY }}
+            --port 8080 \
+            --no-cpu-throttling \
+            --project=tranzit-example-project \
+            --set-env-vars "GMAPS_API_KEY=${{ secrets.GMAPS_API_KEY }},TS_AUTHKEY=${{ secrets.TS_AUTHKEY }},OTP_BASE_URL=http://tranzit-otp.tailnet-example.ts.net:8080,OTP_HTTP_PROXY=http://localhost:1055,TS_HOSTNAME=tranzit-route-service"
