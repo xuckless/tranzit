@@ -20,9 +20,13 @@ func main() {
 	appToken := os.Getenv("APP_TOKEN")
 
 	forceReload := false
+	loadGTFS := false
 	for _, arg := range os.Args[1:] {
 		if arg == "--force-reload" {
 			forceReload = true
+		}
+		if arg == "--load-gtfs" {
+			loadGTFS = true
 		}
 	}
 
@@ -67,6 +71,25 @@ func main() {
 	} else {
 		fmt.Println("SODA2 data already loaded. Use --force-reload to refresh.")
 	}
+
+	// Opt-in static GTFS load (schedule backbone + cleaned, PostGIS-backed tables/views).
+	// Skipped entirely unless --load-gtfs is passed, so default startup is unchanged.
+	if loadGTFS {
+		hasPostGIS, err := setupGTFSSchema(ctx, pool)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gtfs schema: %v\n", err)
+			os.Exit(1)
+		}
+		if err := loadGTFSStatic(ctx, pool, hasPostGIS); err != nil {
+			fmt.Fprintf(os.Stderr, "gtfs load: %v\n", err)
+			os.Exit(1)
+		}
+		if err := setupCleanupViews(ctx, pool, hasPostGIS); err != nil {
+			fmt.Fprintf(os.Stderr, "cleanup views: %v\n", err)
+			os.Exit(1)
+		}
+	}
+
 
 	fmt.Printf("Starting real-time polling every %ds. Ctrl+C to stop.\n", realtimeInterval)
 	for {
