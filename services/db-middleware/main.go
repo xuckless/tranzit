@@ -1,28 +1,126 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/joho/godotenv"
+	"golang.org/x/sync/singleflight"
 )
 
 var (
 	db          *pgxpool.Pool
 	columnCache sync.Map // map[string][]string — table → column list
 )
+
+// ── Response cache ─────────────────────────────────────────────────────────────
+// Pinning Cloud Run to a single instance (max-instances 1) makes this in-process
+// cache shared across every request, so repeat /api/v1/{table} reads return the
+// stored JSON without touching Supabase. TTL is per-table: realtime tables refresh
+// often (30s), static reference tables rarely change (1h).
+
+type cacheEntry struct {
+	body    []byte
+	etag    string
+	expires time.Time
+}
+
+var (
+	respCache      sync.Map // key: r.URL.RequestURI() → *cacheEntry
+	respCacheCount int64
+	sfGroup        singleflight.Group // collapses concurrent misses for the same key
+)
+
+const respCacheCap = 500
+
+// cacheTTL returns how long a table's responses may be served from cache.
+func cacheTTL(table string) time.Duration {
+	if _, rt := realtimeTables[table]; rt {
+		return 30 * time.Second
+	}
+	return time.Hour
+}
+
+// cacheLoad returns a live (unexpired) entry, deleting it if stale.
+func cacheLoad(key string) *cacheEntry {
+	if v, ok := respCache.Load(key); ok {
+		e := v.(*cacheEntry)
+		if time.Now().Before(e.expires) {
+			return e
+		}
+		respCache.Delete(key)
+		atomic.AddInt64(&respCacheCount, -1)
+	}
+	return nil
+}
+
+// cacheStore saves an entry and sweeps expired entries when over capacity.
+func cacheStore(key string, e *cacheEntry) {
+	if _, existed := respCache.Load(key); !existed {
+		atomic.AddInt64(&respCacheCount, 1)
+	}
+	respCache.Store(key, e)
+	if atomic.LoadInt64(&respCacheCount) > respCacheCap {
+		sweepCache()
+	}
+}
+
+// sweepCache drops expired entries and resets the authoritative count.
+func sweepCache() {
+	now := time.Now()
+	var n int64
+	respCache.Range(func(k, v any) bool {
+		if now.After(v.(*cacheEntry).expires) {
+			respCache.Delete(k)
+		} else {
+			n++
+		}
+		return true
+	})
+	atomic.StoreInt64(&respCacheCount, n)
+}
+
+// etagOf returns a quoted FNV-64a hash of the body for ETag/If-None-Match.
+func etagOf(b []byte) string {
+	h := fnv.New64a()
+	_, _ = h.Write(b)
+	return fmt.Sprintf("%q", strconv.FormatUint(h.Sum64(), 16))
+}
+
+// serveEntry writes a cached entry, honoring If-None-Match with a 304. max-age
+// reflects the entry's remaining freshness so a downstream cache can't extend
+// staleness past this entry's own expiry.
+func serveEntry(w http.ResponseWriter, r *http.Request, e *cacheEntry) {
+	maxAge := int(time.Until(e.expires).Seconds())
+	if maxAge < 0 {
+		maxAge = 0
+	}
+	h := w.Header()
+	h.Set("Content-Type", "application/json")
+	h.Set("ETag", e.etag)
+	h.Set("Cache-Control", fmt.Sprintf("public, max-age=%d", maxAge))
+	if match := r.Header.Get("If-None-Match"); match != "" && match == e.etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	_, _ = w.Write(e.body)
+}
 
 // allowedTables is a whitelist — no other table can be queried.
 var allowedTables = map[string]struct{}{
@@ -50,10 +148,11 @@ var realtimeTables = map[string]struct{}{
 // ── SSE for vehicle_positions ─────────────────────────────────────────────────
 
 type vehicleHub struct {
-	mu         sync.RWMutex
-	snapshot   []map[string]any
-	prevHashes map[string]string // vehicle_id → json(row) used for change detection
-	subs       map[chan []byte]struct{}
+	mu          sync.RWMutex
+	snapshot    []map[string]any
+	prevHashes  map[string]string // vehicle_id → json(row) used for change detection
+	subs        map[chan []byte]struct{}
+	lastRefresh time.Time
 }
 
 type vehicleDiff struct {
@@ -75,6 +174,14 @@ func startVehiclePoller(ctx context.Context) {
 		case <-ctx.Done():
 			return
 		case <-t.C:
+			// Skip the full-table read when nobody is listening — avoids a
+			// constant 24/7 Supabase read with zero subscribers.
+			vHub.mu.RLock()
+			n := len(vHub.subs)
+			vHub.mu.RUnlock()
+			if n == 0 {
+				continue
+			}
 			if err := refreshVehicleCache(ctx); err != nil {
 				log.Printf("vehicle poller: %v", err)
 			}
@@ -120,6 +227,7 @@ func refreshVehicleCache(ctx context.Context) error {
 	vHub.mu.Lock()
 	vHub.snapshot = newRows
 	vHub.prevHashes = newHashes
+	vHub.lastRefresh = time.Now()
 	subs := make([]chan []byte, 0, len(vHub.subs))
 	for ch := range vHub.subs {
 		subs = append(subs, ch)
@@ -199,8 +307,19 @@ func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
 
 	vHub.mu.Lock()
 	vHub.subs[ch] = struct{}{}
-	snapshot := vHub.snapshot
+	stale := time.Since(vHub.lastRefresh) > 30*time.Second
 	vHub.mu.Unlock()
+
+	// If polling has been idle, refresh once so this subscriber gets fresh data.
+	if stale {
+		if err := refreshVehicleCache(r.Context()); err != nil {
+			log.Printf("vehicle warm-on-connect: %v", err)
+		}
+	}
+
+	vHub.mu.RLock()
+	snapshot := vHub.snapshot
+	vHub.mu.RUnlock()
 
 	defer func() {
 		vHub.mu.Lock()
@@ -383,6 +502,113 @@ func ptrInt64Eq(a, b *int64) bool {
 	return *a == *b
 }
 
+// routeTopic shares one 30s poller among all SSE subscribers watching the same
+// resolved trip, so N clients on a trip cause one fetchRouteStops per tick, not N.
+type routeTopic struct {
+	tripID   string
+	routeID  string
+	mu       sync.RWMutex
+	snapshot []routeStop
+	subs     map[chan []byte]struct{}
+	cancel   context.CancelFunc
+}
+
+var (
+	routeHubMu  sync.Mutex
+	routeTopics = map[string]*routeTopic{} // trip_id → topic
+)
+
+// subscribeRoute attaches ch to the topic for tripID, creating and starting the
+// shared poller (with an initial fetch) when it's the first subscriber. Returns the
+// current snapshot to send on connect.
+func subscribeRoute(tripID, routeID string, ch chan []byte) (*routeTopic, []routeStop, error) {
+	routeHubMu.Lock()
+	defer routeHubMu.Unlock()
+
+	if t, ok := routeTopics[tripID]; ok {
+		t.mu.Lock()
+		t.subs[ch] = struct{}{}
+		snap := t.snapshot
+		t.mu.Unlock()
+		return t, snap, nil
+	}
+
+	stops, err := fetchRouteStops(context.Background(), tripID)
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	t := &routeTopic{
+		tripID:   tripID,
+		routeID:  routeID,
+		snapshot: stops,
+		subs:     map[chan []byte]struct{}{ch: {}},
+		cancel:   cancel,
+	}
+	routeTopics[tripID] = t
+	go t.run(ctx)
+	return t, stops, nil
+}
+
+// unsubscribeRoute detaches ch; when the last subscriber leaves, the poller is
+// stopped and the topic removed.
+func unsubscribeRoute(t *routeTopic, ch chan []byte) {
+	routeHubMu.Lock()
+	t.mu.Lock()
+	delete(t.subs, ch)
+	if len(t.subs) == 0 {
+		delete(routeTopics, t.tripID)
+		t.cancel()
+	}
+	t.mu.Unlock()
+	routeHubMu.Unlock()
+}
+
+// run polls the trip's stops every 30s and broadcasts diffs (nil = heartbeat).
+func (t *routeTopic) run(ctx context.Context) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	prev := t.snapshot
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			next, err := fetchRouteStops(ctx, t.tripID)
+			if err != nil {
+				if ctx.Err() != nil {
+					return
+				}
+				log.Printf("fetchRouteStops poll: %v", err)
+				t.broadcast(nil) // heartbeat
+				continue
+			}
+			diff := computeRouteStopDiff(prev, next)
+			t.mu.Lock()
+			t.snapshot = next
+			t.mu.Unlock()
+			var msg []byte
+			if len(diff.Added)+len(diff.Updated)+len(diff.Removed) > 0 {
+				msg, _ = json.Marshal(diff)
+			}
+			t.broadcast(msg)
+			prev = next
+		}
+	}
+}
+
+// broadcast sends msg (nil = heartbeat) to all subscribers, skipping slow ones.
+func (t *routeTopic) broadcast(msg []byte) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	for ch := range t.subs {
+		select {
+		case ch <- msg:
+		default: // slow subscriber; skip this tick
+		}
+	}
+}
+
 func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -413,12 +639,14 @@ func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	stops, err := fetchRouteStops(r.Context(), tripID)
+	ch := make(chan []byte, 8)
+	topic, stops, err := subscribeRoute(tripID, routeID, ch)
 	if err != nil {
-		log.Printf("fetchRouteStops: %v", err)
+		log.Printf("subscribeRoute: %v", err)
 		jsonError(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
+	defer unsubscribeRoute(topic, ch)
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
@@ -434,31 +662,17 @@ func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	prev := stops
-
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-ticker.C:
-			next, err := fetchRouteStops(r.Context(), tripID)
-			if err != nil {
-				log.Printf("fetchRouteStops poll: %v", err)
-				fmt.Fprintf(w, ": ping\n\n")
-				flusher.Flush()
-				continue
-			}
-			diff := computeRouteStopDiff(prev, next)
-			if len(diff.Added)+len(diff.Updated)+len(diff.Removed) == 0 {
+		case msg := <-ch:
+			if msg == nil {
 				fmt.Fprintf(w, ": ping\n\n")
 			} else {
-				b, _ := json.Marshal(diff)
-				fmt.Fprintf(w, "event: update\ndata: %s\n\n", b)
+				fmt.Fprintf(w, "event: update\ndata: %s\n\n", msg)
 			}
 			flusher.Flush()
-			prev = next
 		}
 	}
 }
@@ -690,10 +904,22 @@ func main() {
 		log.Fatal("SUPABASE_DIRECT_CONNECTION_STRING is not set")
 	}
 
-	var err error
-	db, err = pgxpool.New(context.Background(), dsn)
+	cfg, err := pgxpool.ParseConfig(dsn)
 	if err != nil {
-		log.Fatalf("pgxpool.New: %v", err)
+		log.Fatalf("pgxpool.ParseConfig: %v", err)
+	}
+	// Tuned for a single pinned Cloud Run instance: the response cache absorbs most
+	// reads, so a small pool with one warm connection is plenty. Recycle idle conns
+	// so Supabase isn't left holding stale sessions.
+	cfg.MaxConns = 5
+	cfg.MinConns = 1
+	cfg.MaxConnIdleTime = 5 * time.Minute
+	cfg.MaxConnLifetime = 30 * time.Minute
+	cfg.HealthCheckPeriod = time.Minute
+
+	db, err = pgxpool.NewWithConfig(context.Background(), cfg)
+	if err != nil {
+		log.Fatalf("pgxpool.NewWithConfig: %v", err)
 	}
 	defer db.Close()
 
@@ -711,10 +937,12 @@ func main() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	// Exact matches take precedence over the /api/v1/ prefix catch-all.
+	// SSE endpoints are not gzipped — chunked event streams and gzip buffering don't
+	// mix, and their diffs are already small.
 	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
-	mux.HandleFunc("/api/v1/resolve_trip", withCORS(handleResolveTrip))
-	mux.HandleFunc("/api/v1/", withCORS(handleQuery))
+	mux.HandleFunc("/api/v1/resolve_trip", withCORS(withGzip(handleResolveTrip)))
+	mux.HandleFunc("/api/v1/", withCORS(withGzip(handleQuery)))
 
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -722,6 +950,59 @@ func main() {
 	}
 	log.Printf("listening on :%s", port)
 	log.Fatal(http.ListenAndServe(":"+port, mux))
+}
+
+// gzipResponseWriter compresses the body lazily: it only switches on gzip for a 200
+// response with a body, so empty 304s and error responses pass through unchanged.
+type gzipResponseWriter struct {
+	http.ResponseWriter
+	gz          *gzip.Writer
+	passthrough bool
+	wroteHeader bool
+}
+
+func (g *gzipResponseWriter) WriteHeader(code int) {
+	g.wroteHeader = true
+	if code == http.StatusOK {
+		g.Header().Del("Content-Length")
+		g.Header().Set("Content-Encoding", "gzip")
+		g.gz = gzip.NewWriter(g.ResponseWriter)
+	} else {
+		g.passthrough = true
+	}
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipResponseWriter) Write(b []byte) (int, error) {
+	if !g.wroteHeader {
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.passthrough {
+		return g.ResponseWriter.Write(b)
+	}
+	return g.gz.Write(b)
+}
+
+func (g *gzipResponseWriter) Close() error {
+	if g.gz != nil {
+		return g.gz.Close()
+	}
+	return nil
+}
+
+// withGzip compresses JSON responses when the client accepts gzip. JSON compresses
+// ~80-90%, cutting Cloud Run egress to clients.
+func withGzip(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			h(w, r)
+			return
+		}
+		w.Header().Add("Vary", "Accept-Encoding")
+		gzw := &gzipResponseWriter{ResponseWriter: w}
+		defer gzw.Close()
+		h(gzw, r)
+	}
 }
 
 // withCORS wraps a handler with permissive CORS headers.
@@ -770,18 +1051,46 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cols, err := tableColumns(r.Context(), table)
-	if err != nil {
-		log.Printf("tableColumns(%s): %v", table, err)
-		jsonError(w, "internal server error", http.StatusInternalServerError)
+	// Serve from the in-process cache when fresh — no DB read at all.
+	ttl := cacheTTL(table)
+	cacheKey := r.URL.RequestURI()
+	if e := cacheLoad(cacheKey); e != nil {
+		serveEntry(w, r, e)
 		return
+	}
+
+	// Collapse concurrent misses for the same query into a single Supabase read.
+	v, err, _ := sfGroup.Do(cacheKey, func() (any, error) {
+		if e := cacheLoad(cacheKey); e != nil {
+			return e, nil // another goroutine filled the cache while we waited
+		}
+		body, err := buildTableResponse(r.Context(), table, r.URL.Query())
+		if err != nil {
+			return nil, err
+		}
+		e := &cacheEntry{body: body, etag: etagOf(body), expires: time.Now().Add(ttl)}
+		cacheStore(cacheKey, e)
+		return e, nil
+	})
+	if err != nil {
+		log.Printf("buildTableResponse(%s): %v", table, err)
+		jsonError(w, "query failed", http.StatusInternalServerError)
+		return
+	}
+	serveEntry(w, r, v.(*cacheEntry))
+}
+
+// buildTableResponse runs the parameterised query for a whitelisted table and
+// returns the marshaled JSON response body.
+func buildTableResponse(ctx context.Context, table string, q url.Values) ([]byte, error) {
+	cols, err := tableColumns(ctx, table)
+	if err != nil {
+		return nil, err
 	}
 	colSet := make(map[string]struct{}, len(cols))
 	for _, c := range cols {
 		colSet[c] = struct{}{}
 	}
-
-	q := r.URL.Query()
 
 	limit, offset := 100, 0
 	if v := q.Get("limit"); v != "" {
@@ -873,11 +1182,9 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 	query += orderClause
 	query += fmt.Sprintf(" LIMIT %d OFFSET %d", limit, offset)
 
-	rows, err := db.Query(r.Context(), query, args...)
+	rows, err := db.Query(ctx, query, args...)
 	if err != nil {
-		log.Printf("query error: %v", err)
-		jsonError(w, "query failed", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 	defer rows.Close()
 
@@ -901,13 +1208,10 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 		result = append(result, row)
 	}
 	if rows.Err() != nil {
-		log.Printf("rows.Err: %v", rows.Err())
-		jsonError(w, "query failed", http.StatusInternalServerError)
-		return
+		return nil, rows.Err()
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{
+	return json.Marshal(map[string]any{
 		"table":  table,
 		"count":  len(result),
 		"limit":  limit,
