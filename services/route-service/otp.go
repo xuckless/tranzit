@@ -6,10 +6,34 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
+
+// otpClientOnce builds a dedicated HTTP client for OTP traffic. When OTP_HTTP_PROXY is
+// set (e.g. on Cloud Run, where a Tailscale userspace sidecar exposes an outbound proxy
+// at localhost:1055), OTP requests are routed through it so the private tailnet address
+// resolves and connects. The Google Places clients are left untouched and go direct.
+var (
+	otpClientOnce sync.Once
+	otpClient     *http.Client
+)
+
+func otpHTTPClient() *http.Client {
+	otpClientOnce.Do(func() {
+		tr := &http.Transport{}
+		if p := os.Getenv("OTP_HTTP_PROXY"); p != "" {
+			if u, err := url.Parse(p); err == nil {
+				tr.Proxy = http.ProxyURL(u)
+			}
+		}
+		otpClient = &http.Client{Transport: tr}
+	})
+	return otpClient
+}
 
 // otp.go adds an OpenTripPlanner 2 backed routing path alongside the existing Google
 // Routes integration in routes.go. It is purely additive: the Google /route endpoint is
@@ -219,7 +243,7 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(httpReq)
+	resp, err := otpHTTPClient().Do(httpReq)
 	if err != nil {
 		return nil, err
 	}
