@@ -26,29 +26,13 @@ jobs:
       - name: Set up Cloud SDK
         uses: google-github-actions/setup-gcloud@v2
 
-      - name: Configure Docker for Artifact Registry
-        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
-
-      - name: Ensure Artifact Registry repo exists
-        run: |
-          gcloud artifacts repositories create tranzit \
-            --repository-format=docker \
-            --location=us-central1 \
-            --project=tranzit-example-project 2>/dev/null || true
-
-      - name: Build image via Cloud Build
-        run: |
-          IMAGE="us-central1-docker.pkg.dev/tranzit-example-project/tranzit/tranzit-route-service:latest"
-          gcloud builds submit \
-            --config cloudbuild.yaml \
-            --substitutions=_IMAGE="${IMAGE}" \
-            --project=tranzit-example-project
+      - name: Use Tailscale Dockerfile
+        run: cp Dockerfile.cloudrun Dockerfile
 
       - name: Deploy to Cloud Run
         run: |
-          IMAGE="us-central1-docker.pkg.dev/tranzit-example-project/tranzit/tranzit-route-service:latest"
           gcloud run deploy tranzit-route-service \
-            --image "${IMAGE}" \
+            --source . \
             --region us-central1 \
             --platform managed \
             --allow-unauthenticated \
