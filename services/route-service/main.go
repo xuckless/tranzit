@@ -163,6 +163,31 @@ func main() {
 		return c.JSON(routes)
 	})
 
+	// POST: Get walk/bike/transit routes from the self-hosted OpenTripPlanner engine.
+	// Supplements /route (Google) — no Google quota is consumed here.
+	app.Post("/route/otp", func(c *fiber.Ctx) error {
+		req := new(OTPRouteRequest)
+		if err := c.BodyParser(req); err != nil {
+			return c.Status(400).JSON(fiber.Map{"error": "Invalid JSON payload"})
+		}
+		if req.Origin.Lat == 0 && req.Origin.Lng == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "origin {lat,lng} required"})
+		}
+		if req.Destination.Lat == 0 && req.Destination.Lng == 0 {
+			return c.Status(400).JSON(fiber.Map{"error": "destination {lat,lng} required"})
+		}
+
+		itineraries, err := FetchOTPRoutes(*req)
+		if err != nil {
+			log.Printf("[/route/otp] error: %v\n", err)
+			return c.Status(502).JSON(fiber.Map{"error": "Routing engine unreachable or rejected request", "detail": err.Error()})
+		}
+		if len(itineraries) == 0 {
+			return c.SendStatus(204)
+		}
+		return c.JSON(fiber.Map{"itineraries": itineraries})
+	})
+
 	// GET: Find closest establishment to a lat/lng coordinate
 	app.Get("/searchnearby", func(c *fiber.Ctx) error {
 		if tracker.SearchNearbyCalls >= tracker.MaxCalls {
