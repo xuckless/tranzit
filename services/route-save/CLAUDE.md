@@ -547,7 +547,21 @@ internal/api/           HTTP/WS surface + StartRequest/Response.
    not in the POST.
 3. Service takes over: 1s tick drives the machine, 30s poll refreshes RT ETAs, and
    it reroutes itself via `/route` on MISSED.
-4. **`DELETE /trips/{id}`** or simply closing the socket tears the trip down. Also
+4. **`GET /trips/{id}`** is a **refresh, not a passive read**: it re-fetches the
+   route for the *remaining* journey (rider's current position → destination),
+   splices it onto the already-completed prefix, and returns the fresh `STATE`
+   export **plus** `route` (the raw Google route — the polyline). The client gets
+   up-to-date directions on demand with **no stale data beyond the completed part of
+   the trip**. Mechanics (`Session.RefreshRoute`): the loop computes origin/keep
+   (`planRefresh` — origin = fresh GPS fix, else the current active stop;
+   keepThroughIdx = `CurrentStopIndex-1`, completed stops only), the **/route call +
+   `BuildTrip` run off the loop** (network stays off the actor, §18.3), then the loop
+   splices and snapshots (`applyRefresh`), also pushing a fresh `STATE` to any
+   attached WS client. On any failure (no route service, fetch error, empty route) it
+   **falls back to the last known-good snapshot** rather than wiping a valid trip.
+   `Session.lastRoute` holds the route the client POSTed, refreshed to the chosen
+   route on every reroute and on every successful GET refresh.
+5. **`DELETE /trips/{id}`** or simply closing the socket tears the trip down. Also
    `GET /health`.
 
 ### 18.3 Concurrency model

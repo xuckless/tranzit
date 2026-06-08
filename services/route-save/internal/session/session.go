@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/tranzit-route-save/internal/config"
+	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/rtfeed"
 	"github.com/tranzit-route-save/internal/state"
 	"github.com/tranzit-route-save/internal/trip"
@@ -44,7 +45,15 @@ type Session struct {
 	rtArrivals chan []rtfeed.Arrival
 	rerouteOut chan rerouteResult
 	attach     chan *websocket.Conn
+	snapshot   chan snapshotReq
+	replanPlan chan chan refreshPlan
+	replanDone chan refreshApplyReq
 	send       chan []byte
+
+	// lastRoute is the raw Google route object for the journey as it stands: the
+	// route the client POSTed, then the latest reroute's route. Served by the GET
+	// /trips/{id} pull path so a client can fetch the current polyline on demand.
+	lastRoute json.RawMessage
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -64,17 +73,21 @@ type Session struct {
 	attached  bool  // a client WebSocket has attached at least once
 }
 
-func newSession(ts *trip.TripState, destPlaceID string, deps Deps, mgr *Manager) *Session {
+func newSession(ts *trip.TripState, destPlaceID string, initialRoute json.RawMessage, deps Deps, mgr *Manager) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		deps:        deps,
 		mgr:         mgr,
 		trip:        ts,
 		destPlaceID: destPlaceID,
+		lastRoute:   initialRoute,
 		clientMsgs:  make(chan []byte, 16),
 		rtArrivals:  make(chan []rtfeed.Arrival, 4),
 		rerouteOut:  make(chan rerouteResult, 4),
 		attach:      make(chan *websocket.Conn, 1),
+		snapshot:    make(chan snapshotReq),
+		replanPlan:  make(chan chan refreshPlan),
+		replanDone:  make(chan refreshApplyReq),
 		send:        make(chan []byte, sendBuffer),
 		ctx:         ctx,
 		cancel:      cancel,
@@ -145,6 +158,19 @@ func (s *Session) run() {
 
 		case conn := <-s.attach:
 			s.onAttach(conn)
+
+		case req := <-s.snapshot:
+			// Build the snapshot on the loop goroutine so the GET reads trip state
+			// where it is mutated, with no locks (§18.3).
+			req.reply <- wsproto.SnapshotMessage(s.trip, s.deps.Clock.Now(), s.lastRoute)
+
+		case reply := <-s.replanPlan:
+			// Phase 1 of a GET-triggered refresh: compute origin/keep on the loop.
+			reply <- s.planRefresh()
+
+		case req := <-s.replanDone:
+			// Phase 3: splice the freshly-fetched route on, return the new snapshot.
+			req.reply <- s.applyRefresh(req)
 		}
 	}
 }
@@ -217,6 +243,155 @@ func (s *Session) activeTripIDs() []string {
 		}
 	}
 	return ids
+}
+
+// snapshotReq asks the loop to build a consistent STATE+route snapshot for the
+// GET /trips/{id} pull path; reply carries it back to the HTTP goroutine.
+type snapshotReq struct {
+	reply chan wsproto.SnapshotMsg
+}
+
+// Snapshot returns the current STATE export plus the latest route (polyline) for
+// an HTTP GET. It is built on the loop goroutine for a race-free read; ok is false
+// if the session is closing.
+func (s *Session) Snapshot() (wsproto.SnapshotMsg, bool) {
+	reply := make(chan wsproto.SnapshotMsg, 1)
+	select {
+	case s.snapshot <- snapshotReq{reply: reply}:
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
+	select {
+	case m := <-reply:
+		return m, true
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
+}
+
+// --- GET-triggered route refresh ---
+//
+// A GET /trips/{id} is a *refresh*, not just a read: it re-fetches the route for
+// the remaining journey from the rider's current position to the destination,
+// splices it onto the already-completed prefix, and returns the fresh snapshot —
+// so the client never sees stale data beyond the part of the trip already done.
+// Network I/O stays off the loop (§18.3): the loop computes the plan and applies
+// the result; the HTTP goroutine does the /route call in between.
+
+// refreshPlan is the loop-computed input for a re-plan: where to fetch from and
+// how much of the current trip to keep.
+type refreshPlan struct {
+	origin         geo.LatLng
+	dest           geo.LatLng
+	sessionID      string
+	keepThroughIdx int
+	ok             bool // false when there is nothing to re-plan (no stops yet)
+}
+
+// refreshApplyReq carries an off-loop fetched re-plan back to the loop to splice;
+// reply returns the resulting snapshot.
+type refreshApplyReq struct {
+	keepThroughIdx int
+	newTrip        *trip.TripState
+	raw            json.RawMessage
+	reply          chan wsproto.SnapshotMsg
+}
+
+// planRefresh computes the re-plan origin and kept prefix on the loop goroutine.
+// Origin is the rider's fresh GPS fix, else the stop they are currently heading to
+// (so we always have a valid origin). keepThroughIdx keeps only the completed
+// prefix — everything from the active stop onward is re-fetched.
+func (s *Session) planRefresh() refreshPlan {
+	ts := s.trip
+	if len(ts.Stops) == 0 {
+		return refreshPlan{ok: false}
+	}
+	origin, ok := s.machine.FreshUserFix()
+	if !ok {
+		idx := ts.CurrentStopIndex
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(ts.Stops) {
+			idx = len(ts.Stops) - 1
+		}
+		origin = ts.Stops[idx].Loc()
+	}
+	return refreshPlan{
+		origin:         origin,
+		dest:           ts.Destination,
+		sessionID:      ts.SessionID,
+		keepThroughIdx: ts.CurrentStopIndex - 1, // keep completed stops only (§9.3 Case 2)
+		ok:             true,
+	}
+}
+
+// applyRefresh splices the freshly-built remaining trip onto the kept prefix,
+// updates the served route, and pushes a fresh STATE so any attached WS client
+// stays in sync. Runs on the loop goroutine; returns the new snapshot.
+func (s *Session) applyRefresh(req refreshApplyReq) wsproto.SnapshotMsg {
+	trip.Splice(s.trip, req.keepThroughIdx, req.newTrip)
+	s.lastRoute = req.raw
+	s.trip.LastReroute = s.deps.Clock.Now()
+	s.trip.CurrentStopIndex = req.keepThroughIdx + 1 // re-enter at the first new stop
+	s.trip.OverallStatus = trip.StatusActive
+	if s.debug {
+		log.Printf("session %s: REFRESH (GET) keep=%d legs=%d stops=%d",
+			shortID(s.trip.SessionID), req.keepThroughIdx, len(s.trip.Legs), len(s.trip.Stops))
+	}
+	s.forcePushState()
+	return wsproto.SnapshotMessage(s.trip, s.deps.Clock.Now(), s.lastRoute)
+}
+
+// RefreshRoute re-fetches the remaining route and returns the updated snapshot for
+// a GET /trips/{id}. It computes the plan on the loop, calls /route + rebuilds off
+// the loop, then applies the splice on the loop. On any failure (no route service,
+// route fetch error, or an empty route) it falls back to the current snapshot —
+// the last known-good route — rather than wiping a valid trip. ok is false only
+// when the session is closing.
+func (s *Session) RefreshRoute() (wsproto.SnapshotMsg, bool) {
+	planReply := make(chan refreshPlan, 1)
+	select {
+	case s.replanPlan <- planReply:
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
+	var plan refreshPlan
+	select {
+	case plan = <-planReply:
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
+
+	if !plan.ok || s.deps.Routes == nil || s.destPlaceID == "" {
+		return s.Snapshot()
+	}
+
+	route, raw, err := s.deps.Routes.Route(s.ctx, plan.origin, s.destPlaceID)
+	var newTrip *trip.TripState
+	if err == nil {
+		newTrip, err = trip.BuildTrip(plan.sessionID, plan.origin, plan.dest, route, s.deps.Data, s.deps.Clock.Now())
+	}
+	if err != nil || newTrip == nil || len(newTrip.Legs) == 0 || len(raw) == 0 {
+		if err != nil {
+			log.Printf("session %s: refresh failed: %v", shortID(plan.sessionID), err)
+		}
+		return s.Snapshot() // graceful: serve the last known-good route
+	}
+
+	applyReply := make(chan wsproto.SnapshotMsg, 1)
+	apply := refreshApplyReq{keepThroughIdx: plan.keepThroughIdx, newTrip: newTrip, raw: raw, reply: applyReply}
+	select {
+	case s.replanDone <- apply:
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
+	select {
+	case m := <-applyReply:
+		return m, true
+	case <-s.done:
+		return wsproto.SnapshotMsg{}, false
+	}
 }
 
 // --- WebSocket attach / teardown ---

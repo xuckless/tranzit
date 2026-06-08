@@ -10,14 +10,14 @@ hands off.
 
 ```
         ┌────────────────────────── Tranzit Client (Expo) ──────────────────────────┐
-        │                                                                            │
-        │  1. autocomplete / details / search   ──► Map Service  (direct)            │
-        │  2. fetch directions  POST /route     ──► Map Service  (direct)            │
-        │  3. pick ONE route, POST /trips       ──► Route Save                       │
-        │  4. open WebSocket  /trips/{id}/ws     ◄─► Route Save  (live STATE stream)  │
-        │  5. stream LOCATION up, render STATE down, react to REROUTE / NOTIFY        │
-        │  6. close socket (or DELETE) to end the trip                               │
-        └────────────────────────────────────────────────────────────────────────────┘
+        │                                                                           │
+        │  1. autocomplete / details / search   ──► Map Service  (direct)           │
+        │  2. fetch directions  POST /route     ──► Map Service  (direct)           │
+        │  3. pick ONE route, POST /trips       ──► Route Save                      │
+        │  4. open WebSocket  /trips/{id}/ws     ◄─► Route Save  (live STATE stream)│
+        │  5. stream LOCATION up, render STATE down, react to REROUTE / NOTIFY      │
+        │  6. close socket (or DELETE) to end the trip                              │
+        └───────────────────────────────────────────────────────────────────────────┘
 
 Route Save talks to Map Service (reroutes) and DB Middleware (GTFS-RT) on the
 server side — the client does NOT call those for trip logic.

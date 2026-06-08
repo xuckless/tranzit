@@ -136,6 +136,7 @@ func (s *Session) applyReroute(res rerouteResult) {
 		return
 	}
 	trip.Splice(s.trip, res.req.keepThroughIdx, res.newTrip)
+	s.lastRoute = res.raw // serve the new route on the GET pull path too
 	s.trip.LastReroute = s.deps.Clock.Now()
 	if !res.req.onBus {
 		// Re-enter the machine at the first new stop (§9.2).

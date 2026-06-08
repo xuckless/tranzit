@@ -114,6 +114,17 @@ type RerouteMsg struct {
 	Legs   []RouteLeg      `json:"legs"`
 }
 
+// SnapshotMsg is the HTTP GET /trips/{id} body: the full STATE export plus the
+// latest route (raw Google object, the polyline source) the client would
+// otherwise only receive pushed via REROUTE. It lets a client pull the active
+// route on demand — missed the REROUTE frame, reconnecting, or polling. The
+// embedded StateMsg promotes its fields, so the body is the familiar renderable
+// STATE shape with an added "route".
+type SnapshotMsg struct {
+	StateMsg
+	Route json.RawMessage `json:"route,omitempty"`
+}
+
 // LatLng is a coordinate pair for the reroute origin.
 type LatLng struct {
 	Lat float64 `json:"lat"`

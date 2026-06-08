@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /trips", s.handleStart)
+	mux.HandleFunc("GET /trips/{id}", s.handleGet)
 	mux.HandleFunc("GET /trips/{id}/ws", s.handleWS)
 	mux.HandleFunc("DELETE /trips/{id}", s.handleStop)
 	return mux
@@ -93,13 +94,34 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		ts.UserID = req.UserID
 	}
 
-	s.mgr.Create(ts, req.DestinationPlaceID)
+	s.mgr.Create(ts, req.DestinationPlaceID, req.Route)
 	log.Printf("POST /trips: session %s started — %d stops across %d legs",
 		sessionID, len(ts.Stops), len(ts.Legs))
 	writeJSON(w, http.StatusCreated, StartResponse{
 		SessionID: sessionID,
 		WSURL:     "/trips/" + sessionID + "/ws",
 	})
+}
+
+// handleGet refreshes and returns the trip snapshot. A GET is a re-plan, not just
+// a read: Route Save re-fetches the route for the remaining journey (rider's
+// current position → destination), splices it onto the already-completed prefix,
+// and returns the fresh STATE export plus the new route (polyline). The client
+// gets up-to-date directions on demand with no stale data beyond the completed
+// part of the trip. If the re-fetch can't be made, the last known-good route is
+// returned instead of failing.
+func (s *Server) handleGet(w http.ResponseWriter, r *http.Request) {
+	sess := s.mgr.Get(r.PathValue("id"))
+	if sess == nil {
+		http.Error(w, "unknown session", http.StatusNotFound)
+		return
+	}
+	snap, ok := sess.RefreshRoute()
+	if !ok {
+		http.Error(w, "session closed", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, snap)
 }
 
 // handleWS upgrades and attaches the client connection to an existing session.

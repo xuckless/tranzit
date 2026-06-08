@@ -49,7 +49,7 @@ func TestReroute_MissedSplices(t *testing.T) {
 	clk := &state.FakeClock{T: 1000}
 	routeFake := &routeclient.Fake{Result: route}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", deps, NewManager(deps))
+	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
 
 	// Far from the boarding stop and armed → MISSED → onMissed records a reroute.
 	s.machine.OnLocationUpdate(trip.UserLocation{Loc: geo.LatLng{Lat: 51.20, Lng: -114.30}})
@@ -107,7 +107,7 @@ func TestReroute_OriginIsUserLocation(t *testing.T) {
 		},
 	}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", deps, NewManager(deps))
+	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
 
 	userLoc := geo.LatLng{Lat: 51.20, Lng: -114.30}
 	s.machine.OnLocationUpdate(trip.UserLocation{Loc: userLoc})
@@ -146,7 +146,7 @@ func TestReroute_NoGPS_OriginIsPlannedStop(t *testing.T) {
 		},
 	}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", deps, NewManager(deps))
+	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
 
 	// Armed with no fix -> UNSURE (timer-driven, GPS silent).
 	s.machine.OnTick()

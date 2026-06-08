@@ -2,7 +2,9 @@ package api_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/tranzit-route-save/internal/api"
 	"github.com/tranzit-route-save/internal/datasource"
+	"github.com/tranzit-route-save/internal/directions"
 	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/routeclient"
 	"github.com/tranzit-route-save/internal/rtfeed"
@@ -40,20 +43,21 @@ func newFixture() *datasource.Fixture {
 	return fx
 }
 
-func newTestServer(t *testing.T) (*httptest.Server, *session.Manager) {
+func newTestServer(t *testing.T) (*httptest.Server, *session.Manager, *routeclient.Fake) {
 	t.Helper()
 	fx := newFixture()
+	routes := &routeclient.Fake{}
 	mgr := session.NewManager(session.Deps{
 		Data:   fx,
 		RT:     &rtfeed.Fake{},
-		Routes: &routeclient.Fake{},
+		Routes: routes,
 		Clock:  &state.FakeClock{T: fixtureNow},
 	})
-	return httptest.NewServer(api.NewServer(mgr, fx).Handler()), mgr
+	return httptest.NewServer(api.NewServer(mgr, fx).Handler()), mgr, routes
 }
 
 func TestLifecycle_StartConnectStream(t *testing.T) {
-	srv, mgr := newTestServer(t)
+	srv, mgr, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
@@ -123,7 +127,7 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 }
 
 func TestStart_RejectsMissingDestination(t *testing.T) {
-	srv, _ := newTestServer(t)
+	srv, _, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
@@ -136,6 +140,137 @@ func TestStart_RejectsMissingDestination(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for missing destination_place_id", resp.StatusCode)
+	}
+}
+
+func TestGetTrip_RefreshesAndReturnsRoute(t *testing.T) {
+	srv, _, routes := newTestServer(t)
+	defer srv.Close()
+
+	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
+	if err != nil {
+		t.Fatalf("read route: %v", err)
+	}
+	// A GET re-plans: it calls /route from the rider's position to the destination.
+	// Program the fake to return a fresh route the fixture can resolve, tagged so we
+	// can confirm the GET served the *re-fetched* route, not the posted one.
+	parsed, err := directions.ParseSingle(routeJSON)
+	if err != nil {
+		t.Fatalf("parse route: %v", err)
+	}
+	freshRaw := json.RawMessage(`{"refreshed":true,"polyline":{"encodedPolyline":"abc"}}`)
+	routes.RouteFn = func(_ context.Context, origin geo.LatLng, destPlaceID string) (directions.Route, json.RawMessage, error) {
+		if destPlaceID != "place-xyz" {
+			t.Errorf("refresh dest = %q, want place-xyz", destPlaceID)
+		}
+		if origin == (geo.LatLng{}) {
+			t.Error("refresh origin is zero; want the rider's planned stop or fix")
+		}
+		return parsed, freshRaw, nil
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"route":                json.RawMessage(routeJSON),
+		"destination_place_id": "place-xyz",
+	})
+	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /trips: %v", err)
+	}
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	resp.Body.Close()
+
+	getResp, err := http.Get(srv.URL + "/trips/" + start.SessionID)
+	if err != nil {
+		t.Fatalf("GET /trips/{id}: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", getResp.StatusCode)
+	}
+	var snap struct {
+		Type  string          `json:"type"`
+		Stops []struct{}      `json:"stops"`
+		Route json.RawMessage `json:"route"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if snap.Type != "STATE" {
+		t.Errorf("snapshot type = %q, want STATE", snap.Type)
+	}
+	if len(snap.Stops) != 2 {
+		t.Errorf("snapshot stops = %d, want 2", len(snap.Stops))
+	}
+	if routes.Calls == 0 {
+		t.Error("GET did not trigger a route re-fetch")
+	}
+	if !bytes.Contains(snap.Route, []byte("refreshed")) {
+		t.Errorf("snapshot route is not the re-fetched one: %s", snap.Route)
+	}
+}
+
+func TestGetTrip_FallsBackToLastRouteOnRefreshError(t *testing.T) {
+	srv, _, routes := newTestServer(t)
+	defer srv.Close()
+
+	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
+	if err != nil {
+		t.Fatalf("read route: %v", err)
+	}
+	// Refresh fails: the GET must still return the last known-good route (the one
+	// the client POSTed), never an empty/stale snapshot.
+	routes.RouteFn = func(_ context.Context, _ geo.LatLng, _ string) (directions.Route, json.RawMessage, error) {
+		return directions.Route{}, nil, errors.New("route service down")
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"route":                json.RawMessage(routeJSON),
+		"destination_place_id": "place-xyz",
+	})
+	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /trips: %v", err)
+	}
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	resp.Body.Close()
+
+	getResp, err := http.Get(srv.URL + "/trips/" + start.SessionID)
+	if err != nil {
+		t.Fatalf("GET /trips/{id}: %v", err)
+	}
+	defer getResp.Body.Close()
+	if getResp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", getResp.StatusCode)
+	}
+	var snap struct {
+		Route json.RawMessage `json:"route"`
+	}
+	if err := json.NewDecoder(getResp.Body).Decode(&snap); err != nil {
+		t.Fatalf("decode snapshot: %v", err)
+	}
+	if len(snap.Route) == 0 {
+		t.Error("fallback snapshot has no route; want the last known-good route")
+	}
+}
+
+func TestGetTrip_UnknownSession(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/trips/does-not-exist")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("status = %d, want 404 for unknown session", resp.StatusCode)
 	}
 }
 

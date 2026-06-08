@@ -6,6 +6,7 @@
 package session
 
 import (
+	"encoding/json"
 	"sync"
 
 	"github.com/tranzit-route-save/internal/datasource"
@@ -41,8 +42,10 @@ func NewManager(deps Deps) *Manager {
 
 // Create starts tracking a built trip with its (in-memory, never-persisted)
 // destination place ID, launches the event loop, and returns the session.
-func (m *Manager) Create(ts *trip.TripState, destPlaceID string) *Session {
-	s := newSession(ts, destPlaceID, m.deps, m)
+// initialRoute is the raw Google route the client POSTed, retained so the GET
+// /trips/{id} pull path can serve the current polyline before any reroute.
+func (m *Manager) Create(ts *trip.TripState, destPlaceID string, initialRoute json.RawMessage) *Session {
+	s := newSession(ts, destPlaceID, initialRoute, m.deps, m)
 	m.mu.Lock()
 	m.byID[ts.SessionID] = s
 	m.mu.Unlock()

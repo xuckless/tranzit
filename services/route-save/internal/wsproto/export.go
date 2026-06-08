@@ -67,6 +67,13 @@ func StateMessage(ts *trip.TripState, now int64) StateMsg {
 	}
 }
 
+// SnapshotMessage builds the GET /trips/{id} body: the full STATE export plus the
+// latest route (raw Google object). route may be nil, in which case the field is
+// omitted. Reuses StateMessage so the snapshot stays in lockstep with the push.
+func SnapshotMessage(ts *trip.TripState, now int64, route json.RawMessage) SnapshotMsg {
+	return SnapshotMsg{StateMsg: StateMessage(ts, now), Route: route}
+}
+
 // RerouteMessage builds the REROUTE payload from the spliced trip (§13.2). route
 // is the chosen route's raw Google JSON for the remaining journey, echoed so the
 // client re-renders directly; it may be nil (e.g. resume) in which case the field
