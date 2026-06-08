@@ -37,9 +37,21 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		}
 
 		if pl.Mode == directions.ModeBus {
-			// Resolve the trip_id and load only its entry→exit stops (§5). HTTPSource
-			// uses a stop-scoped fast path; other sources scan candidates.
-			tripID, stops, err := datasource.ResolveLeg(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch, now)
+			// Load the entry→exit stop window (§5). On the OTP path the concrete
+			// trip_id and entry/exit stop_ids are already known (graph-resolved), so
+			// skip resolution (§5.2) and window directly; on the Google path resolve
+			// the trip_id first (HTTPSource uses a stop-scoped fast path, others scan).
+			var (
+				tripID string
+				stops  []datasource.Stop
+				err    error
+			)
+			if pl.TripID != "" {
+				tripID = pl.TripID
+				stops, err = datasource.LoadLegStopsByTripID(ds, pl.TripID, pl.EntryStopID, pl.ExitStopID, pl.Entry.Loc, pl.Exit.Loc)
+			} else {
+				tripID, stops, err = datasource.ResolveLeg(ds, pl.Entry.Loc, pl.Exit.Loc, pl.RouteID, pl.Entry.TimeEpoch, now)
+			}
 			if err != nil {
 				return nil, fmt.Errorf("build trip: leg %d: %w", li, err)
 			}

@@ -61,3 +61,14 @@ const (
 	// window tears itself down rather than ticking forever.
 	SessionAttachGraceS = 60
 )
+
+// OTP routing defaults (the /tranzit-route path). The client may override these per
+// request; reroutes reuse whatever the session was created with.
+const (
+	// OTPDefaultMode is the OpenTripPlanner travel profile when the client omits one.
+	// Matches route-service's default (walk access/egress + transit).
+	OTPDefaultMode = "walk_transit"
+	// OTPDefaultNumItineraries is how many ranked itineraries to request; Route Save
+	// auto-picks the shortest.
+	OTPDefaultNumItineraries = 5
+)

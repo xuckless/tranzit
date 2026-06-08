@@ -43,21 +43,23 @@ func newFixture() *datasource.Fixture {
 	return fx
 }
 
-func newTestServer(t *testing.T) (*httptest.Server, *session.Manager, *routeclient.Fake) {
+func newTestServer(t *testing.T) (*httptest.Server, *session.Manager, *routeclient.Fake, *routeclient.OTPFake) {
 	t.Helper()
 	fx := newFixture()
 	routes := &routeclient.Fake{}
+	otp := &routeclient.OTPFake{}
 	mgr := session.NewManager(session.Deps{
-		Data:   fx,
-		RT:     &rtfeed.Fake{},
-		Routes: routes,
-		Clock:  &state.FakeClock{T: fixtureNow},
+		Data:      fx,
+		RT:        &rtfeed.Fake{},
+		Routes:    routes,
+		OTPRoutes: otp,
+		Clock:     &state.FakeClock{T: fixtureNow},
 	})
-	return httptest.NewServer(api.NewServer(mgr, fx).Handler()), mgr, routes
+	return httptest.NewServer(api.NewServer(mgr, fx, otp).Handler()), mgr, routes, otp
 }
 
 func TestLifecycle_StartConnectStream(t *testing.T) {
-	srv, mgr, _ := newTestServer(t)
+	srv, mgr, _, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
@@ -127,7 +129,7 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 }
 
 func TestStart_RejectsMissingDestination(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _, _, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
@@ -144,7 +146,7 @@ func TestStart_RejectsMissingDestination(t *testing.T) {
 }
 
 func TestGetTrip_RefreshesAndReturnsRoute(t *testing.T) {
-	srv, _, routes := newTestServer(t)
+	srv, _, routes, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
@@ -214,7 +216,7 @@ func TestGetTrip_RefreshesAndReturnsRoute(t *testing.T) {
 }
 
 func TestGetTrip_FallsBackToLastRouteOnRefreshError(t *testing.T) {
-	srv, _, routes := newTestServer(t)
+	srv, _, routes, _ := newTestServer(t)
 	defer srv.Close()
 
 	routeJSON, err := os.ReadFile("../../testdata/route_single.json")
@@ -261,7 +263,7 @@ func TestGetTrip_FallsBackToLastRouteOnRefreshError(t *testing.T) {
 }
 
 func TestGetTrip_UnknownSession(t *testing.T) {
-	srv, _, _ := newTestServer(t)
+	srv, _, _, _ := newTestServer(t)
 	defer srv.Close()
 
 	resp, err := http.Get(srv.URL + "/trips/does-not-exist")
@@ -271,6 +273,145 @@ func TestGetTrip_UnknownSession(t *testing.T) {
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 for unknown session", resp.StatusCode)
+	}
+}
+
+// fixtureEntry / fixtureExit mirror newFixture's trip "T" stops, so an OTP route
+// referencing them builds against the fixture.
+var (
+	fixtureEntry = geo.LatLng{Lat: 51.047742299999996, Lng: -114.07078329999999}
+	fixtureExit  = geo.LatLng{Lat: 51.0379, Lng: -114.08972}
+)
+
+// TestStart_OpenTripSource: a client-fetched OTP route POSTed to /trips with
+// source="opentrip" starts an OTP session. Stops are windowed by the OTP-supplied
+// trip_id/stop_ids (no Google resolution, no place ID), destination is coords.
+func TestStart_OpenTripSource(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	envelope := map[string]any{
+		"source": "opentrip",
+		"itineraries": []any{map[string]any{
+			"duration_seconds": 600,
+			"legs": []any{map[string]any{
+				"mode": "BUS", "trip_id": "T", "from_stop_id": "e", "to_stop_id": "x",
+				"route_short_name": "2",
+			}},
+		}},
+	}
+	routeRaw, _ := json.Marshal(envelope)
+	body, _ := json.Marshal(map[string]any{
+		"source":      "opentrip",
+		"route":       json.RawMessage(routeRaw),
+		"destination": map[string]float64{"lat": 51.04, "lng": -114.09},
+	})
+
+	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /trips (otp): %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if start.SessionID == "" {
+		t.Fatal("empty session_id")
+	}
+	if mgr.Count() != 1 {
+		t.Fatalf("session count = %d, want 1", mgr.Count())
+	}
+}
+
+// TestStart_OpenTripSource_RejectsMissingDestination: the OTP path needs dest coords
+// (there is no place ID), so a posted OTP route without a destination is a 400.
+func TestStart_OpenTripSource_RejectsMissingDestination(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	envelope := `{"source":"opentrip","itineraries":[{"duration_seconds":600,"legs":[{"mode":"BUS","trip_id":"T","from_stop_id":"e","to_stop_id":"x"}]}]}`
+	body, _ := json.Marshal(map[string]any{"source": "opentrip", "route": json.RawMessage(envelope)})
+
+	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for missing destination on opentrip route", resp.StatusCode)
+	}
+}
+
+// TestTranzitRoute_StartsOTPSession: the server-owned path fetches the route from the
+// OTP client, builds the trip, and returns the chosen route so the client can render
+// immediately (source tag intact).
+func TestTranzitRoute_StartsOTPSession(t *testing.T) {
+	srv, mgr, _, otp := newTestServer(t)
+	defer srv.Close()
+
+	otpRoute := directions.Route{Legs: []directions.ParsedLeg{{
+		Mode: directions.ModeBus, RouteID: "2", TripID: "T", EntryStopID: "e", ExitStopID: "x",
+		Entry: &directions.StopEndpoint{Loc: fixtureEntry, TimeEpoch: fixtureNow + 600},
+		Exit:  &directions.StopEndpoint{Loc: fixtureExit, TimeEpoch: fixtureNow + 1200},
+	}}}
+	otpRaw := json.RawMessage(`{"source":"opentrip","itineraries":[{"duration_seconds":600}]}`)
+
+	var gotOrigin, gotDest geo.LatLng
+	otp.RouteFn = func(_ context.Context, origin, dest geo.LatLng, mode string, num int) (directions.Route, json.RawMessage, error) {
+		gotOrigin, gotDest = origin, dest
+		if mode != "walk_transit" {
+			t.Errorf("mode = %q, want default walk_transit", mode)
+		}
+		return otpRoute, otpRaw, nil
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"origin":      map[string]float64{"lat": 51.05, "lng": -114.07},
+		"destination": map[string]float64{"lat": 51.04, "lng": -114.09},
+	})
+	resp, err := http.Post(srv.URL+"/tranzit-route", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /tranzit-route: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201", resp.StatusCode)
+	}
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	if start.SessionID == "" || mgr.Count() != 1 {
+		t.Fatalf("session not started (id=%q count=%d)", start.SessionID, mgr.Count())
+	}
+	if otp.Calls != 1 {
+		t.Errorf("otp client calls = %d, want 1", otp.Calls)
+	}
+	if (gotOrigin == geo.LatLng{}) || (gotDest == geo.LatLng{}) {
+		t.Errorf("otp called with origin=%+v dest=%+v; both should be set", gotOrigin, gotDest)
+	}
+	if !bytes.Contains(start.Route, []byte("opentrip")) {
+		t.Errorf("response route does not carry the OTP envelope: %s", start.Route)
+	}
+}
+
+// TestTranzitRoute_RejectsMissingCoords: origin and destination coords are required.
+func TestTranzitRoute_RejectsMissingCoords(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	body, _ := json.Marshal(map[string]any{"origin": map[string]float64{"lat": 51.05, "lng": -114.07}})
+	resp, err := http.Post(srv.URL+"/tranzit-route", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 for missing destination", resp.StatusCode)
 	}
 }
 

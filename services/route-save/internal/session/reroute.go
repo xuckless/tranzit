@@ -30,7 +30,7 @@ type rerouteResult struct {
 // onMissed is the state.Hooks.OnMissed callback. It runs on the loop goroutine
 // during evaluation; it only *records* the reroute, which is dispatched after.
 func (s *Session) onMissed(ts *trip.TripState, stopIdx int) {
-	if s.deps.Routes == nil || s.destPlaceID == "" {
+	if !s.canReroute() {
 		return // reroute not available; leave the stop MISSED
 	}
 	req := rerouteReq{reason: "MISSED", onBus: s.machine.OnBus()}
@@ -117,7 +117,7 @@ func (s *Session) dispatchPendingReroute() {
 // fetchReroute calls route-service and rebuilds the remaining legs off the loop,
 // then posts the result back for splicing.
 func (s *Session) fetchReroute(req rerouteReq, sessionID string, dest geo.LatLng) {
-	route, raw, err := s.deps.Routes.Route(s.ctx, req.origin, s.destPlaceID)
+	route, raw, err := s.fetchRouteFor(s.ctx, req.origin, dest)
 	var newTrip *trip.TripState
 	if err == nil {
 		newTrip, err = trip.BuildTrip(sessionID, req.origin, dest, route, s.deps.Data, s.deps.Clock.Now())

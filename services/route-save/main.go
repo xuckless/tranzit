@@ -29,14 +29,16 @@ func main() {
 	endpoints := config.LoadEndpoints()
 
 	data := datasource.NewHTTPSource(endpoints.MiddlewareURL)
+	otpClient := routeclient.NewOTPClient(endpoints.RouteServiceURL)
 	mgr := session.NewManager(session.Deps{
-		Data:   data,
-		RT:     rtfeed.NewMiddleware(endpoints.MiddlewareURL),
-		Routes: routeclient.NewHTTPClient(endpoints.RouteServiceURL),
-		Clock:  state.SystemClock{},
+		Data:      data,
+		RT:        rtfeed.NewMiddleware(endpoints.MiddlewareURL),
+		Routes:    routeclient.NewHTTPClient(endpoints.RouteServiceURL),
+		OTPRoutes: otpClient,
+		Clock:     state.SystemClock{},
 	})
 
-	srv := api.NewServer(mgr, data)
+	srv := api.NewServer(mgr, data, otpClient)
 	httpSrv := &http.Server{Addr: endpoints.ServerAddr, Handler: srv.Handler()}
 
 	// Trap SIGINT/SIGTERM so we can close every live session and drain the HTTP

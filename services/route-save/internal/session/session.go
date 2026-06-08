@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"github.com/tranzit-route-save/internal/config"
+	"github.com/tranzit-route-save/internal/directions"
 	"github.com/tranzit-route-save/internal/geo"
 	"github.com/tranzit-route-save/internal/rtfeed"
 	"github.com/tranzit-route-save/internal/state"
@@ -39,7 +41,13 @@ type Session struct {
 	machine *state.Machine
 	trip    *trip.TripState
 
+	// Routing setup (§18.2): a Google session reroutes via destPlaceID; an OTP
+	// session reroutes via the OTP client to the destination coords on trip, using
+	// the stored travel profile.
 	destPlaceID string
+	isOTP       bool
+	otpMode     string
+	otpNum      int
 
 	clientMsgs chan []byte
 	rtArrivals chan []rtfeed.Arrival
@@ -73,14 +81,17 @@ type Session struct {
 	attached  bool  // a client WebSocket has attached at least once
 }
 
-func newSession(ts *trip.TripState, destPlaceID string, initialRoute json.RawMessage, deps Deps, mgr *Manager) *Session {
+func newSession(ts *trip.TripState, cfg sessionConfig, deps Deps, mgr *Manager) *Session {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &Session{
 		deps:        deps,
 		mgr:         mgr,
 		trip:        ts,
-		destPlaceID: destPlaceID,
-		lastRoute:   initialRoute,
+		destPlaceID: cfg.destPlaceID,
+		isOTP:       cfg.isOTP,
+		otpMode:     cfg.otpMode,
+		otpNum:      cfg.otpNum,
+		lastRoute:   cfg.initialRoute,
 		clientMsgs:  make(chan []byte, 16),
 		rtArrivals:  make(chan []rtfeed.Arrival, 4),
 		rerouteOut:  make(chan rerouteResult, 4),
@@ -343,6 +354,34 @@ func (s *Session) applyRefresh(req refreshApplyReq) wsproto.SnapshotMsg {
 	return wsproto.SnapshotMessage(s.trip, s.deps.Clock.Now(), s.lastRoute)
 }
 
+// canReroute reports whether this session can fetch a fresh route — an OTP session
+// needs the OTP client; a Google session needs the place-ID client and a dest place
+// ID. The GET refresh and the MISSED reroute both gate on it.
+func (s *Session) canReroute() bool {
+	if s.isOTP {
+		return s.deps.OTPRoutes != nil
+	}
+	return s.deps.Routes != nil && s.destPlaceID != ""
+}
+
+// fetchRouteFor fetches the route for the remaining journey from origin to dest using
+// this session's engine: OTP-by-coords for OTP sessions, Google-by-place-ID otherwise.
+// It returns the parsed best route and the raw echo to store as lastRoute (the OTP
+// envelope or the Google route object). Centralising the engine choice keeps the GET
+// refresh and the reroute path in lock-step.
+func (s *Session) fetchRouteFor(ctx context.Context, origin, dest geo.LatLng) (directions.Route, json.RawMessage, error) {
+	if s.isOTP {
+		if s.deps.OTPRoutes == nil {
+			return directions.Route{}, nil, errors.New("otp route client not configured")
+		}
+		return s.deps.OTPRoutes.RouteOTP(ctx, origin, dest, s.otpMode, s.otpNum)
+	}
+	if s.deps.Routes == nil {
+		return directions.Route{}, nil, errors.New("route client not configured")
+	}
+	return s.deps.Routes.Route(ctx, origin, s.destPlaceID)
+}
+
 // RefreshRoute re-fetches the remaining route and returns the updated snapshot for
 // a GET /trips/{id}. It computes the plan on the loop, calls /route + rebuilds off
 // the loop, then applies the splice on the loop. On any failure (no route service,
@@ -363,11 +402,11 @@ func (s *Session) RefreshRoute() (wsproto.SnapshotMsg, bool) {
 		return wsproto.SnapshotMsg{}, false
 	}
 
-	if !plan.ok || s.deps.Routes == nil || s.destPlaceID == "" {
+	if !plan.ok || !s.canReroute() {
 		return s.Snapshot()
 	}
 
-	route, raw, err := s.deps.Routes.Route(s.ctx, plan.origin, s.destPlaceID)
+	route, raw, err := s.fetchRouteFor(s.ctx, plan.origin, plan.dest)
 	var newTrip *trip.TripState
 	if err == nil {
 		newTrip, err = trip.BuildTrip(plan.sessionID, plan.origin, plan.dest, route, s.deps.Data, s.deps.Clock.Now())

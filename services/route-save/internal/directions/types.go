@@ -50,6 +50,14 @@ type ParsedLeg struct {
 	// Entry / Exit are set only for ModeBus legs.
 	Entry *StopEndpoint
 	Exit  *StopEndpoint
+
+	// TripID, EntryStopID, ExitStopID are populated only on the OTP path (ParseOTP):
+	// OpenTripPlanner resolves the concrete GTFS trip and entry/exit stops on its
+	// graph, so BuildTrip can skip trip resolution (§5.2) entirely. They are empty
+	// on the Google path, where the trip_id is still resolved from our GTFS data.
+	TripID      string
+	EntryStopID string
+	ExitStopID  string
 }
 
 // Route is one parsed alternative: its total duration plus its ordered legs.

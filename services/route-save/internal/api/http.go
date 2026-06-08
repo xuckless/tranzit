@@ -14,9 +14,11 @@ import (
 
 	"github.com/gorilla/websocket"
 
+	"github.com/tranzit-route-save/internal/config"
 	"github.com/tranzit-route-save/internal/datasource"
 	"github.com/tranzit-route-save/internal/directions"
 	"github.com/tranzit-route-save/internal/geo"
+	"github.com/tranzit-route-save/internal/routeclient"
 	"github.com/tranzit-route-save/internal/session"
 	"github.com/tranzit-route-save/internal/trip"
 )
@@ -25,15 +27,18 @@ import (
 type Server struct {
 	mgr      *session.Manager
 	data     datasource.DataSource
+	otp      routeclient.OTPClient // server-owned OTP fetch for POST /tranzit-route; may be nil
 	upgrader websocket.Upgrader
 }
 
 // NewServer builds the API server. data is used to resolve+load stops when
-// building a trip from the posted route.
-func NewServer(mgr *session.Manager, data datasource.DataSource) *Server {
+// building a trip from the posted route. otp is the OpenTripPlanner client the
+// server-owned POST /tranzit-route path fetches with; pass nil to disable that path.
+func NewServer(mgr *session.Manager, data datasource.DataSource, otp routeclient.OTPClient) *Server {
 	return &Server{
 		mgr:  mgr,
 		data: data,
+		otp:  otp,
 		upgrader: websocket.Upgrader{
 			// Trust is handled upstream; the client is the Tranzit app.
 			CheckOrigin: func(*http.Request) bool { return true },
@@ -46,6 +51,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("POST /trips", s.handleStart)
+	mux.HandleFunc("POST /tranzit-route", s.handleStartOTP)
 	mux.HandleFunc("GET /trips/{id}", s.handleGet)
 	mux.HandleFunc("GET /trips/{id}/ws", s.handleWS)
 	mux.HandleFunc("DELETE /trips/{id}", s.handleStop)
@@ -56,7 +62,10 @@ func (s *Server) handleHealth(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// handleStart parses the posted route, builds the trip, and starts a session.
+// handleStart parses the posted route, builds the trip, and starts a session. The
+// route style is selected by req.Source: "opentrip" routes go through the OTP parser
+// and start an OTP session (reroutes call /route/otp from the dest coords); anything
+// else is the Google place-ID path.
 func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	var req StartRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -65,6 +74,10 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(req.Route) == 0 {
 		http.Error(w, "missing route", http.StatusBadRequest)
+		return
+	}
+	if req.Source == directions.SourceOpenTrip {
+		s.startPostedOTP(w, req)
 		return
 	}
 	if req.DestinationPlaceID == "" {
@@ -101,6 +114,111 @@ func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
 		SessionID: sessionID,
 		WSURL:     "/trips/" + sessionID + "/ws",
 	})
+}
+
+// startPostedOTP starts an OTP session from a route the client fetched and POSTed
+// (source="opentrip"). The destination is coords (not a place ID); reroutes re-fetch
+// via /route/otp. The posted envelope is kept verbatim as the served route so its
+// source tag stays intact for the client's OTP parser.
+func (s *Server) startPostedOTP(w http.ResponseWriter, req StartRequest) {
+	if isZeroLatLng(req.Destination) {
+		http.Error(w, "missing destination {lat,lng} for opentrip route", http.StatusBadRequest)
+		return
+	}
+	route, err := directions.ParseOTP(req.Route)
+	if err != nil {
+		http.Error(w, fmt.Sprintf("parse otp route: %v", err), http.StatusBadRequest)
+		return
+	}
+
+	sessionID := newID()
+	origin := latLng(req.Origin)
+	dest := latLng(req.Destination)
+
+	ts, err := trip.BuildTrip(sessionID, origin, dest, route, s.data, s.mgr.Now())
+	if err != nil {
+		log.Printf("POST /trips (otp): build failed: %v", err)
+		http.Error(w, fmt.Sprintf("build trip: %v", err), http.StatusUnprocessableEntity)
+		return
+	}
+	if req.UserID != nil {
+		ts.UserID = req.UserID
+	}
+
+	mode, num := otpProfile(req.Mode, req.NumItineraries)
+	s.mgr.CreateOTP(ts, mode, num, req.Route)
+	log.Printf("POST /trips (otp): session %s started — %d stops across %d legs",
+		sessionID, len(ts.Stops), len(ts.Legs))
+	writeJSON(w, http.StatusCreated, StartResponse{
+		SessionID: sessionID,
+		WSURL:     "/trips/" + sessionID + "/ws",
+	})
+}
+
+// handleStartOTP is the server-owned OTP path (POST /tranzit-route): the client sends
+// only its position and destination as coordinates, Route Save fetches the route from
+// OTP, picks the best itinerary, and starts tracking. It returns the chosen route so
+// the client can render immediately without a follow-up GET.
+func (s *Server) handleStartOTP(w http.ResponseWriter, r *http.Request) {
+	if s.otp == nil {
+		http.Error(w, "otp routing not configured", http.StatusBadGateway)
+		return
+	}
+	var req OTPStartRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	if isZeroLatLng(req.Origin) {
+		http.Error(w, "missing origin {lat,lng}", http.StatusBadRequest)
+		return
+	}
+	if isZeroLatLng(req.Destination) {
+		http.Error(w, "missing destination {lat,lng}", http.StatusBadRequest)
+		return
+	}
+
+	origin := latLng(req.Origin)
+	dest := latLng(req.Destination)
+	mode, num := otpProfile(req.Mode, req.NumItineraries)
+
+	route, raw, err := s.otp.RouteOTP(r.Context(), origin, dest, mode, num)
+	if err != nil {
+		log.Printf("POST /tranzit-route: otp fetch failed: %v", err)
+		http.Error(w, fmt.Sprintf("otp fetch: %v", err), http.StatusBadGateway)
+		return
+	}
+
+	sessionID := newID()
+	ts, err := trip.BuildTrip(sessionID, origin, dest, route, s.data, s.mgr.Now())
+	if err != nil {
+		log.Printf("POST /tranzit-route: build failed: %v", err)
+		http.Error(w, fmt.Sprintf("build trip: %v", err), http.StatusUnprocessableEntity)
+		return
+	}
+	if req.UserID != nil {
+		ts.UserID = req.UserID
+	}
+
+	s.mgr.CreateOTP(ts, mode, num, raw)
+	log.Printf("POST /tranzit-route: session %s started — %d stops across %d legs",
+		sessionID, len(ts.Stops), len(ts.Legs))
+	writeJSON(w, http.StatusCreated, StartResponse{
+		SessionID: sessionID,
+		WSURL:     "/trips/" + sessionID + "/ws",
+		Route:     raw,
+	})
+}
+
+// otpProfile applies the OTP travel-profile defaults when the client omits them.
+func otpProfile(mode string, num int) (string, int) {
+	if mode == "" {
+		mode = config.OTPDefaultMode
+	}
+	if num <= 0 {
+		num = config.OTPDefaultNumItineraries
+	}
+	return mode, num
 }
 
 // handleGet refreshes and returns the trip snapshot. A GET is a re-plan, not just
@@ -151,6 +269,12 @@ func latLng(p *LatLng) geo.LatLng {
 		return geo.LatLng{}
 	}
 	return geo.LatLng{Lat: p.Lat, Lng: p.Lng}
+}
+
+// isZeroLatLng reports whether a coordinate is absent or the null island (0,0) — the
+// same "unset" test route-service uses for OTP origin/destination.
+func isZeroLatLng(p *LatLng) bool {
+	return p == nil || (p.Lat == 0 && p.Lng == 0)
 }
 
 func newID() string {

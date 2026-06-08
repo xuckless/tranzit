@@ -516,6 +516,8 @@ internal/config/        §15 constants + LoadEndpoints (PORT, MIDDLEWARE_URL, RO
 internal/geo/           HaversineM over LatLng (decimal degrees, lat,lng order).
 internal/directions/    Parse Google Routes → WALK/BUS legs. Parse/Best ({routes:[…]} wrapper),
                         ParseSingle (single route object = the client start body).
+                        otp.go: ParseOTP/BestOTPWithRaw map OTP itineraries → the same
+                        Route/ParsedLeg, carrying trip_id+entry/exit stop_id (§18.7).
 internal/datasource/    DataSource iface: own trip resolution (§5.2) + entry→exit stop load (§5).
                         Fixture (tests) + HTTPSource (tranzit-db-middleware). ResolveLeg
                         dispatches to HTTPSource's stop-scoped fast path or the generic scan.
@@ -524,9 +526,12 @@ internal/state/         §7–§8 machine: OnRTUpdate/OnLocationUpdate/OnTick, m
                         ResolveUnsure (§10), MISSED/UNSURE Hooks, Clock (Fake for tests).
 internal/wsproto/       §13 message structs + codec; StateMessage/RerouteMessage exporters.
 internal/rtfeed/        RT arrival Source iface; Middleware (30s poll) + Fake.
-internal/routeclient/   tranzit-route-service POST /route client iface + Fake.
-internal/session/       Per-trip actor: Manager (registry), Session (event loop), reroute (§9).
-internal/api/           HTTP/WS surface + StartRequest/Response.
+internal/routeclient/   tranzit-route-service POST /route client iface + Fake; otp.go:
+                        OTPClient (POST /route/otp, coords dest) + OTPFake (§18.7).
+internal/session/       Per-trip actor: Manager (registry, Create/CreateOTP), Session
+                        (event loop, fetchRouteFor engine pick), reroute (§9).
+internal/api/           HTTP/WS surface + StartRequest/Response; POST /trips (source-aware)
+                        and POST /tranzit-route (server-owned OTP fetch).
 ```
 
 ### 18.2 Lifecycle (the client→server contract)
@@ -739,5 +744,61 @@ The HTTP/WS surface, state machine, and reroute splice are covered by unit and
 `httptest`+websocket-dialer tests using **fakes**; the `HTTPSource`, `rtfeed.Middleware`,
 and `routeclient.HTTPClient` adapters are wired but only fake-tested — they need a
 live smoke test against `:8080`/`:3100` (see `TODO.md`).
+
+### 18.7 OTP routing (as-built)
+
+Route Save can now consume **OpenTripPlanner** routes alongside Google, driven by the
+`source` tag tranzit-route-service stamps on its responses (`"opentrip"` vs
+`"google-maps-api"`). OTP plans on the GTFS graph and returns the concrete `trip_id` +
+entry/exit `stop_id` per leg, so the OTP path **skips trip resolution (§5.2) entirely** —
+retiring the largest source of the documented P0s (prefers-past loops, direction/future
+fixups) on that path. Google `POST /trips` is unchanged.
+
+**Two entry points, one OTP session shape:**
+- `POST /trips` with `source:"opentrip"` — the client fetched the OTP route itself and
+  POSTs the chosen envelope (`{source,itineraries:[…]}`) plus `destination:{lat,lng}`.
+  `handleStart` branches on `source`; the posted envelope is kept verbatim as the served
+  route (source tag intact).
+- `POST /tranzit-route` — server-owned fetch: the client sends only `origin` +
+  `destination` coords (and optional `mode`/`num_itineraries`); Route Save calls
+  `routeclient.OTPClient.RouteOTP` → `/route/otp`, auto-picks the shortest itinerary,
+  builds, and returns `{session_id, ws_url, route}` (the chosen OTP envelope, so the
+  client renders immediately).
+
+Both create an **OTP session** (`Manager.CreateOTP`): `isOTP` + the travel profile
+(`mode`/`num`) on the session, destination as **coords** on `TripState` (no place ID).
+Reroutes (MISSED) and GET refreshes route through `Session.fetchRouteFor` /
+`canReroute`, which pick the engine: OTP-by-coords for OTP sessions
+(`deps.OTPRoutes.RouteOTP(origin, dest, mode, num)`), Google-by-place-ID otherwise. The
+REROUTE / GET-snapshot `route` echo carries the OTP envelope unchanged — no wsproto
+struct change; the client keys off `source`.
+
+**Mapping mechanics** (`internal/directions/otp.go`): `ParseOTP` / `BestOTPWithRaw` map a
+cleaned OTP itinerary → `directions.Route`/`ParsedLeg`, populating the new
+`ParsedLeg.TripID/EntryStopID/ExitStopID`. The cleaned OTP leg carries **no coordinates**
+(only `from_stop_id`/`to_stop_id` and an encoded `polyline`), so entry/exit coords are
+recovered by decoding the leg polyline's first/last points — making OTP legs structurally
+identical to Google legs (coords for stop windowing + walk-endpoint derivation).
+`route_short_name` runs through `canonicalRouteID` (MAX aliases); OTP **stop ids keep the
+feed prefix** (`CT:5120`) so they are prefix-stripped (`→5120`) to match the catalog,
+while the **trip_id is already stripped** by route-service.
+
+`trip.BuildTrip` ModeBus branch: when `pl.TripID != ""` it calls
+`datasource.LoadLegStopsByTripID(tripID, entryID, exitID, entryLoc, exitLoc)` —
+`TripStops(tripID)` then window by exact `stop_id` (`FilterLegStopsByID`), **falling back
+to coordinate matching** (`FilterLegStops`) when the ids don't line up with the catalog
+(feed-prefix / id-scheme drift). Resolution (`ResolveLeg`/candidate scan) is never reached.
+
+**Precheck (live, validated):** `/route/otp` returns `source:"opentrip"`, bare-numeric
+`trip_id` (e.g. `73245380`) that joins middleware `stop_time_updates`, and feed-prefixed
+`stop_id`s — the IDs are the right shape to join. RT polling is unchanged: it is keyed on
+`trip_id`, which OTP now supplies reliably.
+
+**Config:** no new env — the OTP client reuses `ROUTE_SERVICE_URL` (`POST /route/otp`).
+Defaults `OTPDefaultMode=walk_transit`, `OTPDefaultNumItineraries=5` (`internal/config`).
+
+**Not yet:** auth gating on `/tranzit-route` (Clerk, pending like `/trips`); surfacing OTP
+walk polylines in STATE `legs[]` (they ride along in the echoed envelope today); a
+destination display label (coords only — TODO Q6).
 
 

@@ -53,6 +53,61 @@ func LoadLegStops(ds DataSource, tripID string, entry, exit geo.LatLng) ([]Stop,
 	return FilterLegStops(stops, tripID, entry, exit)
 }
 
+// LoadLegStopsByTripID is the OTP fast path: OpenTripPlanner already resolved the
+// concrete trip_id and entry/exit stop_ids, so there is no candidate ranking (§5.2)
+// to do — load the trip's stops and window them. It prefers exact stop_id matching
+// (entryID/exitID, the GTFS ids from OTP) and falls back to coordinate matching when
+// the ids don't line up with the catalog (feed-prefix / id-scheme drift), so the OTP
+// path degrades gracefully instead of failing the build.
+func LoadLegStopsByTripID(ds DataSource, tripID, entryID, exitID string, entry, exit geo.LatLng) ([]Stop, error) {
+	stops, err := ds.TripStops(tripID)
+	if err != nil {
+		return nil, fmt.Errorf("load leg stops: trip %q: %w", tripID, err)
+	}
+	if window, err := FilterLegStopsByID(stops, tripID, entryID, exitID); err == nil {
+		return window, nil
+	}
+	return FilterLegStops(stops, tripID, entry, exit)
+}
+
+// FilterLegStopsByID windows an already-loaded trip stop list to the inclusive
+// entry→exit range by exact stop_id (no I/O). It errors — leaving the caller to fall
+// back to coordinate matching — when either id is empty/absent or out of order.
+func FilterLegStopsByID(stops []Stop, tripID, entryID, exitID string) ([]Stop, error) {
+	if len(stops) == 0 {
+		return nil, fmt.Errorf("load leg stops: trip %q has no stops", tripID)
+	}
+	entryIdx := indexOfStopID(stops, entryID)
+	exitIdx := indexOfStopID(stops, exitID)
+	if entryIdx < 0 {
+		return nil, fmt.Errorf("load leg stops: entry stop %q not on trip %q", entryID, tripID)
+	}
+	if exitIdx < 0 {
+		return nil, fmt.Errorf("load leg stops: exit stop %q not on trip %q", exitID, tripID)
+	}
+	if entryIdx > exitIdx {
+		return nil, fmt.Errorf("load leg stops: entry stop %q (idx %d) is after exit %q (idx %d) on trip %q",
+			entryID, entryIdx, exitID, exitIdx, tripID)
+	}
+	window := make([]Stop, exitIdx-entryIdx+1)
+	copy(window, stops[entryIdx:exitIdx+1])
+	return window, nil
+}
+
+// indexOfStopID returns the index of the first stop whose StopID equals id, or -1.
+// An empty id never matches (forces the coordinate fallback).
+func indexOfStopID(stops []Stop, id string) int {
+	if id == "" {
+		return -1
+	}
+	for i := range stops {
+		if stops[i].StopID == id {
+			return i
+		}
+	}
+	return -1
+}
+
 // FilterLegStops windows an already-loaded trip stop list to the inclusive
 // entry→exit range (the §5 filter, no I/O). tripID is used only for error context.
 func FilterLegStops(stops []Stop, tripID string, entry, exit geo.LatLng) ([]Stop, error) {

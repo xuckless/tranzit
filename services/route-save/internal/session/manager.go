@@ -19,10 +19,26 @@ import (
 // Deps are the collaborators a session needs; they are interfaces so the whole
 // lifecycle is testable with fakes.
 type Deps struct {
-	Data   datasource.DataSource
-	RT     rtfeed.Source
+	Data datasource.DataSource
+	RT   rtfeed.Source
+	// Routes is the Google place-ID directions client (the POST /trips path).
 	Routes routeclient.Client
-	Clock  state.Clock
+	// OTPRoutes is the OpenTripPlanner coords client (the /tranzit-route path and
+	// source="opentrip" trips); reroutes for OTP sessions go through it.
+	OTPRoutes routeclient.OTPClient
+	Clock     state.Clock
+}
+
+// sessionConfig is the per-session routing setup passed to newSession: which engine
+// reroutes use and the destination handle that engine needs. A Google session carries
+// destPlaceID; an OTP session carries isOTP + the OTP travel profile (destination is
+// the coords already on TripState).
+type sessionConfig struct {
+	destPlaceID  string
+	isOTP        bool
+	otpMode      string
+	otpNum       int
+	initialRoute json.RawMessage
 }
 
 // Manager is the registry of live sessions.
@@ -40,12 +56,24 @@ func NewManager(deps Deps) *Manager {
 	return &Manager{deps: deps, byID: map[string]*Session{}}
 }
 
-// Create starts tracking a built trip with its (in-memory, never-persisted)
+// Create starts tracking a Google-routed trip with its (in-memory, never-persisted)
 // destination place ID, launches the event loop, and returns the session.
 // initialRoute is the raw Google route the client POSTed, retained so the GET
 // /trips/{id} pull path can serve the current polyline before any reroute.
 func (m *Manager) Create(ts *trip.TripState, destPlaceID string, initialRoute json.RawMessage) *Session {
-	s := newSession(ts, destPlaceID, initialRoute, m.deps, m)
+	return m.start(ts, sessionConfig{destPlaceID: destPlaceID, initialRoute: initialRoute})
+}
+
+// CreateOTP starts tracking an OTP-routed trip. Reroutes and GET refreshes call the
+// OTP client from the rider's position to the destination coords on TripState, using
+// the stored travel profile (mode/num). initialRoute is the raw OTP envelope
+// ({source:"opentrip", itineraries:[chosen]}) served on the GET pull path.
+func (m *Manager) CreateOTP(ts *trip.TripState, mode string, num int, initialRoute json.RawMessage) *Session {
+	return m.start(ts, sessionConfig{isOTP: true, otpMode: mode, otpNum: num, initialRoute: initialRoute})
+}
+
+func (m *Manager) start(ts *trip.TripState, cfg sessionConfig) *Session {
+	s := newSession(ts, cfg, m.deps, m)
 	m.mu.Lock()
 	m.byID[ts.SessionID] = s
 	m.mu.Unlock()

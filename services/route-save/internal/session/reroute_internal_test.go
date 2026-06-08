@@ -49,7 +49,7 @@ func TestReroute_MissedSplices(t *testing.T) {
 	clk := &state.FakeClock{T: 1000}
 	routeFake := &routeclient.Fake{Result: route}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
+	s := newSession(ts, sessionConfig{destPlaceID: "place-123"}, deps, NewManager(deps))
 
 	// Far from the boarding stop and armed → MISSED → onMissed records a reroute.
 	s.machine.OnLocationUpdate(trip.UserLocation{Loc: geo.LatLng{Lat: 51.20, Lng: -114.30}})
@@ -107,7 +107,7 @@ func TestReroute_OriginIsUserLocation(t *testing.T) {
 		},
 	}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
+	s := newSession(ts, sessionConfig{destPlaceID: "place-123"}, deps, NewManager(deps))
 
 	userLoc := geo.LatLng{Lat: 51.20, Lng: -114.30}
 	s.machine.OnLocationUpdate(trip.UserLocation{Loc: userLoc})
@@ -146,7 +146,7 @@ func TestReroute_NoGPS_OriginIsPlannedStop(t *testing.T) {
 		},
 	}
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: routeFake, Clock: clk}
-	s := newSession(ts, "place-123", nil, deps, NewManager(deps))
+	s := newSession(ts, sessionConfig{destPlaceID: "place-123"}, deps, NewManager(deps))
 
 	// Armed with no fix -> UNSURE (timer-driven, GPS silent).
 	s.machine.OnTick()
@@ -181,6 +181,71 @@ func TestReroute_NoGPS_OriginIsPlannedStop(t *testing.T) {
 	}
 	if rr.From.Lat != plannedLoc.Lat || rr.From.Lng != plannedLoc.Lng {
 		t.Errorf("REROUTE.from = %+v, want planned stop %+v", rr.From, plannedLoc)
+	}
+}
+
+// TestReroute_OTPUsesCoordsClient pins the OTP reroute contract: an OTP session
+// reroutes through the OTP coords client (not the Google place-ID client) and targets
+// the destination coordinates on the trip, echoing the OTP envelope downstream.
+func TestReroute_OTPUsesCoordsClient(t *testing.T) {
+	entry := geo.LatLng{Lat: 51.045, Lng: -114.07}
+	exit := geo.LatLng{Lat: 51.055, Lng: -114.09}
+
+	fx := datasource.NewFixture()
+	fx.StopsByTrip["T"] = []datasource.Stop{
+		{StopID: "e", Name: "Entry", Loc: entry, Sequence: 1, ArrivalTime: 1000, DepartureTime: 1000},
+		{StopID: "x", Name: "Exit", Loc: exit, Sequence: 2, ArrivalTime: 1000},
+	}
+
+	otpRoute := directions.Route{Legs: []directions.ParsedLeg{{
+		Mode: directions.ModeBus, RouteID: "2", TripID: "T", EntryStopID: "e", ExitStopID: "x",
+		Entry: &directions.StopEndpoint{Name: "Entry", Loc: entry, TimeEpoch: 1000},
+		Exit:  &directions.StopEndpoint{Name: "Exit", Loc: exit, TimeEpoch: 1000},
+	}}}
+
+	ts, err := trip.BuildTrip("sess", entry, exit, otpRoute, fx, 0)
+	if err != nil {
+		t.Fatalf("BuildTrip: %v", err)
+	}
+	ts.Destination = geo.LatLng{Lat: 51.07, Lng: -114.12} // the coords reroutes target
+
+	clk := &state.FakeClock{T: 1000}
+	var gotDest geo.LatLng
+	otpRaw := json.RawMessage(`{"source":"opentrip","itineraries":[{"duration_seconds":1}]}`)
+	otpFake := &routeclient.OTPFake{
+		RouteFn: func(_ context.Context, _, dest geo.LatLng, _ string, _ int) (directions.Route, json.RawMessage, error) {
+			gotDest = dest
+			return otpRoute, otpRaw, nil
+		},
+	}
+	// Note: no Routes (Google) client wired — an OTP session must not need it.
+	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, OTPRoutes: otpFake, Clock: clk}
+	s := newSession(ts, sessionConfig{isOTP: true, otpMode: "walk_transit", otpNum: 5}, deps, NewManager(deps))
+
+	s.machine.OnLocationUpdate(trip.UserLocation{Loc: geo.LatLng{Lat: 51.20, Lng: -114.30}})
+	s.machine.OnTick() // far + armed → MISSED → pending reroute (Case 2)
+	if s.pending == nil {
+		t.Fatal("expected a pending reroute")
+	}
+
+	req := *s.pending
+	s.pending = nil
+	s.fetchReroute(req, ts.SessionID, ts.Destination)
+	res := <-s.rerouteOut
+	if res.err != nil {
+		t.Fatalf("reroute fetch: %v", res.err)
+	}
+	s.applyReroute(res)
+
+	if otpFake.Calls != 1 {
+		t.Errorf("otp client calls = %d, want 1", otpFake.Calls)
+	}
+	if gotDest != ts.Destination {
+		t.Errorf("reroute dest = %+v, want the trip destination coords %+v", gotDest, ts.Destination)
+	}
+	rr := drainReroute(t, s)
+	if string(rr.Route) != string(otpRaw) {
+		t.Errorf("REROUTE.route = %s, want the OTP envelope %s", rr.Route, otpRaw)
 	}
 }
 
