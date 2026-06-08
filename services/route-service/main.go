@@ -185,7 +185,7 @@ func main() {
 		if len(itineraries) == 0 {
 			return c.SendStatus(204)
 		}
-		return c.JSON(fiber.Map{"itineraries": itineraries})
+		return c.JSON(fiber.Map{"source": SourceOpenTrip, "itineraries": itineraries})
 	})
 
 	// GET: Find closest establishment to a lat/lng coordinate

@@ -80,6 +80,10 @@ func stripGTFSFeedPrefix(gtfsID string) string {
 	return gtfsID
 }
 
+// SourceOpenTrip identifies the routing engine in /route/otp responses, paralleling the
+// "google-maps-api" source returned by /route.
+const SourceOpenTrip = "opentrip"
+
 // OTPRouteRequest is the body accepted by POST /route/otp.
 type OTPRouteRequest struct {
 	Origin      Location `json:"origin"`

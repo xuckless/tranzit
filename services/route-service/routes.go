@@ -60,11 +60,13 @@ func FetchTransitRoutes(origin Location, destID string) (interface{}, error) {
 	}
 
 	var rawResponse struct {
+		Source string                   `json:"source"`
 		Routes []map[string]interface{} `json:"routes"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&rawResponse); err != nil {
 		return nil, err
 	}
+	rawResponse.Source = "google-maps-api"
 
 	// Logic to sort by duration and return best 2
 	sort.Slice(rawResponse.Routes, func(i, j int) bool {
