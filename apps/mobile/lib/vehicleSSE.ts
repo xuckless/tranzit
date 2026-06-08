@@ -36,11 +36,6 @@ function rebuildSnapshot(): void {
     else invalidCount++;
   }
   _snapshot = next;
-  if (__DEV__) {
-    console.log(
-      `[vehicleSSE] snapshot rebuilt → ${next.length} valid, ${invalidCount} filtered, ${_vehicleMap.size} total in map`,
-    );
-  }
 }
 
 function broadcast(): void {
@@ -80,7 +75,6 @@ function openSSE(): void {
   });
   _es = es;
 
-  es.addEventListener("open", () => console.log("[vehicleSSE] connected"));
   es.addEventListener("error", (e) => console.warn("[vehicleSSE] error", e));
 
   es.addEventListener("snapshot", (e) => {

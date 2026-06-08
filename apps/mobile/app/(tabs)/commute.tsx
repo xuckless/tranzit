@@ -429,7 +429,10 @@ export default function CommuteScreen() {
 
   // ── Keep cross-effect refs in sync ────────────────────────────────────────
   useEffect(() => { boardingConfirmStopRef.current = boardingConfirmStop; }, [boardingConfirmStop]);
-  useEffect(() => { tripStateRef.current = tripState; }, [tripState]);
+  useEffect(() => {
+    tripStateRef.current = tripState;
+    if (tripState) console.log("[routeSave] STATE response:", JSON.stringify(tripState, null, 2));
+  }, [tripState]);
 
   // ── NOTIFY handler ─────────────────────────────────────────────────────────
   useEffect(() => {
