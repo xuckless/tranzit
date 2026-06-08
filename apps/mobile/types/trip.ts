@@ -48,6 +48,14 @@ export interface TripNotifyMsg {
   message: string;
 }
 
+// Body of GET /trips/{id}: the full STATE export plus the current route (the
+// polyline source — the POSTed route before any reroute, the rerouted route
+// after one). 404 from the endpoint means the session is unknown or closed.
+// `route` is a raw route object; run it through parseRoute() before use.
+export interface TripSnapshotMsg extends TripStateMsg {
+  route?: Route;
+}
+
 export interface TripSession {
   sessionId: string;
   wsUrl: string; // path e.g. "/trips/9f3c…/ws"

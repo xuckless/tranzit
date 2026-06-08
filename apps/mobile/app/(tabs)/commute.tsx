@@ -28,12 +28,13 @@ import * as Location from "expo-location";
 import { theme, PASTELS } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
 import { routeStore } from "@/lib/routeStore";
+import { parseRoute } from "@/lib/routeParser";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
 import { scheduleBoarding, cancelBoarding } from "@/lib/boardingNotifications";
 import { startTripActivity, updateTripActivity, endTripActivity } from "@/lib/liveActivity";
 import type { Route } from "@/types/places";
-import type { ServerStopStatus, TripStateMsg } from "@/types/trip";
+import type { ServerStopStatus, TripStateMsg, TripSnapshotMsg } from "@/types/trip";
 
 const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
 const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
@@ -874,9 +875,66 @@ export default function CommuteScreen() {
     [tripState],
   );
 
+  // ── Missed status → pull the authoritative current route and rebuild ───────
+  // When Route Save flags a missed stop, the polyline the user is looking at may
+  // be stale (the server reroutes around a miss). GET /trips/{id} returns the
+  // full STATE plus the current route — the original before any reroute, the
+  // rerouted route after one. We parse that route and re-render the whole screen
+  // off it. Fired once per missed episode (the ref resets when the miss clears);
+  // a 404 means the session is unknown/closed, so we stop and leave the trip as-is.
+  const hasMissed = useMemo(
+    () =>
+      tripState?.overall === "MISSED" ||
+      (tripState?.stops ?? []).some((s) => s.status === "MISSED"),
+    [tripState],
+  );
+  const missedFetchedRef = useRef(false);
+
+  useEffect(() => {
+    if (!hasMissed) {
+      missedFetchedRef.current = false;
+      return;
+    }
+    if (missedFetchedRef.current || !sessionId || !ROUTE_SAVE_URL) return;
+    missedFetchedRef.current = true;
+
+    let cancelled = false;
+    (async () => {
+      try {
+        const resp = await fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`);
+        if (resp.status === 404) {
+          console.warn("[commute] trip snapshot 404 — session unknown/closed");
+          return;
+        }
+        if (!resp.ok) throw new Error(`snapshot ${resp.status}`);
+        const snapshot = (await resp.json()) as TripSnapshotMsg;
+        if (cancelled) return;
+
+        const parsed = parseRoute(snapshot.route);
+        if (parsed) {
+          setRoute(parsed);
+          // The pulled route is now authoritative; any buffered reroute is
+          // superseded, so clear the pending-refresh affordance.
+          setPendingReroute(false);
+        }
+      } catch (e) {
+        console.error("[commute] trip snapshot fetch failed:", e);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [hasMissed, sessionId]);
+
   // ── Manual Refresh: apply the buffered reroute polyline ────────────────────
+  // The reroute route is a raw route object echoed by Route Save; normalize it
+  // through the route parser so it matches the shape the screen renders from.
   const handleRefresh = useCallback(() => {
-    if (lastReroute) setRoute(lastReroute.route);
+    if (lastReroute) {
+      const parsed = parseRoute(lastReroute.route);
+      if (parsed) setRoute(parsed);
+    }
     setPendingReroute(false);
   }, [lastReroute]);
 

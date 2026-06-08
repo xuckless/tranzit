@@ -73,6 +73,7 @@ lib/
   routeSSE.ts        — Per-route SSE hook for live stop-level delays
   transitStopsCache.ts — Orchestrates middleware fetch → SQLite write
   routeStore.ts      — In-memory session store for the active journey
+  routeParser.ts     — Normalizes both routing engines (Google + OTP) into one Route[] shape
   tripWebSocket.ts   — WebSocket client for trip session lifecycle
   liveActivity.ts    — iOS Live Activities + Android sticky notifications
   boardingNotifications.ts — Push notifications for boarding confirmation
@@ -160,6 +161,7 @@ Manages active trip sessions. Used by `routes.tsx` and `commute.tsx`.
 | Method | Path | Purpose |
 |--------|------|---------|
 | `POST` | `/trips` | Creates a trip session. Body: `{ route, destination_place_id, origin? }`. **Required:** `route`, `destination_place_id`. **Optional:** `origin` (`{lat,lng}`), `destination` (object), `device_id`. Returns `{ session_id, ws_url }`. (Contract verified against the live server — the required field is `destination_place_id`, **not** `destination`.) |
+| `GET` | `/trips/{session_id}` | Snapshot pull. Returns `200` with the full `STATE` shape **plus** a `route` field — the current route/polyline (the POSTed route before any reroute, the rerouted route after one). `404` if the session is unknown or closed. `commute.tsx` pulls this when the server flags a **missed** stop, then rebuilds the screen from the returned route (`route` runs through `parseRoute()`). |
 | `DELETE` | `/trips/{session_id}` | Ends a trip session. Called when the user taps "End Journey". |
 | `WS` | `/trips/{session_id}/ws` | WebSocket connection. Receives `STATE`, `REROUTE`, `NOTIFY` messages. Sends `LOCATION`, `UNSURE_RESPONSE`, `RESUME`. |
 
@@ -306,6 +308,23 @@ In-memory session store (plain module-level variables, not Zustand/Context). Sur
 | `clear()` | Full reset. Use on logout or hard reset. |
 
 **Why not Context/Zustand?** This data is shared across three tabs that aren't in a parent-child relationship. A module singleton is simpler and avoids prop drilling through the navigator.
+
+---
+
+### `lib/routeParser.ts`
+
+The dual-router seam. The route service exposes **two** routing engines, distinguished by the `source` field on the response envelope:
+
+- `POST /route` → `{ source: "google-maps-api", routes: Route[] }` — requires a Google **Place ID** (`destination_id`).
+- `POST /route/otp` → `{ source: "opentrip", itineraries: OTPItinerary[] }` — requires **lat/lng** for both origin and destination.
+
+`parseRouteResponse(raw)` switches on `source` and returns the canonical `Route[]` either way:
+- Google envelopes are already in canonical shape — passed through.
+- `otpItineraryToRoute()` adapts each OTP itinerary into a `Route`: OTP modes collapse to `WALK | TRANSIT`, per-leg encoded polylines are decoded and re-merged into a single route-level `polyline.encodedPolyline` (the UI renders from that), and transit legs are mapped onto `transitDetails` (`route_long_name`/`route_short_name` → `transitLine.name`/`nameShort`, `from`/`to` → stop names, `start_time`/`end_time` → departure/arrival times). OTP returns no line color, so `transitLine.color` is undefined and `normalizeColor()` falls back to the primary theme color.
+
+`TranzitApiService.getRoute()` (Google) and `getOTPRoute()` (OTP) both pipe through this parser, so the Routes and Commute screens consume one shape and never branch on engine. **Current state:** dual mode is plumbed but Google remains the only active path — `routes.tsx` still calls `getRoute()`. Switching to OTP later is a call-site change (pass coordinates to `getOTPRoute()`), not a rendering change.
+
+**`parseRoute(raw)`** normalizes a *single* route object (not an envelope) into one `Route`. Route Save hands the client raw route objects in two places — the `REROUTE` WebSocket frame and the `GET /trips/{id}` snapshot — and both flow through `parseRoute()` so `commute.tsx` never branches on which engine produced them. It accepts a bare Google route, a bare OTP itinerary, or a `{ source, … }` envelope, and returns `null` for anything unrecognizable so callers can no-op. The reroute path (`handleRefresh`) and the missed-status snapshot pull both call it before `setRoute()`.
 
 ---
 

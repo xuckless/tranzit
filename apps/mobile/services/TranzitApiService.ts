@@ -4,8 +4,10 @@ import type {
   PlacesSearchResponse,
   RouteResponse,
   RouteRequest,
+  OTPRouteRequest,
   AutocompletePrediction,
 } from "../types/places";
+import { parseRouteResponse } from "@/lib/routeParser";
 
 // Set EXPO_PUBLIC_USE_LOCAL=true in .env.local to target localhost:3100
 const BASE_URL =
@@ -44,6 +46,8 @@ export const TranzitApiService = {
     return res.json() as Promise<PlaceDetails>;
   },
 
+  // Google Routes engine (POST /route). Needs a Place ID in destination_id.
+  // This is the active route path; OTP below is wired but not yet switched on.
   async getRoute(
     request: RouteRequest,
     signal?: AbortSignal,
@@ -54,9 +58,29 @@ export const TranzitApiService = {
       body: JSON.stringify(request),
       signal,
     });
+    if (res.status === 204) return { routes: [] }; // no transit route exists
     if (!res.ok) throw new Error(`Route failed: ${res.status}`);
-    const data: RouteResponse = await res.json();
-    return { routes: data.routes ?? [] };
+    const data = await res.json();
+    return { routes: parseRouteResponse(data) };
+  },
+
+  // OpenTripPlanner engine (POST /route/otp). Plans from lat/lng coordinates —
+  // no Place ID required. Returns the same canonical Route[] as getRoute(), so
+  // callers can swap engines without touching the UI.
+  async getOTPRoute(
+    request: OTPRouteRequest,
+    signal?: AbortSignal,
+  ): Promise<RouteResponse> {
+    const res = await fetch(`${BASE_URL}/route/otp`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(request),
+      signal,
+    });
+    if (res.status === 204) return { routes: [] }; // no itinerary found
+    if (!res.ok) throw new Error(`OTP route failed: ${res.status}`);
+    const data = await res.json();
+    return { routes: parseRouteResponse(data) };
   },
 
   async getAutocompletePredictions(

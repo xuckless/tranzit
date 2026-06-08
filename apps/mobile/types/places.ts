@@ -130,3 +130,64 @@ export interface Route {
 export interface RouteResponse {
   routes: Route[];
 }
+
+// ─── Dual-router support ────────────────────────────────────────────────────────
+// The route service exposes two routing engines, distinguished by the `source`
+// field on the response envelope:
+//   • POST /route      → { source: "google-maps-api", routes: Route[] }  — needs a Place ID
+//   • POST /route/otp  → { source: "opentrip", itineraries: OTPItinerary[] } — needs lat/lng
+// `lib/routeParser.ts` normalizes either envelope into the canonical Route[] above,
+// so the rest of the app never branches on source.
+
+export type RouteSource = "google-maps-api" | "opentrip";
+
+// Body for POST /route/otp. Unlike the Google /route endpoint (which needs a
+// Place ID), OTP plans purely from coordinates.
+export interface OTPRouteRequest {
+  origin: { lat: number; lng: number };
+  destination: { lat: number; lng: number };
+  // Travel profile. Defaults server-side to walk_transit.
+  mode?: "walk" | "bike" | "transit" | "walk_transit" | "bike_transit";
+  num_itineraries?: number;
+}
+
+// One leg of an OTP itinerary (mirrors the Go CleanLeg struct, snake_case JSON).
+export interface OTPLeg {
+  mode: string; // WALK | BUS | TRAM | RAIL | SUBWAY | BICYCLE | …
+  duration_seconds: number;
+  distance_m: number;
+  start_time: string; // ISO 8601
+  end_time: string; // ISO 8601
+  from: string;
+  to: string;
+  from_stop_id?: string;
+  to_stop_id?: string;
+  route_short_name?: string;
+  route_long_name?: string;
+  headsign?: string;
+  trip_id?: string;
+  vehicle_id?: string;
+  realtime: boolean;
+  arrival_delay_seconds?: number;
+  departure_delay_seconds?: number;
+  polyline: string; // per-leg encoded polyline
+}
+
+// One ranked itinerary (mirrors the Go CleanItinerary struct).
+export interface OTPItinerary {
+  duration_seconds: number;
+  walk_distance_m: number;
+  start_time: string;
+  end_time: string;
+  legs: OTPLeg[];
+}
+
+export interface OTPRouteResponse {
+  source: "opentrip";
+  itineraries: OTPItinerary[];
+}
+
+// The raw envelope returned by either engine, before normalization.
+export type RawRouteResponse =
+  | ({ source?: "google-maps-api" } & RouteResponse)
+  | OTPRouteResponse;
