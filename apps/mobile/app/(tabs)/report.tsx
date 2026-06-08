@@ -10,6 +10,7 @@ import { theme, PASTELS } from "@/styles/theme";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import { useTheme } from "@/contexts/ThemeContext";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
 
@@ -93,18 +94,20 @@ function ReportIcon({
 // ─── Thank-you state ──────────────────────────────────────────────────────────
 
 function ThankYou({ onReset }: { onReset: () => void }) {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   return (
     <ScrollView
       contentContainerStyle={styles.thankYouContainer}
       showsVerticalScrollIndicator={false}
     >
       <View style={styles.thankYouIconWrap}>
-        <Ionicons name="checkmark" size={48} color={theme.colors.primary} />
+        <Ionicons name="checkmark" size={48} color={colors.primary} />
       </View>
       <Text style={styles.thankYouTitle}>Thanks for the heads up!</Text>
       <Text style={styles.thankYouBody}>
         We just told{" "}
-        <Text style={{ fontWeight: "800", color: theme.colors.ink }}>
+        <Text style={{ fontWeight: "800", color: colors.ink }}>
           1,240 commuters
         </Text>{" "}
         on this line. You're a real one.
@@ -123,6 +126,8 @@ function ThankYou({ onReset }: { onReset: () => void }) {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ReportScreen() {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const [selected, setSelected] = useState<string | null>(null);
   const [severity, setSeverity] = useState(1);
   const [sent, setSent] = useState(false);
@@ -154,7 +159,7 @@ export default function ReportScreen() {
           <Text style={styles.title}>What's happening?</Text>
           <Text style={styles.subtitle}>
             Your report helps{" "}
-            <Text style={{ fontWeight: "800", color: theme.colors.ink }}>
+            <Text style={{ fontWeight: "800", color: colors.ink }}>
               1,240 commuters
             </Text>{" "}
             on this line right now.
@@ -245,203 +250,204 @@ export default function ReportScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: theme.colors.surface },
-  scroll: { flex: 1 },
-  scrollContent: { paddingBottom: 28 },
+const makeStyles = (colors: typeof theme.colors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.surface },
+    scroll: { flex: 1 },
+    scrollContent: { paddingBottom: 28 },
 
-  headerCopy: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 8,
-    paddingBottom: 20,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.7,
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 14.5,
-    color: theme.colors.ink2,
-    lineHeight: 22,
-  },
+    headerCopy: {
+      paddingHorizontal: theme.spacing.screen,
+      paddingTop: 8,
+      paddingBottom: 20,
+    },
+    title: {
+      fontSize: 28,
+      fontWeight: "800",
+      color: colors.ink,
+      letterSpacing: -0.7,
+      marginBottom: 8,
+    },
+    subtitle: {
+      fontSize: 14.5,
+      color: colors.ink2,
+      lineHeight: 22,
+    },
 
-  // Category grid
-  grid: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    paddingHorizontal: theme.spacing.screen,
-    gap: 10,
-  },
-  gridCard: {
-    width: "47.5%",
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    padding: 16,
-    gap: 12,
-    shadowColor: "rgba(20,30,80,0.04)",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 1,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  gridCardActive: {
-    borderWidth: 2,
-    borderColor: theme.colors.primary,
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 4,
-  },
-  gridIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  gridLabel: {
-    fontSize: 16,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.2,
-  },
-  gridLabelActive: {
-    color: theme.colors.primary,
-  },
+    // Category grid
+    grid: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      paddingHorizontal: theme.spacing.screen,
+      gap: 10,
+    },
+    gridCard: {
+      width: "47.5%",
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: 16,
+      gap: 12,
+      shadowColor: "rgba(20,30,80,0.04)",
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 1,
+      shadowRadius: 2,
+      elevation: 1,
+    },
+    gridCardActive: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.12,
+      shadowRadius: 16,
+      elevation: 4,
+    },
+    gridIcon: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    gridLabel: {
+      fontSize: 16,
+      fontWeight: "800",
+      color: colors.ink,
+      letterSpacing: -0.2,
+    },
+    gridLabelActive: {
+      color: colors.primary,
+    },
 
-  // Severity
-  severityCard: {
-    marginHorizontal: theme.spacing.screen,
-    marginTop: 14,
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    padding: 16,
-    gap: 12,
-  },
-  severityHeading: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: theme.colors.ink3,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-  },
-  severityRow: {
-    flexDirection: "row",
-    gap: 8,
-  },
-  severityChip: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 14,
-    borderWidth: 1.5,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.card,
-    alignItems: "center",
-  },
-  severityChipActive: {
-    borderColor: theme.colors.primary,
-    backgroundColor: theme.colors.primaryDim,
-  },
-  severityChipText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: theme.colors.ink2,
-  },
-  severityChipTextActive: {
-    color: theme.colors.primaryInk,
-  },
+    // Severity
+    severityCard: {
+      marginHorizontal: theme.spacing.screen,
+      marginTop: 14,
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: 16,
+      gap: 12,
+    },
+    severityHeading: {
+      fontSize: 11,
+      fontWeight: "700",
+      color: colors.ink3,
+      letterSpacing: 1.4,
+      textTransform: "uppercase",
+    },
+    severityRow: {
+      flexDirection: "row",
+      gap: 8,
+    },
+    severityChip: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 14,
+      borderWidth: 1.5,
+      borderColor: colors.divider,
+      backgroundColor: colors.card,
+      alignItems: "center",
+    },
+    severityChipActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primaryDim,
+    },
+    severityChipText: {
+      fontSize: 12,
+      fontWeight: "700",
+      color: colors.ink2,
+    },
+    severityChipTextActive: {
+      color: colors.primaryInk,
+    },
 
-  // Bottom bar
-  bottomBar: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 12,
-    paddingBottom: 16,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.divider,
-    backgroundColor: theme.colors.surface,
-  },
-  sendBtn: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.button,
-    height: 54,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.25,
-    shadowRadius: 12,
-    elevation: 5,
-  },
-  sendBtnDisabled: {
-    opacity: 0.4,
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  sendBtnText: {
-    color: "#fff",
-    fontSize: 17,
-    fontWeight: "700",
-    letterSpacing: -0.2,
-  },
+    // Bottom bar
+    bottomBar: {
+      paddingHorizontal: theme.spacing.screen,
+      paddingTop: 12,
+      paddingBottom: 16,
+      borderTopWidth: 1,
+      borderTopColor: colors.divider,
+      backgroundColor: colors.surface,
+    },
+    sendBtn: {
+      backgroundColor: colors.primary,
+      borderRadius: theme.borderRadius.button,
+      height: 54,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 6 },
+      shadowOpacity: 0.25,
+      shadowRadius: 12,
+      elevation: 5,
+    },
+    sendBtnDisabled: {
+      opacity: 0.4,
+      shadowOpacity: 0,
+      elevation: 0,
+    },
+    sendBtnText: {
+      color: "#fff",
+      fontSize: 17,
+      fontWeight: "700",
+      letterSpacing: -0.2,
+    },
 
-  // Thank-you
-  thankYouContainer: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-    paddingHorizontal: 28,
-    paddingTop: 60,
-    gap: 0,
-    backgroundColor: theme.colors.surface,
-  },
-  thankYouIconWrap: {
-    width: 100,
-    height: 100,
-    borderRadius: 32,
-    backgroundColor: theme.colors.primaryDim,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 22,
-  },
-  thankYouTitle: {
-    fontSize: 28,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.6,
-    textAlign: "center",
-    marginBottom: 12,
-  },
-  thankYouBody: {
-    fontSize: 15,
-    color: theme.colors.ink2,
-    textAlign: "center",
-    lineHeight: 24,
-    maxWidth: 290,
-    marginBottom: 28,
-  },
-  secondaryBtn: {
-    height: 50,
-    paddingHorizontal: 20,
-    borderRadius: theme.borderRadius.button,
-    borderWidth: 1.5,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.card,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  secondaryBtnText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: theme.colors.ink,
-  },
-});
+    // Thank-you
+    thankYouContainer: {
+      flex: 1,
+      alignItems: "center",
+      justifyContent: "center",
+      paddingHorizontal: 28,
+      paddingTop: 60,
+      gap: 0,
+      backgroundColor: colors.surface,
+    },
+    thankYouIconWrap: {
+      width: 100,
+      height: 100,
+      borderRadius: 32,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 22,
+    },
+    thankYouTitle: {
+      fontSize: 28,
+      fontWeight: "800",
+      color: colors.ink,
+      letterSpacing: -0.6,
+      textAlign: "center",
+      marginBottom: 12,
+    },
+    thankYouBody: {
+      fontSize: 15,
+      color: colors.ink2,
+      textAlign: "center",
+      lineHeight: 24,
+      maxWidth: 290,
+      marginBottom: 28,
+    },
+    secondaryBtn: {
+      height: 50,
+      paddingHorizontal: 20,
+      borderRadius: theme.borderRadius.button,
+      borderWidth: 1.5,
+      borderColor: colors.divider,
+      backgroundColor: colors.card,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    secondaryBtnText: {
+      fontSize: 16,
+      fontWeight: "600",
+      color: colors.ink,
+    },
+  });

@@ -310,7 +310,7 @@ export function SavePlaceModal({
                       <Ionicons
                         name="close-circle"
                         size={18}
-                        color="#8a8f9e"
+                        color={colors.ink2}
                       />
                     </TouchableOpacity>
                   )}
@@ -420,7 +420,8 @@ export function SavePlaceModal({
                         key={cat.id}
                         style={[
                           styles.categoryChip,
-                          selected && styles.categoryChipSelected,
+                          { borderColor: colors.primary },
+                          selected && { backgroundColor: colors.primary },
                         ]}
                         onPress={() => handleSelectCategory(cat.id)}
                         activeOpacity={0.75}
@@ -428,7 +429,7 @@ export function SavePlaceModal({
                         <Text
                           style={[
                             styles.categoryChipText,
-                            selected && styles.categoryChipTextSelected,
+                            { color: selected ? "white" : colors.primary },
                           ]}
                         >
                           {cat.catName}
@@ -441,7 +442,8 @@ export function SavePlaceModal({
                   <TouchableOpacity
                     style={[
                       styles.categoryChip,
-                      isCreatingCategory && styles.categoryChipSelected,
+                      { borderColor: colors.primary },
+                      isCreatingCategory && { backgroundColor: colors.primary },
                     ]}
                     onPress={handleNewCategoryChip}
                     activeOpacity={0.75}
@@ -449,14 +451,12 @@ export function SavePlaceModal({
                     <Ionicons
                       name="add"
                       size={14}
-                      color={
-                        isCreatingCategory ? "white" : theme.colors.primary
-                      }
+                      color={isCreatingCategory ? "white" : colors.primary}
                     />
                     <Text
                       style={[
                         styles.categoryChipText,
-                        isCreatingCategory && styles.categoryChipTextSelected,
+                        { color: isCreatingCategory ? "white" : colors.primary },
                       ]}
                     >
                       New

@@ -70,6 +70,7 @@ const FILTERS: { mode: FilterMode; icon: string }[] = [
 export default function RouteScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const styles = makeStyles(colors);
   const {
     destinationId,
     destinationLat,
@@ -568,7 +569,7 @@ export default function RouteScreen() {
             lngLat={[destination.lng, destination.lat]}
             anchor="bottom"
           >
-            <Ionicons name="location" size={32} color={theme.colors.primary} />
+            <Ionicons name="location" size={32} color={colors.primary} />
           </Marker>
         )}
       </Map>
@@ -580,7 +581,7 @@ export default function RouteScreen() {
             <AntDesign
               name="aim"
               size={17}
-              color={theme.colors.primary}
+              color={colors.primary}
               style={styles.rowIcon}
             />
             <TextInput
@@ -596,7 +597,7 @@ export default function RouteScreen() {
                 if (!originLabel.trim()) setOriginLabel("Current Location");
               }}
               placeholder="Origin"
-              placeholderTextColor={theme.colors.text}
+              placeholderTextColor={colors.text}
               returnKeyType="search"
               blurOnSubmit={false}
               autoCorrect={false}
@@ -624,7 +625,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="close-circle"
                   size={16}
-                  color={theme.colors.text}
+                  color={colors.text}
                 />
               </TouchableOpacity>
             )}
@@ -636,7 +637,7 @@ export default function RouteScreen() {
             <Ionicons
               name="location"
               size={17}
-              color={theme.colors.tertiary}
+              color={colors.tertiary}
               style={styles.rowIcon}
             />
             <TextInput
@@ -649,7 +650,7 @@ export default function RouteScreen() {
                 originSearch.reset();
               }}
               placeholder="Where to?"
-              placeholderTextColor={theme.colors.text}
+              placeholderTextColor={colors.text}
               returnKeyType="search"
               blurOnSubmit={false}
               autoCorrect={false}
@@ -670,7 +671,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="close-circle"
                   size={16}
-                  color={theme.colors.text}
+                  color={colors.text}
                 />
               </TouchableOpacity>
             )}
@@ -691,7 +692,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="search"
                   size={14}
-                  color={destination?.placeId ? "white" : theme.colors.text}
+                  color={destination?.placeId ? "white" : colors.text}
                 />
                 <Text
                   style={[
@@ -727,7 +728,7 @@ export default function RouteScreen() {
             <ActivityIndicator
               style={{ marginTop: 24 }}
               size="small"
-              color={theme.colors.primary}
+              color={colors.primary}
             />
           )}
           {destinationSearch.status === "success" && (
@@ -751,7 +752,7 @@ export default function RouteScreen() {
             <ActivityIndicator
               style={{ marginTop: 24 }}
               size="small"
-              color={theme.colors.primary}
+              color={colors.primary}
             />
           )}
           {originSearch.status === "success" && (
@@ -768,8 +769,8 @@ export default function RouteScreen() {
         <View style={styles.routeArea}>
           {isLoadingRoutes && (
             <View style={styles.centerState}>
-              <ActivityIndicator size="large" color={theme.colors.primary} />
-              <Text style={[styles.stateText, { color: colors.ink }]}>Finding routes…</Text>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={styles.stateText}>Finding routes…</Text>
             </View>
           )}
 
@@ -778,7 +779,7 @@ export default function RouteScreen() {
               <Ionicons
                 name="warning-outline"
                 size={36}
-                color={theme.colors.error}
+                color={colors.error}
               />
               <Text style={styles.stateText}>Could not find routes</Text>
               <Text style={styles.stateSubText}>{routeError}</Text>
@@ -790,7 +791,7 @@ export default function RouteScreen() {
               <Ionicons
                 name="navigate-outline"
                 size={36}
-                color={theme.colors.text}
+                color={colors.text}
               />
               <Text style={styles.stateText}>
                 {destination
@@ -825,7 +826,7 @@ export default function RouteScreen() {
                         name={icon as any}
                         size={12}
                         color={
-                          isActive ? theme.colors.selected : theme.colors.text
+                          isActive ? colors.selected : colors.text
                         }
                       />
                       <Text
@@ -887,158 +888,159 @@ export default function RouteScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: "#F9F9FE" },
-  map: { height: 220 },
-  originDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: theme.colors.primary,
-    borderWidth: 3,
-    borderColor: "white",
-  },
+const makeStyles = (colors: typeof theme.colors) =>
+  StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.surface },
+    map: { height: 220 },
+    originDot: {
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      backgroundColor: colors.primary,
+      borderWidth: 3,
+      borderColor: "white",
+    },
 
-  searchPanel: {
-    backgroundColor: "white",
-    marginHorizontal: theme.spacing.screen,
-    marginTop: -20,
-    borderRadius: 20,
-    paddingHorizontal: theme.spacing.card,
-    paddingVertical: theme.spacing.element + 4,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 6,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  searchRows: { flex: 1, gap: 2 },
-  searchRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 6,
-  },
-  rowIcon: { width: 22, textAlign: "center" },
-  searchInput: {
-    flex: 1,
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: "#1A1C1F",
-  },
-  searchDivider: {
-    height: 1,
-    backgroundColor: theme.colors.muted,
-    marginLeft: 30,
-  },
-  cancelBtn: { paddingLeft: 8 },
-  cancelText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: theme.colors.primary,
-  },
+    searchPanel: {
+      backgroundColor: colors.card,
+      marginHorizontal: theme.spacing.screen,
+      marginTop: -20,
+      borderRadius: 20,
+      paddingHorizontal: theme.spacing.card,
+      paddingVertical: theme.spacing.element + 4,
+      shadowColor: "#000",
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.1,
+      shadowRadius: 12,
+      elevation: 6,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+    },
+    searchRows: { flex: 1, gap: 2 },
+    searchRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      paddingVertical: 6,
+    },
+    rowIcon: { width: 22, textAlign: "center" },
+    searchInput: {
+      flex: 1,
+      fontSize: theme.fontSize.body,
+      fontWeight: "600",
+      color: colors.ink,
+    },
+    searchDivider: {
+      height: 1,
+      backgroundColor: colors.divider,
+      marginLeft: 30,
+    },
+    cancelBtn: { paddingLeft: 8 },
+    cancelText: {
+      fontSize: theme.fontSize.body,
+      fontWeight: "600",
+      color: colors.primary,
+    },
 
-  findRoutesBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 6,
-    backgroundColor: theme.colors.primary,
-    borderRadius: 10,
-    paddingVertical: 9,
-    marginTop: 4,
-  },
-  findRoutesBtnDisabled: { backgroundColor: theme.colors.muted },
-  findRoutesBtnText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: "white",
-  },
-  findRoutesBtnTextDisabled: { color: theme.colors.text },
+    findRoutesBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      backgroundColor: colors.primary,
+      borderRadius: 10,
+      paddingVertical: 9,
+      marginTop: 4,
+    },
+    findRoutesBtnDisabled: { backgroundColor: colors.muted },
+    findRoutesBtnText: {
+      fontSize: theme.fontSize.body,
+      fontWeight: "700",
+      color: "white",
+    },
+    findRoutesBtnTextDisabled: { color: colors.ink2 },
 
-  searchResultsArea: { flex: 1, paddingTop: theme.spacing.element },
-  emptyText: {
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text,
-    textAlign: "center",
-    marginTop: 24,
-  },
+    searchResultsArea: { flex: 1, paddingTop: theme.spacing.element },
+    emptyText: {
+      fontSize: theme.fontSize.body,
+      color: colors.ink2,
+      textAlign: "center",
+      marginTop: 24,
+    },
 
-  routeArea: { flex: 1, paddingTop: theme.spacing.element },
-  centerState: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    paddingBottom: 40,
-  },
-  stateText: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "600",
-    color: "#1A1C1F",
-    textAlign: "center",
-  },
-  stateSubText: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    textAlign: "center",
-    maxWidth: 260,
-  },
+    routeArea: { flex: 1, paddingTop: theme.spacing.element },
+    centerState: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 10,
+      paddingBottom: 40,
+    },
+    stateText: {
+      fontSize: theme.fontSize.subtitle,
+      fontWeight: "600",
+      color: colors.ink,
+      textAlign: "center",
+    },
+    stateSubText: {
+      fontSize: theme.fontSize.caption,
+      color: colors.ink2,
+      textAlign: "center",
+      maxWidth: 260,
+    },
 
-  modeChip: {
-    backgroundColor: theme.colors.background,
-    borderRadius: 30,
-    paddingHorizontal: theme.spacing.card,
-    paddingVertical: theme.spacing.element,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-  },
-  modeChipActive: { backgroundColor: theme.colors.secondary },
-  modeChipText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: theme.colors.text,
-  },
-  modeChipTextActive: { color: theme.colors.selected },
+    modeChip: {
+      backgroundColor: colors.surface2,
+      borderRadius: 30,
+      paddingHorizontal: theme.spacing.card,
+      paddingVertical: theme.spacing.element,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+    },
+    modeChipActive: { backgroundColor: colors.secondary },
+    modeChipText: {
+      fontSize: theme.fontSize.body,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    modeChipTextActive: { color: colors.selected },
 
-  routeListWrap: { flex: 1, paddingBottom: 80 },
+    routeListWrap: { flex: 1, paddingBottom: 80 },
 
-  startWrap: {
-    position: "absolute",
-    bottom: 16,
-    left: theme.spacing.screen,
-    right: theme.spacing.screen,
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 8,
-  },
-  startBtn: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: 18,
-    paddingVertical: 16,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-  },
-  startBtnText: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "800",
-    color: "white",
-    letterSpacing: 0.3,
-  },
-  startBtnDisabled: { opacity: 0.6 },
-  startErrorText: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.error,
-    textAlign: "center",
-    marginBottom: 8,
-    fontWeight: "600",
-  },
-});
+    startWrap: {
+      position: "absolute",
+      bottom: 16,
+      left: theme.spacing.screen,
+      right: theme.spacing.screen,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.3,
+      shadowRadius: 12,
+      elevation: 8,
+    },
+    startBtn: {
+      backgroundColor: colors.primary,
+      borderRadius: 18,
+      paddingVertical: 16,
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 10,
+    },
+    startBtnText: {
+      fontSize: theme.fontSize.subtitle,
+      fontWeight: "800",
+      color: "white",
+      letterSpacing: 0.3,
+    },
+    startBtnDisabled: { opacity: 0.6 },
+    startErrorText: {
+      fontSize: theme.fontSize.caption,
+      color: colors.error,
+      textAlign: "center",
+      marginBottom: 8,
+      fontWeight: "600",
+    },
+  });

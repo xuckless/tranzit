@@ -10,6 +10,7 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import type { PlaceResult, SelectedDestination } from "../../types/places";
+import { useTheme } from "@/contexts/ThemeContext";
 
 interface Props {
   results: PlaceResult[];
@@ -17,10 +18,11 @@ interface Props {
 }
 
 export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
+  const { colors } = useTheme();
+  const styles = makeStyles(colors);
+
   const handlePress = useCallback(
     (place: PlaceResult) => {
-      // Construct the SelectedDestination — placeId is the routing key.
-      // coordinate is used immediately for the map pin while /route loads.
       onSelect({
         placeId: place.id,
         displayText: place.displayName.text,
@@ -44,7 +46,7 @@ export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
           accessibilityLabel={`Navigate to ${item.displayName.text}`}
         >
           <View style={styles.iconWrap}>
-            <Ionicons name="location-outline" size={16} color="#3b7bff" />
+            <Ionicons name="location-outline" size={16} color={colors.primary} />
           </View>
           <View style={styles.textWrap}>
             <Text style={styles.primaryText} numberOfLines={1}>
@@ -53,15 +55,12 @@ export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
             <Text style={styles.subText} numberOfLines={1}>
               {item.formattedAddress}
             </Text>
-            {/*<Text style={styles.subText} numberOfLines={1}>
-              {`${item.location.latitude.toFixed(4)}, ${item.location.longitude.toFixed(4)}`}
-            </Text>*/}
           </View>
         </TouchableOpacity>
         {index < results.length - 1 && <View style={styles.divider} />}
       </>
     ),
-    [handlePress, results.length],
+    [handlePress, results.length, styles, colors.primary],
   );
 
   return (
@@ -76,40 +75,41 @@ export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
   );
 };
 
-const styles = StyleSheet.create({
-  list: { marginTop: 4 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    gap: 10,
-  },
-  iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: "rgba(59,123,255,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(59,123,255,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textWrap: { flex: 1 },
-  primaryText: {
-    fontFamily: "Syne-Medium",
-    fontSize: 13,
-    color: theme.colors.text,
-  },
-  subText: {
-    fontFamily: "DMmono-Regular",
-    fontSize: 11,
-    color: theme.colors.text,
-    marginTop: 2,
-  },
-  divider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginLeft: 44,
-  },
-});
+const makeStyles = (colors: typeof theme.colors) =>
+  StyleSheet.create({
+    list: { marginTop: 4 },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 10,
+      paddingHorizontal: 4,
+      gap: 10,
+    },
+    iconWrap: {
+      width: 34,
+      height: 34,
+      borderRadius: 8,
+      backgroundColor: colors.primaryDim,
+      borderWidth: 0.5,
+      borderColor: colors.border,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    textWrap: { flex: 1 },
+    primaryText: {
+      fontFamily: "Syne-Medium",
+      fontSize: 13,
+      color: colors.ink,
+    },
+    subText: {
+      fontFamily: "DMmono-Regular",
+      fontSize: 11,
+      color: colors.ink2,
+      marginTop: 2,
+    },
+    divider: {
+      height: 0.5,
+      backgroundColor: colors.divider,
+      marginLeft: 44,
+    },
+  });

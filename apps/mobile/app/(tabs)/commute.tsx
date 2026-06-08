@@ -1159,9 +1159,11 @@ export default function CommuteScreen() {
   if (!route) {
     return (
       <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
-        <Ionicons name="navigate-outline" size={48} color={theme.colors.text} />
-        <Text style={styles.emptyTitle}>No Active Journey</Text>
-        <Text style={styles.emptySubtitle}>
+        <Ionicons name="navigate-outline" size={48} color={colors.text} />
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>
+          No Active Journey
+        </Text>
+        <Text style={[styles.emptySubtitle, { color: colors.text }]}>
           Go to Routes, select a route, and tap "Start Journey".
         </Text>
       </View>
@@ -1198,7 +1200,10 @@ export default function CommuteScreen() {
             size={18}
             color={theme.colors.primaryInk}
           />
-          <Text style={styles.notifyBannerText} numberOfLines={2}>
+          <Text
+            style={[styles.notifyBannerText, { color: colors.text }]}
+            numberOfLines={2}
+          >
             {notifyBanner}
           </Text>
           <Ionicons name="close" size={16} color={theme.colors.primaryInk} />
@@ -1469,50 +1474,68 @@ export default function CommuteScreen() {
             <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
               Arriving in
             </Text>
-            <View style={styles.heroSpeedBadge}>
+            <View
+              style={[
+                styles.heroSpeedBadge,
+                { backgroundColor: colors.surface },
+              ]}
+            >
               <Ionicons
                 name="speedometer-outline"
                 size={15}
                 color={theme.colors.ink3}
               />
-              <Text style={styles.heroSpeedText}>
+              <Text style={[styles.heroSpeedText, { color: colors.text }]}>
                 {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
               </Text>
             </View>
           </View>
-          <Text style={styles.heroEtaNum}>
+          <Text style={[styles.heroEtaNum, { color: colors.text }]}>
             {etaMinutes ?? "--"}
-            <Text style={styles.heroEtaUnit}> min</Text>
+            <Text style={[styles.heroEtaUnit, { color: colors.text }]}>
+              {" "}
+              min
+            </Text>
           </Text>
 
           <Text style={styles.heroNextStop}>
             Next stop:{" "}
-            <Text style={styles.heroNextStopName}>
+            <Text style={[styles.heroNextStopName, { color: colors.text }]}>
               {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
             </Text>
           </Text>
         </View>
 
-        <View style={styles.content}>
+        <View style={[styles.content]}>
           {/* ── Journey summary + progress bar ── */}
           <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
             <View style={styles.journeyCardTop}>
               <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.journeyDestination} numberOfLines={1}>
+                <Text
+                  style={[styles.journeyDestination, { color: colors.text }]}
+                  numberOfLines={1}
+                >
                   To: {destinationInfo?.label ?? "Destination"}
                 </Text>
-                <Text style={styles.journeyEta}>
+                <Text style={[styles.journeyEta, { color: colors.text }]}>
                   Arriving around {arrivalTime ?? "--:--"}
                 </Text>
               </View>
-              <View style={styles.arrivalBadge}>
-                <Text style={styles.arrivalBadgeText}>
+              <View
+                style={[styles.arrivalBadge, { backgroundColor: colors.card }]}
+              >
+                <Text style={[styles.arrivalBadgeText, { color: colors.text }]}>
                   {arrivalTime ?? "--:--"}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.progressBarTrack}>
+            <View
+              style={[
+                styles.progressBarTrack,
+                // { backgroundColor: colors.card },
+              ]}
+            >
               <View
                 style={[
                   styles.progressBarFill,
