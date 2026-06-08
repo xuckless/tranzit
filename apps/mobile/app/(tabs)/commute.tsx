@@ -241,8 +241,7 @@ function ReportIcon({
     );
   return <Ionicons name={name as any} size={size} color={color} />;
 }
-
-// ─── StopItem ─────────────────────────────────────────────────────────────────
+// ─── STOP ITEM ───────────────────────────────────────────────────────────────────
 
 function StopItem({
   stop,
@@ -251,6 +250,8 @@ function StopItem({
   stop: CommuteStop;
   connectorType: ConnectorType;
 }) {
+  const { colors } = useTheme();
+
   const isDeparted = stop.status === "departed";
   const isCurrent = stop.status === "current";
   const isDestination = stop.status === "destination";
@@ -294,8 +295,16 @@ function StopItem({
     return () => loop.stop();
   }, [isCurrent, isUnsure]);
 
-  const dotRingColor = isUnsure ? "#F59E0B" : theme.colors.primary;
-  const dotColor = isUnsure ? "#F59E0B" : theme.colors.primary;
+  // Semantic colors — warning/danger/success stay fixed (they carry meaning
+  // regardless of scheme), everything else pulls from the active theme.
+  const WARNING = "#F59E0B";
+  const WARNING_INK = "#D97706";
+  const DANGER = "#EF4444";
+  const SUCCESS = "#16A34A";
+
+  const dotRingColor = isUnsure ? WARNING : colors.primary;
+  const dotColor = isUnsure ? WARNING : colors.primary;
+  const connectorMuted = colors.divider;
 
   return (
     <View style={styles.stopRow}>
@@ -316,26 +325,52 @@ function StopItem({
             <View
               style={[
                 styles.currentDot,
-                { backgroundColor: dotColor, borderColor: "white" },
+                { backgroundColor: dotColor, borderColor: colors.card },
               ]}
             >
-              <View style={styles.currentDotCore} />
+              <View
+                style={[
+                  styles.currentDotCore,
+                  { backgroundColor: colors.card },
+                ]}
+              />
             </View>
           </View>
         ) : isDeparted || isMissed ? (
-          <View style={[styles.departedDot, isMissed && styles.missedDot]}>
+          <View
+            style={[
+              styles.departedDot,
+              { backgroundColor: colors.surface2, borderColor: connectorMuted },
+              isMissed && { borderColor: DANGER, backgroundColor: "#FEF2F2" },
+            ]}
+          >
             {isMissed ? (
-              <Ionicons name="close" size={11} color="#EF4444" />
+              <Ionicons name="close" size={11} color={DANGER} />
             ) : (
-              <Ionicons name="checkmark" size={11} color={theme.colors.ink3} />
+              <Ionicons name="checkmark" size={11} color={colors.text} />
             )}
           </View>
         ) : isDestination ? (
-          <View style={styles.destinationDot}>
-            <View style={styles.destinationDotCore} />
+          <View
+            style={[
+              styles.destinationDot,
+              { backgroundColor: colors.card, borderColor: connectorMuted },
+            ]}
+          >
+            <View
+              style={[
+                styles.destinationDotCore,
+                { backgroundColor: connectorMuted },
+              ]}
+            />
           </View>
         ) : (
-          <View style={styles.upcomingDot} />
+          <View
+            style={[
+              styles.upcomingDot,
+              { backgroundColor: colors.card, borderColor: connectorMuted },
+            ]}
+          />
         )}
 
         {connectorType !== "none" &&
@@ -348,8 +383,8 @@ function StopItem({
                 {
                   backgroundColor:
                     connectorType === "solid-primary"
-                      ? theme.colors.primary
-                      : "#BBCBB9",
+                      ? colors.primary
+                      : connectorMuted,
                 },
               ]}
             />
@@ -360,7 +395,13 @@ function StopItem({
       <View
         style={[
           styles.stopContentOuter,
-          isCurrent && styles.stopContentOuterCurrent,
+          isCurrent && [
+            styles.stopContentOuterCurrent,
+            {
+              backgroundColor: colors.primaryDim + "55",
+              borderLeftColor: colors.primary,
+            },
+          ],
           isUnsure && styles.stopContentOuterUnsure,
         ]}
       >
@@ -370,7 +411,7 @@ function StopItem({
               <Text
                 style={[
                   styles.currentStopName,
-                  isUnsure && { color: "#D97706" },
+                  { color: isUnsure ? WARNING_INK : colors.primary },
                 ]}
                 numberOfLines={1}
               >
@@ -380,7 +421,7 @@ function StopItem({
                 <Text
                   style={[
                     styles.stopTimeText,
-                    { color: isUnsure ? "#D97706" : theme.colors.primary },
+                    { color: isUnsure ? WARNING_INK : colors.primary },
                   ]}
                 >
                   {stop.time}
@@ -393,7 +434,7 @@ function StopItem({
               <Text
                 style={[
                   styles.currentStopChipText,
-                  isUnsure && { color: "#92400E" },
+                  { color: isUnsure ? "#92400E" : colors.text },
                 ]}
               >
                 {isUnsure
@@ -406,11 +447,14 @@ function StopItem({
                 <Text
                   style={[
                     styles.stopTimeDelta,
-                    stop.timeRemaining > 60
-                      ? styles.stopTimeDeltaUpcoming
-                      : stop.timeRemaining < -60
-                        ? styles.stopTimeDeltaPast
-                        : styles.stopTimeDeltaOnTime,
+                    {
+                      color:
+                        stop.timeRemaining > 60
+                          ? colors.primary
+                          : stop.timeRemaining < -60
+                            ? colors.text
+                            : SUCCESS,
+                    },
                   ]}
                 >
                   {formatTimeDelta(stop.timeRemaining)}
@@ -424,9 +468,14 @@ function StopItem({
               <Text
                 style={[
                   styles.stopName,
-                  (isDeparted || isMissed) && styles.stopNameDeparted,
-                  isMissed && styles.stopNameMissed,
+                  { color: colors.text },
+                  (isDeparted || isMissed) && {
+                    color: colors.textMuted ?? colors.text,
+                    opacity: 0.6,
+                  },
+                  isMissed && { color: DANGER, opacity: 1 },
                   isDestination && styles.stopNameDestination,
+                  isDestination && { color: colors.text },
                 ]}
                 numberOfLines={1}
               >
@@ -436,6 +485,7 @@ function StopItem({
                 <Text
                   style={[
                     styles.stopTimeText,
+                    { color: colors.text },
                     (isDeparted || isMissed) && { opacity: 0.5 },
                   ]}
                 >
@@ -444,20 +494,44 @@ function StopItem({
               )}
             </View>
             {isDestination && (
-              <Text style={styles.destinationLabel}>Final Destination</Text>
+              <Text
+                style={[
+                  styles.destinationLabel,
+                  { color: colors.text, opacity: 0.6 },
+                ]}
+              >
+                Final Destination
+              </Text>
             )}
-            {isMissed && <Text style={styles.missedLabel}>Missed</Text>}
+            {isMissed && (
+              <Text style={[styles.missedLabel, { color: DANGER }]}>
+                Missed
+              </Text>
+            )}
             {stop.mode === "TRANSIT" &&
               (stop.transitName || stop.timeRemaining !== undefined) && (
                 <View style={styles.stopMetaRow}>
                   {stop.transitName && (
-                    <View style={styles.stopRouteBadge}>
+                    <View
+                      style={[
+                        styles.stopRouteBadge,
+                        {
+                          backgroundColor: colors.surface2,
+                          borderColor: colors.divider,
+                        },
+                      ]}
+                    >
                       <Ionicons
                         name="bus-outline"
                         size={10}
-                        color={theme.colors.ink3}
+                        color={colors.text}
                       />
-                      <Text style={styles.stopRouteBadgeText}>
+                      <Text
+                        style={[
+                          styles.stopRouteBadgeText,
+                          { color: colors.text },
+                        ]}
+                      >
                         {stop.transitName}
                       </Text>
                     </View>
@@ -466,11 +540,14 @@ function StopItem({
                     <Text
                       style={[
                         styles.stopTimeDelta,
-                        stop.timeRemaining > 60
-                          ? styles.stopTimeDeltaUpcoming
-                          : stop.timeRemaining < -60
-                            ? styles.stopTimeDeltaPast
-                            : styles.stopTimeDeltaOnTime,
+                        {
+                          color:
+                            stop.timeRemaining > 60
+                              ? colors.primary
+                              : stop.timeRemaining < -60
+                                ? colors.text
+                                : SUCCESS,
+                        },
                       ]}
                     >
                       {formatTimeDelta(stop.timeRemaining)}
@@ -484,7 +561,6 @@ function StopItem({
     </View>
   );
 }
-
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function CommuteScreen() {
@@ -1159,9 +1235,11 @@ export default function CommuteScreen() {
   if (!route) {
     return (
       <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
-        <Ionicons name="navigate-outline" size={48} color={theme.colors.text} />
-        <Text style={styles.emptyTitle}>No Active Journey</Text>
-        <Text style={styles.emptySubtitle}>
+        <Ionicons name="navigate-outline" size={48} color={colors.text} />
+        <Text style={[styles.emptyTitle, { color: colors.text }]}>
+          No Active Journey
+        </Text>
+        <Text style={[styles.emptySubtitle, { color: colors.text }]}>
           Go to Routes, select a route, and tap "Start Journey".
         </Text>
       </View>
@@ -1198,7 +1276,10 @@ export default function CommuteScreen() {
             size={18}
             color={theme.colors.primaryInk}
           />
-          <Text style={styles.notifyBannerText} numberOfLines={2}>
+          <Text
+            style={[styles.notifyBannerText, { color: colors.text }]}
+            numberOfLines={2}
+          >
             {notifyBanner}
           </Text>
           <Ionicons name="close" size={16} color={theme.colors.primaryInk} />
@@ -1214,8 +1295,10 @@ export default function CommuteScreen() {
               { backgroundColor: colors.card },
             ]}
           >
-            <Text style={styles.boardingConfirmTitle}>Did you board?</Text>
-            <Text style={styles.boardingConfirmSub}>
+            <Text style={[styles.boardingConfirmTitle, { color: colors.text }]}>
+              Did you board?
+            </Text>
+            <Text style={[styles.boardingConfirmSub, { color: colors.text }]}>
               {boardingConfirmMsg ??
                 "Confirm whether you boarded the bus at this stop."}
             </Text>
@@ -1469,50 +1552,68 @@ export default function CommuteScreen() {
             <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
               Arriving in
             </Text>
-            <View style={styles.heroSpeedBadge}>
+            <View
+              style={[
+                styles.heroSpeedBadge,
+                { backgroundColor: colors.surface },
+              ]}
+            >
               <Ionicons
                 name="speedometer-outline"
                 size={15}
                 color={theme.colors.ink3}
               />
-              <Text style={styles.heroSpeedText}>
+              <Text style={[styles.heroSpeedText, { color: colors.text }]}>
                 {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
               </Text>
             </View>
           </View>
-          <Text style={styles.heroEtaNum}>
+          <Text style={[styles.heroEtaNum, { color: colors.ink }]}>
             {etaMinutes ?? "--"}
-            <Text style={styles.heroEtaUnit}> min</Text>
+            <Text style={[styles.heroEtaUnit, { color: colors.text }]}>
+              {" "}
+              min
+            </Text>
           </Text>
 
-          <Text style={styles.heroNextStop}>
+          <Text style={[styles.heroNextStop, { color: colors.text }]}>
             Next stop:{" "}
-            <Text style={styles.heroNextStopName}>
+            <Text style={[styles.heroNextStopName, { color: colors.text }]}>
               {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
             </Text>
           </Text>
         </View>
 
-        <View style={styles.content}>
+        <View style={[styles.content]}>
           {/* ── Journey summary + progress bar ── */}
           <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
             <View style={styles.journeyCardTop}>
               <View style={{ flex: 1, marginRight: 10 }}>
-                <Text style={styles.journeyDestination} numberOfLines={1}>
+                <Text
+                  style={[styles.journeyDestination, { color: colors.text }]}
+                  numberOfLines={1}
+                >
                   To: {destinationInfo?.label ?? "Destination"}
                 </Text>
-                <Text style={styles.journeyEta}>
+                <Text style={[styles.journeyEta, { color: colors.text }]}>
                   Arriving around {arrivalTime ?? "--:--"}
                 </Text>
               </View>
-              <View style={styles.arrivalBadge}>
-                <Text style={styles.arrivalBadgeText}>
+              <View
+                style={[styles.arrivalBadge, { backgroundColor: colors.card }]}
+              >
+                <Text style={[styles.arrivalBadgeText, { color: colors.text }]}>
                   {arrivalTime ?? "--:--"}
                 </Text>
               </View>
             </View>
 
-            <View style={styles.progressBarTrack}>
+            <View
+              style={[
+                styles.progressBarTrack,
+                { backgroundColor: colors.surface2 },
+              ]}
+            >
               <View
                 style={[
                   styles.progressBarFill,
@@ -1572,10 +1673,12 @@ export default function CommuteScreen() {
                 size={15}
                 color={theme.colors.primary}
               />
-              <Text style={styles.sectionLabel}>ROUTE PROGRESS</Text>
+              <Text style={[styles.sectionLabel, { color: colors.text }]}>
+                ROUTE PROGRESS
+              </Text>
             </View>
 
-            <View style={styles.stopList}>
+            <View style={[styles.stopList]}>
               {stops.map((stop, i) => {
                 const isLast = i === stops.length - 1;
                 let connectorType: ConnectorType = "none";
@@ -1597,6 +1700,7 @@ export default function CommuteScreen() {
                 }
                 return (
                   <StopItem
+                    // color={colors.text}
                     key={stop.id}
                     stop={stop}
                     connectorType={connectorType}
@@ -1652,7 +1756,9 @@ export default function CommuteScreen() {
                 size={22}
                 color={theme.colors.selected}
               />
-              <Text style={styles.communityTitle}>Community Reports</Text>
+              <Text style={[styles.communityTitle, { color: colors.text }]}>
+                Community Reports
+              </Text>
             </View>
 
             {reportSent ? (
@@ -1664,12 +1770,14 @@ export default function CommuteScreen() {
                     color={theme.colors.primary}
                   />
                 </View>
-                <Text style={styles.reportThanksTitle}>
+                <Text
+                  style={[styles.reportThanksTitle, { color: colors.text }]}
+                >
                   Thanks for the heads up!
                 </Text>
-                <Text style={styles.reportThanksBody}>
+                <Text style={[styles.reportThanksBody, { color: colors.text }]}>
                   We just told{" "}
-                  <Text style={{ fontWeight: "800", color: theme.colors.ink }}>
+                  <Text style={{ fontWeight: "800", color: colors.text }}>
                     1,240 commuters
                   </Text>{" "}
                   on this line. You're a real one.
@@ -1690,7 +1798,9 @@ export default function CommuteScreen() {
               </View>
             ) : (
               <>
-                <Text style={styles.communityQuestion}>
+                <Text
+                  style={[styles.communityQuestion, { color: colors.text }]}
+                >
                   What's happening on the{" "}
                   <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>
                   ?
@@ -1708,6 +1818,7 @@ export default function CommuteScreen() {
                         style={[
                           styles.reportGridCard,
                           active && styles.reportGridCardActive,
+                          { backgroundColor: colors.card },
                         ]}
                       >
                         <View
@@ -1727,6 +1838,7 @@ export default function CommuteScreen() {
                           style={[
                             styles.reportGridLabel,
                             active && styles.reportGridLabelActive,
+                            { color: colors.text },
                           ]}
                         >
                           {r.label}
@@ -1737,7 +1849,12 @@ export default function CommuteScreen() {
                 </View>
 
                 {reportSelected && (
-                  <View style={styles.severityCard}>
+                  <View
+                    style={[
+                      styles.severityCard,
+                      { backgroundColor: colors.surface },
+                    ]}
+                  >
                     <Text style={styles.severityHeading}>
                       How {reportSelected === "safety" ? "urgent" : "bad"}?
                     </Text>

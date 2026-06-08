@@ -153,7 +153,7 @@ export function BusDetailsPanel({
                   <View
                     style={[
                       s.sequenceDot,
-                      stop.passed && { backgroundColor: colors.ink3 },
+                      { backgroundColor: stop.passed ? colors.ink3 : colors.primary },
                     ]}
                   />
                   <View style={s.stopInfo}>

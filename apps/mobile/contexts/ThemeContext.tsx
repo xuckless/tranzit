@@ -7,7 +7,8 @@ import React, {
   useState,
 } from "react";
 import * as SecureStore from "expo-secure-store";
-import { theme, darkColors } from "@/styles/theme";
+import { theme, darkColors, lightColors } from "@/styles/theme";
+import { useColorScheme } from "react-native";
 
 const DARK_MODE_KEY = "tranzit_dark_mode";
 
@@ -27,6 +28,8 @@ const ThemeContext = createContext<ThemeContextValue>({
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [isDark, setIsDark] = useState(false);
+  // const system = useColorScheme();
+  // const colors = isDark ? darkColors : lightColors;
 
   // Load persisted preference on mount
   useEffect(() => {
@@ -49,7 +52,9 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     () => ({
       isDark,
       toggle,
-      colors: isDark ? (darkColors as ThemeColors) : theme.colors,
+      colors: isDark
+        ? (darkColors as ThemeColors)
+        : (lightColors as ThemeColors),
     }),
     [isDark, toggle],
   );

@@ -226,8 +226,8 @@ function RouteCard({
       activeOpacity={0.85}
     >
       {isFastest && (
-        <View style={styles.fastestBadge}>
-          <Text style={styles.fastestText}>Fastest</Text>
+        <View style={[styles.fastestBadge, { backgroundColor: colors.primaryDim }]}>
+          <Text style={[styles.fastestText, { color: colors.primary }]}>Fastest</Text>
         </View>
       )}
 

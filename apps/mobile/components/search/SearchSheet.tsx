@@ -5,6 +5,8 @@ import { DestinationSuggestionsList } from "./DestinationSuggestionsList";
 import { useDestinationSearch } from "../../hooks/useDestinationSearch";
 import { TranzitApiService } from "../../services/TranzitApiService";
 import type { SelectedDestination, SearchSuggestion } from "../../types/places";
+import { useTheme } from "../../contexts/ThemeContext";
+import { theme } from "../../styles/theme";
 
 interface UserLocation {
   latitude: number;
@@ -24,6 +26,7 @@ export const SearchSheet: React.FC<Props> = ({
   onSearchActiveChange,
   onClear,
 }) => {
+  const { colors } = useTheme();
   const [query, setQuery] = useState("");
   const { status, suggestions, search, reset } = useDestinationSearch(userLocation);
 
@@ -84,7 +87,7 @@ export const SearchSheet: React.FC<Props> = ({
       )}
 
       {status === "empty" && (
-        <Text style={styles.emptyText}>No results found</Text>
+        <Text style={[styles.emptyText, { color: colors.ink3 }]}>No results found</Text>
       )}
     </View>
   );
@@ -98,7 +101,6 @@ const styles = StyleSheet.create({
   emptyText: {
     fontFamily: "DMmono-Regular",
     fontSize: 12,
-    color: "rgba(255,255,255,0.25)",
     textAlign: "center",
     paddingVertical: 20,
   },

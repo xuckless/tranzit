@@ -124,6 +124,7 @@ export default function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const router = useRouter();
   const { colors, isDark } = useTheme();
+  const styles = makeStyles(colors);
   const styleUrl = useMemo(
     () => (isDark ? STYLE_URL_DARK : STYLE_URL_LIGHT),
     [isDark],
@@ -737,7 +738,7 @@ export default function MapScreen() {
             lngLat={[destination.longitude, destination.latitude]}
             anchor="bottom"
           >
-            <Ionicons name="location" size={32} color={theme.colors.primary} />
+            <Ionicons name="location" size={32} color={colors.primary} />
           </Marker>
         )}
       </Map>
@@ -750,9 +751,9 @@ export default function MapScreen() {
         disabled={loadingLocation}
       >
         {loadingLocation ? (
-          <ActivityIndicator size="small" color={theme.colors.primary} />
+          <ActivityIndicator size="small" color={colors.primary} />
         ) : (
-          <Ionicons name="locate" size={22} color={theme.colors.primary} />
+          <Ionicons name="locate" size={22} color={colors.primary} />
         )}
       </TouchableOpacity>
 
@@ -795,24 +796,24 @@ export default function MapScreen() {
           <View style={[styles.nearbyPlacesPanel, { backgroundColor: colors.surface2, borderColor: colors.border }]}>
             <View style={styles.nearbyPlacesHeader}>
               <View style={styles.nearbyPlacesTitleRow}>
-                <Ionicons name="location" size={14} color={theme.colors.primary} />
-                <Text style={styles.nearbyPlacesTitle}>Nearby Places</Text>
+                <Ionicons name="location" size={14} color={colors.primary} />
+                <Text style={[styles.nearbyPlacesTitle, { color: colors.ink2 }]}>Nearby Places</Text>
               </View>
               <TouchableOpacity
                 onPress={dismissNearby}
                 hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
               >
-                <Ionicons name="close-circle" size={22} color={theme.colors.text} />
+                <Ionicons name="close-circle" size={22} color={colors.ink3} />
               </TouchableOpacity>
             </View>
             {nearbyState.loading ? (
               <ActivityIndicator
                 size="small"
-                color={theme.colors.primary}
+                color={colors.primary}
                 style={{ marginVertical: 14 }}
               />
             ) : nearbyState.places.length === 0 ? (
-              <Text style={styles.nearbyPlacesEmpty}>No places found nearby.</Text>
+              <Text style={[styles.nearbyPlacesEmpty, { color: colors.ink3 }]}>No places found nearby.</Text>
             ) : (
               nearbyState.places.map((place, i) => (
                 <View
@@ -828,7 +829,7 @@ export default function MapScreen() {
                     onPress={() => handleNearbyPlaceTap(place)}
                   >
                     <View style={styles.nearbyPlaceIconBox}>
-                      <Ionicons name="storefront-outline" size={14} color={theme.colors.primary} />
+                      <Ionicons name="storefront-outline" size={14} color={colors.primary} />
                     </View>
                     <View style={styles.nearbyPlaceText}>
                       <Text style={[styles.nearbyPlaceName, { color: colors.ink }]} numberOfLines={1}>
@@ -965,7 +966,7 @@ export default function MapScreen() {
           <View style={[styles.nearbyWrap, { borderTopColor: colors.divider }]}>
             <View style={styles.nearbyHeader}>
               <View style={styles.nearbyTitleRow}>
-                <Ionicons name="radio-button-on" size={14} color={theme.colors.primary} />
+                <Ionicons name="radio-button-on" size={14} color={colors.primary} />
                 <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Nearby Stops</Text>
               </View>
             </View>
@@ -978,7 +979,7 @@ export default function MapScreen() {
               ) : (
                 nearbyTransitStops.map((stop, i) => {
                   const isCTrain = stop.stop_name?.toLowerCase().includes("station") ?? false;
-                  const stopColor = isCTrain ? theme.colors.primary : "#E0A000";
+                  const stopColor = isCTrain ? colors.primary : "#E0A000";
                   return (
                     <TouchableOpacity
                       key={String(stop.teleride_number)}
@@ -1046,8 +1047,8 @@ export default function MapScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: theme.colors.neutral },
+const makeStyles = (colors: typeof theme.colors) => StyleSheet.create({
+  container: { flex: 1, backgroundColor: colors.surface },
   map: { ...StyleSheet.absoluteFillObject },
 
   recenterButton: {
@@ -1116,7 +1117,7 @@ const styles = StyleSheet.create({
   sectionLabel: {
     fontSize: 11,
     fontWeight: "700",
-    color: theme.colors.text,
+    color: colors.ink3,
     textTransform: "uppercase",
     letterSpacing: 0.8,
     marginBottom: 10,
@@ -1133,7 +1134,7 @@ const styles = StyleSheet.create({
   quickLabel: {
     fontSize: 11,
     fontWeight: "600",
-    color: theme.colors.text,
+    color: colors.ink2,
   },
 
   nearbyWrap: {
@@ -1141,7 +1142,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: theme.spacing.screen,
     paddingTop: 14,
     borderTopWidth: 1,
-    borderTopColor: theme.colors.muted,
+    borderTopColor: colors.divider,
     marginTop: 8,
   },
   nearbyHeader: {
@@ -1157,7 +1158,7 @@ const styles = StyleSheet.create({
   },
   nearbyStopsEmpty: {
     fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
+    color: colors.ink3,
     textAlign: "center",
     paddingVertical: 12,
   },
@@ -1167,7 +1168,7 @@ const styles = StyleSheet.create({
     gap: 12,
     paddingVertical: 11,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.muted,
+    borderBottomColor: colors.divider,
   },
   stopIconBox: {
     width: 40,
@@ -1180,21 +1181,21 @@ const styles = StyleSheet.create({
   stopName: {
     fontSize: theme.fontSize.body,
     fontWeight: "600",
-    color: "#1A1C1F",
+    color: colors.ink,
   },
   stopRoute: {
     fontSize: theme.fontSize.caption,
     fontWeight: "500",
-    color: theme.colors.text,
+    color: colors.ink3,
   },
   nearbyPlacesPanel: {
     marginHorizontal: theme.spacing.screen,
     marginBottom: 12,
     padding: 12,
     borderRadius: 16,
-    backgroundColor: theme.colors.muted,
+    backgroundColor: colors.surface2,
     borderWidth: 1,
-    borderColor: theme.colors.border,
+    borderColor: colors.border,
   },
   nearbyPlacesHeader: {
     flexDirection: "row",
@@ -1210,13 +1211,13 @@ const styles = StyleSheet.create({
   nearbyPlacesTitle: {
     fontSize: 10,
     fontWeight: "700",
-    color: theme.colors.text,
+    color: colors.ink2,
     textTransform: "uppercase",
     letterSpacing: 0.6,
   },
   nearbyPlacesEmpty: {
     fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
+    color: colors.ink3,
     textAlign: "center",
     paddingVertical: 8,
   },
@@ -1226,7 +1227,7 @@ const styles = StyleSheet.create({
     gap: 10,
     paddingVertical: 10,
     borderBottomWidth: 1,
-    borderBottomColor: theme.colors.border,
+    borderBottomColor: colors.border,
   },
   nearbyPlaceInfo: {
     flexDirection: "row",
@@ -1238,7 +1239,7 @@ const styles = StyleSheet.create({
     width: 32,
     height: 32,
     borderRadius: 9,
-    backgroundColor: theme.colors.primary + "15",
+    backgroundColor: colors.primary + "15",
     justifyContent: "center",
     alignItems: "center",
     flexShrink: 0,
@@ -1247,18 +1248,18 @@ const styles = StyleSheet.create({
   nearbyPlaceName: {
     fontSize: theme.fontSize.body,
     fontWeight: "700",
-    color: "#1A1C1F",
+    color: colors.ink,
   },
   nearbyPlaceAddress: {
     fontSize: theme.fontSize.caption,
     fontWeight: "500",
-    color: theme.colors.text,
+    color: colors.ink3,
   },
   nearbyPlaceGo: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    backgroundColor: theme.colors.primary,
+    backgroundColor: colors.primary,
     paddingHorizontal: 12,
     paddingVertical: 7,
     borderRadius: 9,

@@ -105,7 +105,7 @@ function BusRow({
       disabled={!onPress}
       activeOpacity={onPress ? 0.65 : 1}
     >
-      <View style={[s.routeBadge, dimmed && { backgroundColor: colors.ink3 }]}>
+      <View style={[s.routeBadge, { backgroundColor: dimmed ? colors.ink3 : colors.primary }]}>
         <Text style={s.routeLabel} numberOfLines={1}>
           {bus.route_id}
         </Text>
