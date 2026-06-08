@@ -6,7 +6,6 @@ import {
   ScrollView,
   TouchableOpacity,
   Animated,
-  ActivityIndicator,
 } from "react-native";
 import {
   Map,
@@ -378,7 +377,9 @@ export default function CommuteScreen() {
   const [notifyBanner, setNotifyBanner] = useState<string | null>(null);
   const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(null);
   const [boardingConfirmMsg, setBoardingConfirmMsg] = useState<string | null>(null);
-  const [reroutingVisible, setReroutingVisible] = useState(false);
+  // A reroute was received from the server but not yet applied to the polyline.
+  // Applied manually via the Refresh button (no automatic reroute churn).
+  const [pendingReroute, setPendingReroute] = useState(false);
 
   const [userLocation, setUserLocation] = useState<{
     latitude: number;
@@ -394,8 +395,6 @@ export default function CommuteScreen() {
   const boardingConfirmStopRef = useRef<string | null>(null);
   const tripStateRef = useRef<TripStateMsg | null>(null);
   const activityStartedRef = useRef(false);
-  // True between a REROUTE and the arrival of its fresh STATE (drives the spinner)
-  const awaitingRerouteStateRef = useRef(false);
 
   const allVehicles = useVehicles();
 
@@ -452,35 +451,28 @@ export default function CommuteScreen() {
     }
   }, [lastNotify, sessionId]);
 
+  // ── Raise the boarding prompt from an UNSURE stop in STATE ─────────────────
+  // The server may signal "unsure you boarded" purely via a stop's STATE status
+  // (no NOTIFY message). Mirror the NOTIFY path so the flashcard still appears.
+  useEffect(() => {
+    if (!tripState || boardingConfirmStopRef.current) return;
+    const unsure = tripState.stops.find((s) => s.status === "UNSURE");
+    if (!unsure) return;
+    setBoardingConfirmStop(unsure.stop_id);
+    setBoardingConfirmMsg(`Did you board at ${unsure.stop_name}?`);
+    if (sessionId) {
+      scheduleBoarding(unsure.stop_id, unsure.stop_name, sessionId);
+    }
+  }, [tripState, sessionId]);
+
   // ── REROUTE handler ────────────────────────────────────────────────────────
+  // No automatic refresh: the new route is buffered in lastReroute and only
+  // applied to the polyline when the user taps the manual Refresh button. Live
+  // STATE keeps flowing, so the timeline still advances on its own.
   useEffect(() => {
     if (!lastReroute) return;
-    // Swap to the new polyline and dismiss any pending boarding prompt.
-    setRoute(lastReroute.route);
-    const prevStop = boardingConfirmStopRef.current;
-    if (prevStop) cancelBoarding(prevStop);
-    setBoardingConfirmStop(null);
-    setBoardingConfirmMsg(null);
-    // Show the loading state until the fresh post-reroute STATE arrives. The WS
-    // hook nulls tripState on REROUTE, so the timeline drops to its placeholder
-    // in the meantime. A safety timeout prevents an indefinite spinner if the
-    // server never sends the follow-up STATE.
-    awaitingRerouteStateRef.current = true;
-    setReroutingVisible(true);
-    const safety = setTimeout(() => {
-      awaitingRerouteStateRef.current = false;
-      setReroutingVisible(false);
-    }, 15000);
-    return () => clearTimeout(safety);
+    setPendingReroute(true);
   }, [lastReroute]);
-
-  // ── Clear the rerouting spinner once fresh stops arrive ────────────────────
-  useEffect(() => {
-    if (awaitingRerouteStateRef.current && tripState?.stops?.length) {
-      awaitingRerouteStateRef.current = false;
-      setReroutingVisible(false);
-    }
-  }, [tripState]);
 
   // ── Auto-dismiss boarding prompt when stop leaves UNSURE ───────────────────
   useEffect(() => {
@@ -873,6 +865,21 @@ export default function CommuteScreen() {
     [stops],
   );
 
+  // ── Missed/unsure flag → surface the manual Refresh control ────────────────
+  const hasFlag = useMemo(
+    () =>
+      (tripState?.stops ?? []).some(
+        (s) => s.status === "MISSED" || s.status === "UNSURE",
+      ),
+    [tripState],
+  );
+
+  // ── Manual Refresh: apply the buffered reroute polyline ────────────────────
+  const handleRefresh = useCallback(() => {
+    if (lastReroute) setRoute(lastReroute.route);
+    setPendingReroute(false);
+  }, [lastReroute]);
+
   // ── End journey ───────────────────────────────────────────────────────────
   const handleExit = useCallback(async () => {
     endTripActivity();
@@ -902,12 +909,18 @@ export default function CommuteScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.surface }]}>
-      {/* ── Rerouting banner ── */}
-      {reroutingVisible && (
-        <View style={styles.rerouteBanner}>
-          <ActivityIndicator size="small" color="white" />
-          <Text style={styles.rerouteBannerText}>Rerouting…</Text>
-        </View>
+      {/* ── Manual Refresh (shown when a stop is missed/unsure) ── */}
+      {(hasFlag || pendingReroute) && (
+        <TouchableOpacity
+          style={styles.refreshButton}
+          onPress={handleRefresh}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="refresh" size={18} color="white" />
+          <Text style={styles.refreshButtonText}>
+            {pendingReroute ? "Route changed — tap to refresh" : "Refresh route"}
+          </Text>
+        </TouchableOpacity>
       )}
 
       {/* ── Notify banner ── */}
@@ -1080,12 +1093,6 @@ export default function CommuteScreen() {
             <Text style={styles.liveBadgeText}>{isConnected ? "LIVE" : "CONNECTING"}</Text>
           </View>
 
-          {reroutingVisible && (
-            <View style={styles.rerouteMapOverlay}>
-              <ActivityIndicator size="large" color="white" />
-              <Text style={styles.rerouteMapOverlayText}>Finding a new route…</Text>
-            </View>
-          )}
         </View>
 
         {/* ── Hero Section ── */}
@@ -1365,17 +1372,17 @@ const styles = StyleSheet.create({
   },
 
   // ── Banners ──────────────────────────────────────────────────────────────
-  rerouteBanner: {
+  refreshButton: {
     backgroundColor: theme.colors.primary,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: 8,
-    paddingVertical: 10,
+    paddingVertical: 12,
     paddingHorizontal: theme.spacing.screen,
     zIndex: 10,
   },
-  rerouteBannerText: {
+  refreshButtonText: {
     color: "white",
     fontSize: 14,
     fontWeight: "700",
@@ -1495,19 +1502,6 @@ const styles = StyleSheet.create({
   liveBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "white" },
   liveBadgeDotOffline: { backgroundColor: "#FEF3C7" },
   liveBadgeText: { color: "white", fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
-  rerouteMapOverlay: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 10,
-  },
-  rerouteMapOverlayText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "700",
-    letterSpacing: 0.2,
-  },
 
   // ── Hero ─────────────────────────────────────────────────────────────────
   hero: {

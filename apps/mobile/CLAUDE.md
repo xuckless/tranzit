@@ -159,7 +159,7 @@ Manages active trip sessions. Used by `routes.tsx` and `commute.tsx`.
 
 | Method | Path | Purpose |
 |--------|------|---------|
-| `POST` | `/trips` | Creates a trip session. Body: `{ route, origin, destination, device_id }`. Returns `{ session_id, ws_url }`. |
+| `POST` | `/trips` | Creates a trip session. Body: `{ route, destination_place_id, origin? }`. **Required:** `route`, `destination_place_id`. **Optional:** `origin` (`{lat,lng}`), `destination` (object), `device_id`. Returns `{ session_id, ws_url }`. (Contract verified against the live server — the required field is `destination_place_id`, **not** `destination`.) |
 | `DELETE` | `/trips/{session_id}` | Ends a trip session. Called when the user taps "End Journey". |
 | `WS` | `/trips/{session_id}/ws` | WebSocket connection. Receives `STATE`, `REROUTE`, `NOTIFY` messages. Sends `LOCATION`, `UNSURE_RESPONSE`, `RESUME`. |
 
