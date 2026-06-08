@@ -32,9 +32,17 @@ import { parseRoute } from "@/lib/routeParser";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { normalizeColor } from "@/components/routes/RoutePickerSheet";
 import { scheduleBoarding, cancelBoarding } from "@/lib/boardingNotifications";
-import { startTripActivity, updateTripActivity, endTripActivity } from "@/lib/liveActivity";
+import {
+  startTripActivity,
+  updateTripActivity,
+  endTripActivity,
+} from "@/lib/liveActivity";
 import type { Route } from "@/types/places";
-import type { ServerStopStatus, TripStateMsg, TripSnapshotMsg } from "@/types/trip";
+import type {
+  ServerStopStatus,
+  TripStateMsg,
+  TripSnapshotMsg,
+} from "@/types/trip";
 
 const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
 const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
@@ -77,12 +85,48 @@ interface CommuteStop {
 }
 
 const REPORT_TYPES: ReportType[] = [
-  { id: "crowd",  label: "Crowded",      pastel: "sky",      iconLib: "ionicons", icon: "people" },
-  { id: "delay",  label: "Delay",        pastel: "butter",   iconLib: "ionicons", icon: "time" },
-  { id: "safety", label: "Safety",       pastel: "rose",     iconLib: "ionicons", icon: "shield" },
-  { id: "vandal", label: "Vandalism",    pastel: "peach",    iconLib: "fa5",      icon: "spray-can" },
-  { id: "cons",   label: "Construction", pastel: "mint",     iconLib: "mci",      icon: "traffic-cone" },
-  { id: "other",  label: "Other",        pastel: "lavender", iconLib: "ionicons", icon: "sparkles" },
+  {
+    id: "crowd",
+    label: "Crowded",
+    pastel: "sky",
+    iconLib: "ionicons",
+    icon: "people",
+  },
+  {
+    id: "delay",
+    label: "Delay",
+    pastel: "butter",
+    iconLib: "ionicons",
+    icon: "time",
+  },
+  {
+    id: "safety",
+    label: "Safety",
+    pastel: "rose",
+    iconLib: "ionicons",
+    icon: "shield",
+  },
+  {
+    id: "vandal",
+    label: "Vandalism",
+    pastel: "peach",
+    iconLib: "fa5",
+    icon: "spray-can",
+  },
+  {
+    id: "cons",
+    label: "Construction",
+    pastel: "mint",
+    iconLib: "mci",
+    icon: "traffic-cone",
+  },
+  {
+    id: "other",
+    label: "Other",
+    pastel: "lavender",
+    iconLib: "ionicons",
+    icon: "sparkles",
+  },
 ];
 
 const SEVERITY_LABELS = ["A little", "Notable", "Pretty bad", "Critical"];
@@ -124,11 +168,16 @@ function parseDurationSecs(duration: string): number | null {
 
 function serverStatusToLocal(s: ServerStopStatus): CommuteStopStatus {
   switch (s) {
-    case "ACTIVE":    return "current";
-    case "COMPLETED": return "departed";
-    case "UNSURE":    return "unsure";
-    case "MISSED":    return "missed";
-    default:          return "upcoming";
+    case "ACTIVE":
+      return "current";
+    case "COMPLETED":
+      return "departed";
+    case "UNSURE":
+      return "unsure";
+    case "MISSED":
+      return "missed";
+    default:
+      return "upcoming";
   }
 }
 
@@ -154,7 +203,16 @@ function DashedConnector() {
   return (
     <View style={{ flex: 1, alignItems: "center", marginTop: 3 }}>
       {Array.from({ length: 8 }).map((_, i) => (
-        <View key={i} style={{ width: 2, height: 4, backgroundColor: "#BBCBB9", marginBottom: 3, borderRadius: 1 }} />
+        <View
+          key={i}
+          style={{
+            width: 2,
+            height: 4,
+            backgroundColor: "#BBCBB9",
+            marginBottom: 3,
+            borderRadius: 1,
+          }}
+        />
       ))}
     </View>
   );
@@ -162,10 +220,25 @@ function DashedConnector() {
 
 // ─── ReportIcon ───────────────────────────────────────────────────────────────
 
-function ReportIcon({ lib, name, size, color }: { lib: "ionicons" | "fa5" | "fa6" | "mci"; name: string; size: number; color: string }) {
-  if (lib === "fa5") return <FontAwesome5 name={name as any} size={size} color={color} />;
-  if (lib === "fa6") return <FontAwesome6 name={name as any} size={size} color={color} />;
-  if (lib === "mci") return <MaterialCommunityIcons name={name as any} size={size} color={color} />;
+function ReportIcon({
+  lib,
+  name,
+  size,
+  color,
+}: {
+  lib: "ionicons" | "fa5" | "fa6" | "mci";
+  name: string;
+  size: number;
+  color: string;
+}) {
+  if (lib === "fa5")
+    return <FontAwesome5 name={name as any} size={size} color={color} />;
+  if (lib === "fa6")
+    return <FontAwesome6 name={name as any} size={size} color={color} />;
+  if (lib === "mci")
+    return (
+      <MaterialCommunityIcons name={name as any} size={size} color={color} />
+    );
   return <Ionicons name={name as any} size={size} color={color} />;
 }
 
@@ -192,12 +265,28 @@ function StopItem({
     const loop = Animated.loop(
       Animated.parallel([
         Animated.sequence([
-          Animated.timing(pulseScale, { toValue: 1.6, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseScale, { toValue: 0.85, duration: 1000, useNativeDriver: true }),
+          Animated.timing(pulseScale, {
+            toValue: 1.6,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseScale, {
+            toValue: 0.85,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
         ]),
         Animated.sequence([
-          Animated.timing(pulseOpacity, { toValue: 0, duration: 1000, useNativeDriver: true }),
-          Animated.timing(pulseOpacity, { toValue: 0.7, duration: 1000, useNativeDriver: true }),
+          Animated.timing(pulseOpacity, {
+            toValue: 0,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
+          Animated.timing(pulseOpacity, {
+            toValue: 0.7,
+            duration: 1000,
+            useNativeDriver: true,
+          }),
         ]),
       ]),
     );
@@ -212,24 +301,34 @@ function StopItem({
     <View style={styles.stopRow}>
       {/* ── Timeline column ── */}
       <View style={styles.stopTimelineCol}>
-        {(isCurrent || isUnsure) ? (
+        {isCurrent || isUnsure ? (
           <View style={styles.currentDotContainer}>
             <Animated.View
               style={[
                 styles.currentDotRing,
-                { transform: [{ scale: pulseScale }], opacity: pulseOpacity, backgroundColor: dotRingColor },
+                {
+                  transform: [{ scale: pulseScale }],
+                  opacity: pulseOpacity,
+                  backgroundColor: dotRingColor,
+                },
               ]}
             />
-            <View style={[styles.currentDot, { backgroundColor: dotColor, borderColor: "white" }]}>
+            <View
+              style={[
+                styles.currentDot,
+                { backgroundColor: dotColor, borderColor: "white" },
+              ]}
+            >
               <View style={styles.currentDotCore} />
             </View>
           </View>
-        ) : (isDeparted || isMissed) ? (
+        ) : isDeparted || isMissed ? (
           <View style={[styles.departedDot, isMissed && styles.missedDot]}>
-            {isMissed
-              ? <Ionicons name="close" size={11} color="#EF4444" />
-              : <Ionicons name="checkmark" size={11} color={theme.colors.ink3} />
-            }
+            {isMissed ? (
+              <Ionicons name="close" size={11} color="#EF4444" />
+            ) : (
+              <Ionicons name="checkmark" size={11} color={theme.colors.ink3} />
+            )}
           </View>
         ) : isDestination ? (
           <View style={styles.destinationDot}>
@@ -265,20 +364,38 @@ function StopItem({
           isUnsure && styles.stopContentOuterUnsure,
         ]}
       >
-        {(isCurrent || isUnsure) ? (
+        {isCurrent || isUnsure ? (
           <>
             <View style={styles.stopRowInner}>
-              <Text style={[styles.currentStopName, isUnsure && { color: "#D97706" }]} numberOfLines={1}>
+              <Text
+                style={[
+                  styles.currentStopName,
+                  isUnsure && { color: "#D97706" },
+                ]}
+                numberOfLines={1}
+              >
                 {stop.name}
               </Text>
               {stop.time && (
-                <Text style={[styles.stopTimeText, { color: isUnsure ? "#D97706" : theme.colors.primary }]}>
+                <Text
+                  style={[
+                    styles.stopTimeText,
+                    { color: isUnsure ? "#D97706" : theme.colors.primary },
+                  ]}
+                >
                   {stop.time}
                 </Text>
               )}
             </View>
-            <View style={[styles.currentStopChip, isUnsure && styles.unsureChip]}>
-              <Text style={[styles.currentStopChipText, isUnsure && { color: "#92400E" }]}>
+            <View
+              style={[styles.currentStopChip, isUnsure && styles.unsureChip]}
+            >
+              <Text
+                style={[
+                  styles.currentStopChipText,
+                  isUnsure && { color: "#92400E" },
+                ]}
+              >
                 {isUnsure
                   ? `${stop.transitName ? `${stop.transitName} · ` : ""}Confirm Boarding?`
                   : `${stop.transitName ? `${stop.transitName} · ` : ""}Current Stop`}
@@ -286,12 +403,16 @@ function StopItem({
             </View>
             {stop.timeRemaining !== undefined && (
               <View style={styles.stopMetaRow}>
-                <Text style={[
-                  styles.stopTimeDelta,
-                  stop.timeRemaining > 60 ? styles.stopTimeDeltaUpcoming
-                    : stop.timeRemaining < -60 ? styles.stopTimeDeltaPast
-                    : styles.stopTimeDeltaOnTime,
-                ]}>
+                <Text
+                  style={[
+                    styles.stopTimeDelta,
+                    stop.timeRemaining > 60
+                      ? styles.stopTimeDeltaUpcoming
+                      : stop.timeRemaining < -60
+                        ? styles.stopTimeDeltaPast
+                        : styles.stopTimeDeltaOnTime,
+                  ]}
+                >
                   {formatTimeDelta(stop.timeRemaining)}
                 </Text>
               </View>
@@ -312,7 +433,12 @@ function StopItem({
                 {stop.name}
               </Text>
               {stop.time && (
-                <Text style={[styles.stopTimeText, (isDeparted || isMissed) && { opacity: 0.5 }]}>
+                <Text
+                  style={[
+                    styles.stopTimeText,
+                    (isDeparted || isMissed) && { opacity: 0.5 },
+                  ]}
+                >
                   {stop.time}
                 </Text>
               )}
@@ -320,29 +446,38 @@ function StopItem({
             {isDestination && (
               <Text style={styles.destinationLabel}>Final Destination</Text>
             )}
-            {isMissed && (
-              <Text style={styles.missedLabel}>Missed</Text>
-            )}
-            {stop.mode === "TRANSIT" && (stop.transitName || stop.timeRemaining !== undefined) && (
-              <View style={styles.stopMetaRow}>
-                {stop.transitName && (
-                  <View style={styles.stopRouteBadge}>
-                    <Ionicons name="bus-outline" size={10} color={theme.colors.ink3} />
-                    <Text style={styles.stopRouteBadgeText}>{stop.transitName}</Text>
-                  </View>
-                )}
-                {stop.timeRemaining !== undefined && (
-                  <Text style={[
-                    styles.stopTimeDelta,
-                    stop.timeRemaining > 60 ? styles.stopTimeDeltaUpcoming
-                      : stop.timeRemaining < -60 ? styles.stopTimeDeltaPast
-                      : styles.stopTimeDeltaOnTime,
-                  ]}>
-                    {formatTimeDelta(stop.timeRemaining)}
-                  </Text>
-                )}
-              </View>
-            )}
+            {isMissed && <Text style={styles.missedLabel}>Missed</Text>}
+            {stop.mode === "TRANSIT" &&
+              (stop.transitName || stop.timeRemaining !== undefined) && (
+                <View style={styles.stopMetaRow}>
+                  {stop.transitName && (
+                    <View style={styles.stopRouteBadge}>
+                      <Ionicons
+                        name="bus-outline"
+                        size={10}
+                        color={theme.colors.ink3}
+                      />
+                      <Text style={styles.stopRouteBadgeText}>
+                        {stop.transitName}
+                      </Text>
+                    </View>
+                  )}
+                  {stop.timeRemaining !== undefined && (
+                    <Text
+                      style={[
+                        styles.stopTimeDelta,
+                        stop.timeRemaining > 60
+                          ? styles.stopTimeDeltaUpcoming
+                          : stop.timeRemaining < -60
+                            ? styles.stopTimeDeltaPast
+                            : styles.stopTimeDeltaOnTime,
+                      ]}
+                    >
+                      {formatTimeDelta(stop.timeRemaining)}
+                    </Text>
+                  )}
+                </View>
+              )}
           </>
         )}
       </View>
@@ -376,8 +511,12 @@ export default function CommuteScreen() {
 
   // NOTIFY / REROUTE UI state
   const [notifyBanner, setNotifyBanner] = useState<string | null>(null);
-  const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(null);
-  const [boardingConfirmMsg, setBoardingConfirmMsg] = useState<string | null>(null);
+  const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(
+    null,
+  );
+  const [boardingConfirmMsg, setBoardingConfirmMsg] = useState<string | null>(
+    null,
+  );
   // A reroute was received from the server but not yet applied to the polyline.
   // Applied manually via the Refresh button (no automatic reroute churn).
   const [pendingReroute, setPendingReroute] = useState(false);
@@ -400,8 +539,15 @@ export default function CommuteScreen() {
   const allVehicles = useVehicles();
 
   // ── WebSocket ──────────────────────────────────────────────────────────────
-  const { tripState, lastReroute, lastNotify, isConnected, sendLocation, sendUnsureResponse, disconnect } =
-    useTripWebSocket(wsPath);
+  const {
+    tripState,
+    lastReroute,
+    lastNotify,
+    isConnected,
+    sendLocation,
+    sendUnsureResponse,
+    disconnect,
+  } = useTripWebSocket(wsPath);
 
   // ── Load from routeStore on focus ─────────────────────────────────────────
   useFocusEffect(
@@ -428,10 +574,16 @@ export default function CommuteScreen() {
   );
 
   // ── Keep cross-effect refs in sync ────────────────────────────────────────
-  useEffect(() => { boardingConfirmStopRef.current = boardingConfirmStop; }, [boardingConfirmStop]);
+  useEffect(() => {
+    boardingConfirmStopRef.current = boardingConfirmStop;
+  }, [boardingConfirmStop]);
   useEffect(() => {
     tripStateRef.current = tripState;
-    if (tripState) console.log("[routeSave] STATE response:", JSON.stringify(tripState, null, 2));
+    if (tripState)
+      console.log(
+        "[routeSave] STATE response:",
+        JSON.stringify(tripState, null, 2),
+      );
   }, [tripState]);
 
   // ── NOTIFY handler ─────────────────────────────────────────────────────────
@@ -506,7 +658,10 @@ export default function CommuteScreen() {
             timeInterval: 3000,
           },
           ({ coords }) => {
-            setUserLocation({ latitude: coords.latitude, longitude: coords.longitude });
+            setUserLocation({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+            });
             if (coords.speed != null && coords.speed >= 0) {
               setCurrentSpeed(Math.round(coords.speed * 3.6));
             }
@@ -525,7 +680,10 @@ export default function CommuteScreen() {
           },
         );
 
-        if (cancelled) { sub.remove(); return; }
+        if (cancelled) {
+          sub.remove();
+          return;
+        }
         locationSubRef.current = sub;
       } catch (e) {
         console.error("[commute] GPS subscription failed:", e);
@@ -549,7 +707,11 @@ export default function CommuteScreen() {
     const ids = (route.legs ?? [])
       .flatMap((l) => l.steps ?? [])
       .filter((s) => s.travelMode === "TRANSIT")
-      .map((s) => s.transitDetails?.transitLine?.nameShort || s.transitDetails?.transitLine?.name)
+      .map(
+        (s) =>
+          s.transitDetails?.transitLine?.nameShort ||
+          s.transitDetails?.transitLine?.name,
+      )
       .filter((id): id is string => Boolean(id));
     return [...new Set(ids)];
   }, [tripState, route]);
@@ -558,24 +720,32 @@ export default function CommuteScreen() {
     () =>
       transitRouteIds.length === 0
         ? []
-        : allVehicles.filter((v) => v.route_id != null && transitRouteIds.includes(v.route_id)),
+        : allVehicles.filter(
+            (v) => v.route_id != null && transitRouteIds.includes(v.route_id),
+          ),
     [allVehicles, transitRouteIds],
   );
 
-  const vehiclesGeoJSON = useMemo(() => vehiclesToGeoJSON(routeVehicles), [routeVehicles]);
+  const vehiclesGeoJSON = useMemo(
+    () => vehiclesToGeoJSON(routeVehicles),
+    [routeVehicles],
+  );
 
   // ── Stop GeoJSON from Route Save STATE ────────────────────────────────────
-  const routeStopsGeoJSON = useMemo(() => ({
-    type: "FeatureCollection" as const,
-    features: (tripState?.stops ?? []).map((s) => ({
-      type: "Feature" as const,
-      properties: { stop_id: s.stop_id, status: s.status },
-      geometry: {
-        type: "Point" as const,
-        coordinates: [s.lng, s.lat] as [number, number],
-      },
-    })),
-  }), [tripState]);
+  const routeStopsGeoJSON = useMemo(
+    () => ({
+      type: "FeatureCollection" as const,
+      features: (tripState?.stops ?? []).map((s) => ({
+        type: "Feature" as const,
+        properties: { stop_id: s.stop_id, status: s.status },
+        geometry: {
+          type: "Point" as const,
+          coordinates: [s.lng, s.lat] as [number, number],
+        },
+      })),
+    }),
+    [tripState],
+  );
 
   // ── Build display stops from STATE ────────────────────────────────────────
   const stops = useMemo((): CommuteStop[] => {
@@ -586,7 +756,12 @@ export default function CommuteScreen() {
       // Fallback while WS connects: show origin + destination placeholders
       return [
         { id: "origin", name: originLabel, status: "departed", mode: "WALK" },
-        { id: "destination", name: destLabel, status: "destination", mode: "WALK" },
+        {
+          id: "destination",
+          name: destLabel,
+          status: "destination",
+          mode: "WALK",
+        },
       ];
     }
 
@@ -604,7 +779,12 @@ export default function CommuteScreen() {
     return [
       { id: "origin", name: originLabel, status: "departed", mode: "WALK" },
       ...serverStops,
-      { id: "destination", name: destLabel, status: "destination", mode: "WALK" },
+      {
+        id: "destination",
+        name: destLabel,
+        status: "destination",
+        mode: "WALK",
+      },
     ];
   }, [tripState, originInfo, destinationInfo]);
 
@@ -654,14 +834,19 @@ export default function CommuteScreen() {
           c.latitude,
           c.longitude,
         );
-        if (d < minDist) { minDist = d; splitIdx = i; }
+        if (d < minDist) {
+          minDist = d;
+          splitIdx = i;
+        }
       });
     }
 
     const transitStep = (route.legs ?? [])
       .flatMap((l) => l.steps ?? [])
       .find((s) => s.travelMode === "TRANSIT");
-    const lineColor = normalizeColor(transitStep?.transitDetails?.transitLine?.color);
+    const lineColor = normalizeColor(
+      transitStep?.transitDetails?.transitLine?.color,
+    );
 
     const completed = allCoords.slice(0, splitIdx + 1);
     const remaining = allCoords.slice(splitIdx);
@@ -706,7 +891,10 @@ export default function CommuteScreen() {
           properties: { status: s.status },
           geometry: {
             type: "Point" as const,
-            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [number, number],
+            coordinates: [s.coordinate!.longitude, s.coordinate!.latitude] as [
+              number,
+              number,
+            ],
           },
         })),
     }),
@@ -722,7 +910,8 @@ export default function CommuteScreen() {
     );
     const currentStop =
       activeIdx >= 0 ? tripState.stops[activeIdx] : tripState.stops[0];
-    const nextStop = activeIdx >= 0 ? (tripState.stops[activeIdx + 1] ?? null) : null;
+    const nextStop =
+      activeIdx >= 0 ? (tripState.stops[activeIdx + 1] ?? null) : null;
     const lastStop = tripState.stops[tripState.stops.length - 1];
     const etaMin = lastStop
       ? Math.max(0, Math.round(lastStop.time_remaining_s / 60))
@@ -735,11 +924,15 @@ export default function CommuteScreen() {
       tripState.stops.length > 0 ? completedCount / tripState.stops.length : 0;
 
     const windowStart = Math.max(0, activeIdx - 2);
-    const windowEnd = Math.min(tripState.stops.length, activeIdx < 0 ? 5 : activeIdx + 3);
+    const windowEnd = Math.min(
+      tripState.stops.length,
+      activeIdx < 0 ? 5 : activeIdx + 3,
+    );
     const dotWindow = tripState.stops.slice(windowStart, windowEnd);
     const progressDots = dotWindow.map(
       (s): "departed" | "current" | "upcoming" => {
-        if (s.status === "COMPLETED" || s.status === "MISSED") return "departed";
+        if (s.status === "COMPLETED" || s.status === "MISSED")
+          return "departed";
         if (s.status === "ACTIVE" || s.status === "UNSURE") return "current";
         return "upcoming";
       },
@@ -824,16 +1017,19 @@ export default function CommuteScreen() {
 
   const completedProgressSteps = useMemo(() => {
     return Math.floor(
-      (completedStopCount / Math.max(1, stops.length - 1)) * progressLabels.length,
+      (completedStopCount / Math.max(1, stops.length - 1)) *
+        progressLabels.length,
     );
   }, [completedStopCount, stops.length, progressLabels.length]);
 
   const serverStopTotal = tripState?.stops?.length ?? 0;
   const serverStopCompleted = useMemo(
-    () => (tripState?.stops ?? []).filter((s) => s.status === "COMPLETED").length,
+    () =>
+      (tripState?.stops ?? []).filter((s) => s.status === "COMPLETED").length,
     [tripState],
   );
-  const progressFillPct = serverStopTotal > 1 ? serverStopCompleted / (serverStopTotal - 1) : 0;
+  const progressFillPct =
+    serverStopTotal > 1 ? serverStopCompleted / (serverStopTotal - 1) : 0;
 
   // ── Boarding instruction ──────────────────────────────────────────────────
   const boardingStep = useMemo(() => {
@@ -841,8 +1037,11 @@ export default function CommuteScreen() {
     const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
     const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
     // Find the first transit step that hasn't been fully completed
-    const currentIdx = stops.findIndex((s) => s.status === "current" || s.status === "unsure");
-    const completedFrac = currentIdx >= 0 ? currentIdx / Math.max(1, stops.length - 1) : 0;
+    const currentIdx = stops.findIndex(
+      (s) => s.status === "current" || s.status === "unsure",
+    );
+    const completedFrac =
+      currentIdx >= 0 ? currentIdx / Math.max(1, stops.length - 1) : 0;
     const completedStepIdx = Math.floor(completedFrac * allSteps.length);
     const active = allSteps
       .map((s, i) => ({ step: s, i }))
@@ -857,7 +1056,8 @@ export default function CommuteScreen() {
   }, [route]);
 
   const activeTransitName =
-    stops.find((s) => s.status === "current" || s.status === "unsure")?.transitName ||
+    stops.find((s) => s.status === "current" || s.status === "unsure")
+      ?.transitName ||
     boardingStep?.transitDetails?.transitLine?.nameShort ||
     boardingStep?.transitDetails?.transitLine?.name ||
     "Transit";
@@ -979,7 +1179,9 @@ export default function CommuteScreen() {
         >
           <Ionicons name="refresh" size={18} color="white" />
           <Text style={styles.refreshButtonText}>
-            {pendingReroute ? "Route changed — tap to refresh" : "Refresh route"}
+            {pendingReroute
+              ? "Route changed — tap to refresh"
+              : "Refresh route"}
           </Text>
         </TouchableOpacity>
       )}
@@ -991,8 +1193,14 @@ export default function CommuteScreen() {
           onPress={() => setNotifyBanner(null)}
           activeOpacity={0.85}
         >
-          <Ionicons name="information-circle" size={18} color={theme.colors.primaryInk} />
-          <Text style={styles.notifyBannerText} numberOfLines={2}>{notifyBanner}</Text>
+          <Ionicons
+            name="information-circle"
+            size={18}
+            color={theme.colors.primaryInk}
+          />
+          <Text style={styles.notifyBannerText} numberOfLines={2}>
+            {notifyBanner}
+          </Text>
           <Ionicons name="close" size={16} color={theme.colors.primaryInk} />
         </TouchableOpacity>
       )}
@@ -1000,7 +1208,12 @@ export default function CommuteScreen() {
       {/* ── Boarding confirm prompt ── */}
       {boardingConfirmStop && (
         <View style={styles.boardingConfirmOverlay}>
-          <View style={[styles.boardingConfirmCard, { backgroundColor: colors.card }]}>
+          <View
+            style={[
+              styles.boardingConfirmCard,
+              { backgroundColor: colors.card },
+            ]}
+          >
             <Text style={styles.boardingConfirmTitle}>Did you board?</Text>
             <Text style={styles.boardingConfirmSub}>
               {boardingConfirmMsg ??
@@ -1017,7 +1230,9 @@ export default function CommuteScreen() {
                 }}
                 activeOpacity={0.85}
               >
-                <Text style={styles.boardingConfirmBtnText}>Yes, I boarded</Text>
+                <Text style={styles.boardingConfirmBtnText}>
+                  Yes, I boarded
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.boardingConfirmBtn, styles.boardingConfirmNo]}
@@ -1029,7 +1244,12 @@ export default function CommuteScreen() {
                 }}
                 activeOpacity={0.85}
               >
-                <Text style={[styles.boardingConfirmBtnText, { color: theme.colors.ink }]}>
+                <Text
+                  style={[
+                    styles.boardingConfirmBtnText,
+                    { color: theme.colors.ink },
+                  ]}
+                >
                   I missed it
                 </Text>
               </TouchableOpacity>
@@ -1057,9 +1277,16 @@ export default function CommuteScreen() {
               initialViewState={{ center: CALGARY_CENTER, zoom: 13 }}
             />
             <UserLocation heading={true} animated={true} />
-            <Images images={{ tranzitBus: require("@/assets/images/tranzit_busView.png") }} />
+            <Images
+              images={{
+                tranzitBus: require("@/assets/images/tranzit_busView.png"),
+              }}
+            />
 
-            <GeoJSONSource id="commute-route-source" data={routePolylinesGeoJSON}>
+            <GeoJSONSource
+              id="commute-route-source"
+              data={routePolylinesGeoJSON}
+            >
               <Layer
                 id="commute-route-line"
                 type="line"
@@ -1074,14 +1301,26 @@ export default function CommuteScreen() {
                 type="circle"
                 minzoom={MIN_MARKER_ZOOM}
                 paint={{
-                  "circle-radius": ["match", ["get", "status"], "ACTIVE", 7, "UNSURE", 7, 4],
+                  "circle-radius": [
+                    "match",
+                    ["get", "status"],
+                    "ACTIVE",
+                    7,
+                    "UNSURE",
+                    7,
+                    4,
+                  ],
                   "circle-color": [
                     "match",
                     ["get", "status"],
-                    "COMPLETED", theme.colors.primary,
-                    "ACTIVE",   theme.colors.primary,
-                    "UNSURE",   "#F59E0B",
-                    "MISSED",   "#EF4444",
+                    "COMPLETED",
+                    theme.colors.primary,
+                    "ACTIVE",
+                    theme.colors.primary,
+                    "UNSURE",
+                    "#F59E0B",
+                    "MISSED",
+                    "#EF4444",
                     "#C1C6D7",
                   ],
                   "circle-stroke-color": "white",
@@ -1091,24 +1330,48 @@ export default function CommuteScreen() {
               />
             </GeoJSONSource>
 
-            <GeoJSONSource id="commute-timeline-source" data={timelineStopsGeoJSON}>
+            <GeoJSONSource
+              id="commute-timeline-source"
+              data={timelineStopsGeoJSON}
+            >
               <Layer
                 id="commute-timeline-circle"
                 type="circle"
                 paint={{
-                  "circle-radius": ["match", ["get", "status"], "current", 9, "unsure", 9, 6],
+                  "circle-radius": [
+                    "match",
+                    ["get", "status"],
+                    "current",
+                    9,
+                    "unsure",
+                    9,
+                    6,
+                  ],
                   "circle-color": [
                     "match",
                     ["get", "status"],
-                    "departed",    theme.colors.primary,
-                    "current",     theme.colors.primary,
-                    "unsure",      "#F59E0B",
-                    "missed",      "#EF4444",
-                    "destination", theme.colors.secondary,
+                    "departed",
+                    theme.colors.primary,
+                    "current",
+                    theme.colors.primary,
+                    "unsure",
+                    "#F59E0B",
+                    "missed",
+                    "#EF4444",
+                    "destination",
+                    theme.colors.secondary,
                     "#C1C6D7",
                   ],
                   "circle-stroke-color": "white",
-                  "circle-stroke-width": ["match", ["get", "status"], "current", 4, "unsure", 4, 2],
+                  "circle-stroke-width": [
+                    "match",
+                    ["get", "status"],
+                    "current",
+                    4,
+                    "unsure",
+                    4,
+                    2,
+                  ],
                 }}
               />
             </GeoJSONSource>
@@ -1150,10 +1413,16 @@ export default function CommuteScreen() {
           </Map>
 
           <View style={styles.liveBadge}>
-            <View style={[styles.liveBadgeDot, !isConnected && styles.liveBadgeDotOffline]} />
-            <Text style={styles.liveBadgeText}>{isConnected ? "LIVE" : "CONNECTING"}</Text>
+            <View
+              style={[
+                styles.liveBadgeDot,
+                !isConnected && styles.liveBadgeDotOffline,
+              ]}
+            />
+            <Text style={styles.liveBadgeText}>
+              {isConnected ? "LIVE" : "CONNECTING"}
+            </Text>
           </View>
-
         </View>
 
         {/* ── Hero Section ── */}
@@ -1162,7 +1431,11 @@ export default function CommuteScreen() {
             <View style={styles.heroBadgeRow}>
               {boardingStep ? (
                 <View style={styles.lineBadge}>
-                  <Ionicons name="bus-outline" size={13} color={theme.colors.primaryInk} />
+                  <Ionicons
+                    name="bus-outline"
+                    size={13}
+                    color={theme.colors.primaryInk}
+                  />
                   <Text style={styles.lineBadgeText}>
                     {boardingStep.transitDetails?.transitLine?.nameShort ||
                       boardingStep.transitDetails?.transitLine?.name ||
@@ -1172,20 +1445,36 @@ export default function CommuteScreen() {
                       : ""}
                   </Text>
                 </View>
-              ) : <View />}
+              ) : (
+                <View />
+              )}
               {co2Saved != null ? (
                 <View style={styles.heroCo2Row}>
-                  <MaterialCommunityIcons name="leaf" size={14} color={theme.colors.primaryInk} />
-                  <Text style={styles.heroCo2Text}>{co2Saved} kg CO₂ saved</Text>
+                  <MaterialCommunityIcons
+                    name="leaf"
+                    size={14}
+                    color={theme.colors.primaryInk}
+                  />
+                  <Text style={styles.heroCo2Text}>
+                    {co2Saved} kg CO₂ saved
+                  </Text>
                 </View>
-              ) : <View />}
+              ) : (
+                <View />
+              )}
             </View>
           )}
 
           <View style={styles.heroEtaLabelRow}>
-            <Text style={styles.heroEtaLabel}>Arriving in</Text>
+            <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
+              Arriving in
+            </Text>
             <View style={styles.heroSpeedBadge}>
-              <Ionicons name="speedometer-outline" size={15} color={theme.colors.ink3} />
+              <Ionicons
+                name="speedometer-outline"
+                size={15}
+                color={theme.colors.ink3}
+              />
               <Text style={styles.heroSpeedText}>
                 {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
               </Text>
@@ -1217,25 +1506,40 @@ export default function CommuteScreen() {
                 </Text>
               </View>
               <View style={styles.arrivalBadge}>
-                <Text style={styles.arrivalBadgeText}>{arrivalTime ?? "--:--"}</Text>
+                <Text style={styles.arrivalBadgeText}>
+                  {arrivalTime ?? "--:--"}
+                </Text>
               </View>
             </View>
 
             <View style={styles.progressBarTrack}>
-              <View style={[styles.progressBarFill, { width: `${progressFillPct * 100}%` as any }]} />
+              <View
+                style={[
+                  styles.progressBarFill,
+                  { width: `${progressFillPct * 100}%` as any },
+                ]}
+              />
               {progressFillPct > 0 && progressFillPct < 1 && (
-                <View style={[styles.progressThumb, { left: `${progressFillPct * 100}%` as any }]} />
-              )}
-              {serverStopTotal > 1 && Array.from({ length: serverStopTotal }).map((_, i) => (
                 <View
-                  key={i}
                   style={[
-                    styles.progressTick,
-                    { left: `${(i / (serverStopTotal - 1)) * 100}%` as any },
-                    i < serverStopCompleted ? styles.progressTickDone : undefined,
+                    styles.progressThumb,
+                    { left: `${progressFillPct * 100}%` as any },
                   ]}
                 />
-              ))}
+              )}
+              {serverStopTotal > 1 &&
+                Array.from({ length: serverStopTotal }).map((_, i) => (
+                  <View
+                    key={i}
+                    style={[
+                      styles.progressTick,
+                      { left: `${(i / (serverStopTotal - 1)) * 100}%` as any },
+                      i < serverStopCompleted
+                        ? styles.progressTickDone
+                        : undefined,
+                    ]}
+                  />
+                ))}
             </View>
 
             <View style={styles.progressLabels}>
@@ -1244,7 +1548,9 @@ export default function CommuteScreen() {
                   key={i}
                   style={[
                     styles.progressLabel,
-                    i < completedProgressSteps && { color: theme.colors.primary },
+                    i < completedProgressSteps && {
+                      color: theme.colors.primary,
+                    },
                   ]}
                 >
                   {label}
@@ -1254,9 +1560,18 @@ export default function CommuteScreen() {
           </View>
 
           {/* ── Route Progress Timeline ── */}
-          <View style={[styles.timelineCard, { backgroundColor: colors.surface2, borderColor: colors.divider }]}>
+          <View
+            style={[
+              styles.timelineCard,
+              { backgroundColor: colors.surface2, borderColor: colors.divider },
+            ]}
+          >
             <View style={styles.sectionLabelRow}>
-              <Ionicons name="navigate" size={15} color={theme.colors.primary} />
+              <Ionicons
+                name="navigate"
+                size={15}
+                color={theme.colors.primary}
+              />
               <Text style={styles.sectionLabel}>ROUTE PROGRESS</Text>
             </View>
 
@@ -1266,15 +1581,27 @@ export default function CommuteScreen() {
                 let connectorType: ConnectorType = "none";
                 if (!isLast) {
                   const next = stops[i + 1];
-                  if (stop.status === "departed" && (next?.status === "departed" || next?.status === "missed")) {
+                  if (
+                    stop.status === "departed" &&
+                    (next?.status === "departed" || next?.status === "missed")
+                  ) {
                     connectorType = "solid-gray";
-                  } else if (stop.status === "departed" && (next?.status === "current" || next?.status === "unsure")) {
+                  } else if (
+                    stop.status === "departed" &&
+                    (next?.status === "current" || next?.status === "unsure")
+                  ) {
                     connectorType = "solid-primary";
                   } else {
                     connectorType = "dashed";
                   }
                 }
-                return <StopItem key={stop.id} stop={stop} connectorType={connectorType} />;
+                return (
+                  <StopItem
+                    key={stop.id}
+                    stop={stop}
+                    connectorType={connectorType}
+                  />
+                );
               })}
             </View>
           </View>
@@ -1285,8 +1612,12 @@ export default function CommuteScreen() {
               <View style={styles.boardingIcon}>
                 <Ionicons
                   name={
-                    boardingStep.transitDetails?.transitLine?.name?.toLowerCase().includes("ctrain") ||
-                    boardingStep.transitDetails?.transitLine?.nameShort?.toLowerCase().includes("ctrain")
+                    boardingStep.transitDetails?.transitLine?.name
+                      ?.toLowerCase()
+                      .includes("ctrain") ||
+                    boardingStep.transitDetails?.transitLine?.nameShort
+                      ?.toLowerCase()
+                      .includes("ctrain")
                       ? "train"
                       : "bus"
                   }
@@ -1295,7 +1626,9 @@ export default function CommuteScreen() {
                 />
               </View>
               <View style={styles.boardingContent}>
-                <Text style={styles.boardingCategory}>BOARDING INSTRUCTION</Text>
+                <Text style={styles.boardingCategory}>
+                  BOARDING INSTRUCTION
+                </Text>
                 <Text style={styles.boardingTitle}>
                   {`Board the ${boardingStep.transitDetails?.transitLine?.name || "Transit"}\ntowards ${boardingStep.transitDetails?.headsign || "destination"}`}
                 </Text>
@@ -1307,36 +1640,60 @@ export default function CommuteScreen() {
           )}
 
           {/* ── Community Reports ── */}
-          <View style={[styles.communityCard, { backgroundColor: colors.surface2, borderColor: colors.divider }]}>
+          <View
+            style={[
+              styles.communityCard,
+              { backgroundColor: colors.surface2, borderColor: colors.divider },
+            ]}
+          >
             <View style={styles.communityHeader}>
-              <MaterialCommunityIcons name="account-group" size={22} color={theme.colors.selected} />
+              <MaterialCommunityIcons
+                name="account-group"
+                size={22}
+                color={theme.colors.selected}
+              />
               <Text style={styles.communityTitle}>Community Reports</Text>
             </View>
 
             {reportSent ? (
               <View style={styles.reportThanks}>
                 <View style={styles.reportThanksIcon}>
-                  <Ionicons name="checkmark" size={32} color={theme.colors.primary} />
+                  <Ionicons
+                    name="checkmark"
+                    size={32}
+                    color={theme.colors.primary}
+                  />
                 </View>
-                <Text style={styles.reportThanksTitle}>Thanks for the heads up!</Text>
+                <Text style={styles.reportThanksTitle}>
+                  Thanks for the heads up!
+                </Text>
                 <Text style={styles.reportThanksBody}>
                   We just told{" "}
-                  <Text style={{ fontWeight: "800", color: theme.colors.ink }}>1,240 commuters</Text>
-                  {" "}on this line. You're a real one.
+                  <Text style={{ fontWeight: "800", color: theme.colors.ink }}>
+                    1,240 commuters
+                  </Text>{" "}
+                  on this line. You're a real one.
                 </Text>
                 <TouchableOpacity
-                  onPress={() => { setReportSelected(null); setReportSeverity(1); setReportSent(false); }}
+                  onPress={() => {
+                    setReportSelected(null);
+                    setReportSeverity(1);
+                    setReportSent(false);
+                  }}
                   activeOpacity={0.8}
                   style={styles.reportAgainBtn}
                 >
-                  <Text style={styles.reportAgainBtnText}>Report something else</Text>
+                  <Text style={styles.reportAgainBtnText}>
+                    Report something else
+                  </Text>
                 </TouchableOpacity>
               </View>
             ) : (
               <>
                 <Text style={styles.communityQuestion}>
                   What's happening on the{" "}
-                  <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>?
+                  <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>
+                  ?
                 </Text>
 
                 <View style={styles.reportGrid}>
@@ -1348,12 +1705,30 @@ export default function CommuteScreen() {
                         key={r.id}
                         onPress={() => setReportSelected(r.id)}
                         activeOpacity={0.85}
-                        style={[styles.reportGridCard, active && styles.reportGridCardActive]}
+                        style={[
+                          styles.reportGridCard,
+                          active && styles.reportGridCardActive,
+                        ]}
                       >
-                        <View style={[styles.reportGridIcon, { backgroundColor: p.bg }]}>
-                          <ReportIcon lib={r.iconLib} name={r.icon} size={20} color={p.ink} />
+                        <View
+                          style={[
+                            styles.reportGridIcon,
+                            { backgroundColor: p.bg },
+                          ]}
+                        >
+                          <ReportIcon
+                            lib={r.iconLib}
+                            name={r.icon}
+                            size={20}
+                            color={p.ink}
+                          />
                         </View>
-                        <Text style={[styles.reportGridLabel, active && styles.reportGridLabelActive]}>
+                        <Text
+                          style={[
+                            styles.reportGridLabel,
+                            active && styles.reportGridLabelActive,
+                          ]}
+                        >
                           {r.label}
                         </Text>
                       </TouchableOpacity>
@@ -1374,9 +1749,17 @@ export default function CommuteScreen() {
                             key={i}
                             onPress={() => setReportSeverity(i + 1)}
                             activeOpacity={0.8}
-                            style={[styles.severityChip, active && styles.severityChipActive]}
+                            style={[
+                              styles.severityChip,
+                              active && styles.severityChipActive,
+                            ]}
                           >
-                            <Text style={[styles.severityChipText, active && styles.severityChipTextActive]}>
+                            <Text
+                              style={[
+                                styles.severityChipText,
+                                active && styles.severityChipTextActive,
+                              ]}
+                            >
                               {label}
                             </Text>
                           </TouchableOpacity>
@@ -1389,7 +1772,10 @@ export default function CommuteScreen() {
                 <TouchableOpacity
                   onPress={() => reportSelected && setReportSent(true)}
                   activeOpacity={0.85}
-                  style={[styles.reportSendBtn, !reportSelected && styles.reportSendBtnDisabled]}
+                  style={[
+                    styles.reportSendBtn,
+                    !reportSelected && styles.reportSendBtnDisabled,
+                  ]}
                 >
                   <Ionicons name="send" size={18} color="#fff" />
                   <Text style={styles.reportSendBtnText}>
@@ -1402,7 +1788,11 @@ export default function CommuteScreen() {
             )}
 
             <TouchableOpacity style={styles.thankButton} activeOpacity={0.85}>
-              <FontAwesome5 name="thumbs-up" size={16} color={theme.colors.selected} />
+              <FontAwesome5
+                name="thumbs-up"
+                size={16}
+                color={theme.colors.selected}
+              />
               <Text style={styles.thankButtonText}>Thank a Driver</Text>
             </TouchableOpacity>
           </View>
@@ -1410,8 +1800,17 @@ export default function CommuteScreen() {
       </ScrollView>
 
       {/* ── End Journey Bar ── */}
-      <View style={[styles.exitBar, { backgroundColor: colors.surface, borderTopColor: colors.divider }]}>
-        <TouchableOpacity style={styles.exitBtn} onPress={handleExit} activeOpacity={0.85}>
+      <View
+        style={[
+          styles.exitBar,
+          { backgroundColor: colors.surface, borderTopColor: colors.divider },
+        ]}
+      >
+        <TouchableOpacity
+          style={styles.exitBtn}
+          onPress={handleExit}
+          activeOpacity={0.85}
+        >
           <Ionicons name="stop-circle-outline" size={20} color="white" />
           <Text style={styles.exitBtnText}>End Journey</Text>
         </TouchableOpacity>
@@ -1560,9 +1959,19 @@ const styles = StyleSheet.create({
     shadowRadius: 4,
     elevation: 4,
   },
-  liveBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "white" },
+  liveBadgeDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "white",
+  },
   liveBadgeDotOffline: { backgroundColor: "#FEF3C7" },
-  liveBadgeText: { color: "white", fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+  liveBadgeText: {
+    color: "white",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
 
   // ── Hero ─────────────────────────────────────────────────────────────────
   hero: {
@@ -1647,7 +2056,11 @@ const styles = StyleSheet.create({
     alignItems: "flex-start",
     marginBottom: 18,
   },
-  journeyDestination: { fontSize: 17, fontWeight: "700", color: theme.colors.ink },
+  journeyDestination: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: theme.colors.ink,
+  },
   journeyEta: {
     fontSize: theme.fontSize.body,
     fontStyle: "italic",
@@ -1660,7 +2073,11 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 6,
   },
-  arrivalBadgeText: { fontSize: 18, fontWeight: "700", color: theme.colors.primary },
+  arrivalBadgeText: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: theme.colors.primary,
+  },
   progressBarTrack: {
     height: 10,
     backgroundColor: theme.colors.surface2,
@@ -1755,7 +2172,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     zIndex: 1,
   },
-  currentDotCore: { width: 7, height: 7, borderRadius: 4, backgroundColor: "white" },
+  currentDotCore: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
+    backgroundColor: "white",
+  },
 
   departedDot: {
     width: 22,
@@ -1781,7 +2203,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 6,
   },
-  destinationDotCore: { width: 8, height: 8, borderRadius: 4, backgroundColor: "#BBCBB9" },
+  destinationDotCore: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#BBCBB9",
+  },
 
   upcomingDot: {
     width: 14,
@@ -1827,8 +2254,18 @@ const styles = StyleSheet.create({
   stopName: { flex: 1, fontSize: 15, color: theme.colors.ink, lineHeight: 22 },
   stopNameDeparted: { color: theme.colors.ink3 },
   stopNameMissed: { color: "#EF4444" },
-  stopNameDestination: { fontSize: 16, fontWeight: "700", color: theme.colors.ink },
-  currentStopName: { flex: 1, fontSize: 16, fontWeight: "700", color: theme.colors.primary, lineHeight: 22 },
+  stopNameDestination: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.ink,
+  },
+  currentStopName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.primary,
+    lineHeight: 22,
+  },
   stopTimeText: { fontSize: 13, fontWeight: "600", color: theme.colors.ink2 },
   currentStopChip: {
     backgroundColor: theme.colors.surface,
@@ -1845,10 +2282,19 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
     letterSpacing: 0.5,
   },
-  destinationLabel: { fontSize: 12, color: theme.colors.ink3, fontStyle: "italic" },
+  destinationLabel: {
+    fontSize: 12,
+    color: theme.colors.ink3,
+    fontStyle: "italic",
+  },
   missedLabel: { fontSize: 12, color: "#EF4444", fontWeight: "700" },
 
-  stopMetaRow: { flexDirection: "row", alignItems: "center", gap: 6, marginTop: 3 },
+  stopMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginTop: 3,
+  },
   stopRouteBadge: {
     flexDirection: "row",
     alignItems: "center",
@@ -1860,7 +2306,12 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: theme.colors.divider,
   },
-  stopRouteBadgeText: { fontSize: 10, fontWeight: "700", color: theme.colors.ink3, letterSpacing: 0.2 },
+  stopRouteBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    color: theme.colors.ink3,
+    letterSpacing: 0.2,
+  },
   stopTimeDelta: { fontSize: 11, fontWeight: "600" },
   stopTimeDeltaUpcoming: { color: theme.colors.primary },
   stopTimeDeltaOnTime: { color: "#16A34A" },
@@ -1897,7 +2348,12 @@ const styles = StyleSheet.create({
     letterSpacing: 0.6,
     textTransform: "uppercase",
   },
-  boardingTitle: { fontSize: 18, fontWeight: "700", color: "white", lineHeight: 26 },
+  boardingTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "white",
+    lineHeight: 26,
+  },
   boardingTip: {
     fontSize: theme.fontSize.subtitle,
     color: "rgba(255,255,255,0.85)",
@@ -1916,7 +2372,11 @@ const styles = StyleSheet.create({
   },
   communityHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
   communityTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.ink },
-  communityQuestion: { fontSize: theme.fontSize.subtitle, color: theme.colors.ink2, lineHeight: 24 },
+  communityQuestion: {
+    fontSize: theme.fontSize.subtitle,
+    color: theme.colors.ink2,
+    lineHeight: 24,
+  },
 
   reportGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
   reportGridCard: {
@@ -1976,7 +2436,11 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primaryDim,
   },
-  severityChipText: { fontSize: 11, fontWeight: "700", color: theme.colors.ink2 },
+  severityChipText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: theme.colors.ink2,
+  },
   severityChipTextActive: { color: theme.colors.primaryInk },
 
   reportSendBtn: {
@@ -1994,7 +2458,12 @@ const styles = StyleSheet.create({
     elevation: 4,
   },
   reportSendBtnDisabled: { opacity: 0.4, shadowOpacity: 0, elevation: 0 },
-  reportSendBtnText: { color: "#fff", fontSize: 16, fontWeight: "700", letterSpacing: -0.2 },
+  reportSendBtnText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "700",
+    letterSpacing: -0.2,
+  },
 
   reportThanks: { alignItems: "center", gap: 10, paddingVertical: 8 },
   reportThanksIcon: {
@@ -2013,7 +2482,12 @@ const styles = StyleSheet.create({
     letterSpacing: -0.4,
     textAlign: "center",
   },
-  reportThanksBody: { fontSize: 14, color: theme.colors.ink2, textAlign: "center", lineHeight: 22 },
+  reportThanksBody: {
+    fontSize: 14,
+    color: theme.colors.ink2,
+    textAlign: "center",
+    lineHeight: 22,
+  },
   reportAgainBtn: {
     height: 44,
     paddingHorizontal: 20,
@@ -2025,7 +2499,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginTop: 4,
   },
-  reportAgainBtnText: { fontSize: 15, fontWeight: "600", color: theme.colors.ink },
+  reportAgainBtnText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: theme.colors.ink,
+  },
 
   thankButton: {
     backgroundColor: theme.colors.secondary,
@@ -2070,5 +2548,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
-  exitBtnText: { fontSize: theme.fontSize.subtitle, fontWeight: "700", color: "white" },
+  exitBtnText: {
+    fontSize: theme.fontSize.subtitle,
+    fontWeight: "700",
+    color: "white",
+  },
 });

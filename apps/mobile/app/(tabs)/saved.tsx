@@ -166,7 +166,9 @@ export default function SavedScreen() {
         showsVerticalScrollIndicator={false}
         stickySectionHeadersEnabled={false}
         ListHeaderComponent={
-          <View style={[styles.pageHeader, { backgroundColor: colors.surface }]}>
+          <View
+            style={[styles.pageHeader, { backgroundColor: colors.surface }]}
+          >
             <View>
               <Text style={[styles.pageTitle, { color: colors.ink }]}>
                 Saved Places
@@ -206,10 +208,7 @@ export default function SavedScreen() {
         SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
         ItemSeparatorComponent={() => (
           <View
-            style={[
-              styles.itemSeparator,
-              { backgroundColor: colors.divider },
-            ]}
+            style={[styles.itemSeparator, { backgroundColor: colors.divider }]}
           />
         )}
       />

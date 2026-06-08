@@ -102,6 +102,7 @@ function makeStyles(colors: ReturnType<typeof useTheme>["colors"]) {
       justifyContent: "space-between",
       alignItems: "center",
       paddingHorizontal: 18,
+      paddingTop: 60,
       paddingVertical: 14,
       borderBottomWidth: 1,
       borderBottomColor: colors.divider,
