@@ -107,13 +107,16 @@ function PlaceRow({
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 function EmptyState() {
+  const { colors } = useTheme();
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyIconWrap}>
         <Ionicons name="bookmark" size={42} color={theme.colors.ink3} />
       </View>
-      <Text style={styles.emptyTitle}>Nothing pinned yet</Text>
-      <Text style={styles.emptySubtitle}>
+      <Text style={[styles.emptyTitle, { color: colors.text }]}>
+        Nothing pinned yet
+      </Text>
+      <Text style={[styles.emptySubtitle, { color: colors.text }]}>
         Star a stop, route, or place and it'll live here for quick access.
       </Text>
     </View>
