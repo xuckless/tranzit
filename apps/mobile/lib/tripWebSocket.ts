@@ -163,6 +163,14 @@ export function useTripWebSocket(
             break;
           }
           case "REROUTE":
+            // A reroute restarts the trip plan. The next STATE may carry a reset
+            // (or lower) version, so clear per-session version/state tracking to
+            // guarantee it is accepted, and drop the current state to the loading
+            // placeholder until the fresh post-reroute STATE arrives.
+            lastVersionRef.current.clear();
+            sessionStatesRef.current.clear();
+            lastStateVersionRef.current = -1;
+            setTripState(null);
             setLastReroute(msg as unknown as TripRerouteMsg);
             break;
           case "NOTIFY":

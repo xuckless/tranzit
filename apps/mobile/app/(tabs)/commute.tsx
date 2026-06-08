@@ -6,6 +6,7 @@ import {
   ScrollView,
   TouchableOpacity,
   Animated,
+  ActivityIndicator,
 } from "react-native";
 import {
   Map,
@@ -376,6 +377,7 @@ export default function CommuteScreen() {
   // NOTIFY / REROUTE UI state
   const [notifyBanner, setNotifyBanner] = useState<string | null>(null);
   const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(null);
+  const [boardingConfirmMsg, setBoardingConfirmMsg] = useState<string | null>(null);
   const [reroutingVisible, setReroutingVisible] = useState(false);
 
   const [userLocation, setUserLocation] = useState<{
@@ -392,6 +394,8 @@ export default function CommuteScreen() {
   const boardingConfirmStopRef = useRef<string | null>(null);
   const tripStateRef = useRef<TripStateMsg | null>(null);
   const activityStartedRef = useRef(false);
+  // True between a REROUTE and the arrival of its fresh STATE (drives the spinner)
+  const awaitingRerouteStateRef = useRef(false);
 
   const allVehicles = useVehicles();
 
@@ -430,13 +434,17 @@ export default function CommuteScreen() {
   // ── NOTIFY handler ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastNotify) return;
-    if (lastNotify.kind === "CONFIRM_BOARDING" && lastNotify.requires_response) {
+    // Any flag that needs a yes/no answer → actionable in-app flashcard + push.
+    if (lastNotify.requires_response) {
+      const matchingStop = tripStateRef.current?.stops.find(
+        (s) => s.stop_id === lastNotify.stop_id,
+      );
+      const stopName = matchingStop?.stop_name ?? lastNotify.stop_id;
       setBoardingConfirmStop(lastNotify.stop_id);
+      setBoardingConfirmMsg(
+        lastNotify.message || `Did you board at ${stopName}?`,
+      );
       if (sessionId) {
-        const matchingStop = tripStateRef.current?.stops.find(
-          (s) => s.stop_id === lastNotify.stop_id,
-        );
-        const stopName = matchingStop?.stop_name ?? lastNotify.stop_id;
         scheduleBoarding(lastNotify.stop_id, stopName, sessionId);
       }
     } else {
@@ -447,14 +455,32 @@ export default function CommuteScreen() {
   // ── REROUTE handler ────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastReroute) return;
+    // Swap to the new polyline and dismiss any pending boarding prompt.
     setRoute(lastReroute.route);
     const prevStop = boardingConfirmStopRef.current;
     if (prevStop) cancelBoarding(prevStop);
     setBoardingConfirmStop(null);
+    setBoardingConfirmMsg(null);
+    // Show the loading state until the fresh post-reroute STATE arrives. The WS
+    // hook nulls tripState on REROUTE, so the timeline drops to its placeholder
+    // in the meantime. A safety timeout prevents an indefinite spinner if the
+    // server never sends the follow-up STATE.
+    awaitingRerouteStateRef.current = true;
     setReroutingVisible(true);
-    const t = setTimeout(() => setReroutingVisible(false), 3000);
-    return () => clearTimeout(t);
+    const safety = setTimeout(() => {
+      awaitingRerouteStateRef.current = false;
+      setReroutingVisible(false);
+    }, 15000);
+    return () => clearTimeout(safety);
   }, [lastReroute]);
+
+  // ── Clear the rerouting spinner once fresh stops arrive ────────────────────
+  useEffect(() => {
+    if (awaitingRerouteStateRef.current && tripState?.stops?.length) {
+      awaitingRerouteStateRef.current = false;
+      setReroutingVisible(false);
+    }
+  }, [tripState]);
 
   // ── Auto-dismiss boarding prompt when stop leaves UNSURE ───────────────────
   useEffect(() => {
@@ -463,6 +489,7 @@ export default function CommuteScreen() {
     if (!stop || stop.status !== "UNSURE") {
       cancelBoarding(boardingConfirmStop);
       setBoardingConfirmStop(null);
+      setBoardingConfirmMsg(null);
     }
   }, [tripState, boardingConfirmStop]);
 
@@ -878,7 +905,7 @@ export default function CommuteScreen() {
       {/* ── Rerouting banner ── */}
       {reroutingVisible && (
         <View style={styles.rerouteBanner}>
-          <Ionicons name="refresh" size={16} color="white" />
+          <ActivityIndicator size="small" color="white" />
           <Text style={styles.rerouteBannerText}>Rerouting…</Text>
         </View>
       )}
@@ -902,7 +929,8 @@ export default function CommuteScreen() {
           <View style={[styles.boardingConfirmCard, { backgroundColor: colors.card }]}>
             <Text style={styles.boardingConfirmTitle}>Did you board?</Text>
             <Text style={styles.boardingConfirmSub}>
-              Confirm whether you boarded the bus at stop {boardingConfirmStop}.
+              {boardingConfirmMsg ??
+                "Confirm whether you boarded the bus at this stop."}
             </Text>
             <View style={styles.boardingConfirmBtns}>
               <TouchableOpacity
@@ -911,6 +939,7 @@ export default function CommuteScreen() {
                   sendUnsureResponse(boardingConfirmStop, true);
                   cancelBoarding(boardingConfirmStop);
                   setBoardingConfirmStop(null);
+                  setBoardingConfirmMsg(null);
                 }}
                 activeOpacity={0.85}
               >
@@ -922,6 +951,7 @@ export default function CommuteScreen() {
                   sendUnsureResponse(boardingConfirmStop, false);
                   cancelBoarding(boardingConfirmStop);
                   setBoardingConfirmStop(null);
+                  setBoardingConfirmMsg(null);
                 }}
                 activeOpacity={0.85}
               >
@@ -1049,6 +1079,13 @@ export default function CommuteScreen() {
             <View style={[styles.liveBadgeDot, !isConnected && styles.liveBadgeDotOffline]} />
             <Text style={styles.liveBadgeText}>{isConnected ? "LIVE" : "CONNECTING"}</Text>
           </View>
+
+          {reroutingVisible && (
+            <View style={styles.rerouteMapOverlay}>
+              <ActivityIndicator size="large" color="white" />
+              <Text style={styles.rerouteMapOverlayText}>Finding a new route…</Text>
+            </View>
+          )}
         </View>
 
         {/* ── Hero Section ── */}
@@ -1458,6 +1495,19 @@ const styles = StyleSheet.create({
   liveBadgeDot: { width: 7, height: 7, borderRadius: 4, backgroundColor: "white" },
   liveBadgeDotOffline: { backgroundColor: "#FEF3C7" },
   liveBadgeText: { color: "white", fontSize: 12, fontWeight: "700", letterSpacing: 0.5 },
+  rerouteMapOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.25)",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 10,
+  },
+  rerouteMapOverlayText: {
+    color: "white",
+    fontSize: 14,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
 
   // ── Hero ─────────────────────────────────────────────────────────────────
   hero: {
