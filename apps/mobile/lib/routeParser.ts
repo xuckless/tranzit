@@ -88,6 +88,11 @@ export function otpItineraryToRoute(it: OTPItinerary): Route {
     // the UI flattens legs→steps anyway, so one synthetic leg is sufficient.
     legs: [{ distanceMeters, duration, steps }],
     polyline: { encodedPolyline: mergeLegPolylines(legs) },
+    // Carry the engine + the raw itinerary so handleStart() can POST the OTP
+    // start contract (source + destination coords + raw trip_id/stop ids). The
+    // normalized shape above is for rendering only and loses those fields.
+    source: "opentrip",
+    otpItinerary: it,
   };
 }
 
@@ -97,8 +102,13 @@ export function parseRouteResponse(raw: RawRouteResponse | null | undefined): Ro
   if (raw.source === "opentrip") {
     return (raw.itineraries ?? []).map(otpItineraryToRoute);
   }
-  // Default / google-maps-api: the routes are already in canonical shape.
-  return raw.routes ?? [];
+  // Default / google-maps-api: the routes are already in canonical shape (the raw
+  // Google route IS the canonical route). Tag the engine so handleStart() posts the
+  // Google (Place ID) contract.
+  return (raw.routes ?? []).map((r) => ({
+    ...r,
+    source: "google-maps-api" as const,
+  }));
 }
 
 // Normalize a single route object into the canonical Route shape. Route Save

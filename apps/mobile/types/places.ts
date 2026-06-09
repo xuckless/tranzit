@@ -125,6 +125,15 @@ export interface Route {
   duration: string; // e.g. "1194s"
   legs: RouteLeg[];
   polyline: { encodedPolyline: string }; // always present — use this for map rendering
+  // ─── Trip-start carriers (not rendered) ──────────────────────────────────────
+  // Which engine produced this route. `handleStart()` branches on it to POST the
+  // correct Route Save /trips contract (Google Place ID vs OTP coordinates). Set
+  // by parseRouteResponse(); an undefined source is treated as the Google path.
+  source?: RouteSource;
+  // The raw OTP itinerary this route was adapted from (OTP only). The normalized
+  // Route drops trip_id / stop ids / stop coordinates that Route Save's OTP path
+  // needs, so the raw itinerary is preserved here and POSTed verbatim to start.
+  otpItinerary?: OTPItinerary;
 }
 
 export interface RouteResponse {
