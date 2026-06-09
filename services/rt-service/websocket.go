@@ -77,11 +77,28 @@ func (h *wsHub) serveWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func startWSServer(hub *wsHub, addr string) {
+// serveTripUpdates serves the OTP-facing GTFS-RT TripUpdates feed (live + synthesized
+// cancellations) as a standard protobuf body. OTP's stop-time-updater polls this over HTTP.
+func (f *tripUpdateFeed) serveTripUpdates(w http.ResponseWriter, r *http.Request) {
+	f.mu.RLock()
+	b := f.bytes
+	f.mu.RUnlock()
+	if b == nil {
+		http.Error(w, "trip-update feed not ready", http.StatusServiceUnavailable)
+		return
+	}
+	w.Header().Set("Content-Type", "application/x-protobuf")
+	w.Header().Set("Cache-Control", "no-store")
+	_, _ = w.Write(b)
+}
+
+func startWSServer(hub *wsHub, feed *tripUpdateFeed, addr string) {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/gtfs-rt/trip-updates", feed.serveTripUpdates)
 	mux.HandleFunc("/", hub.serveWS)
 	srv := &http.Server{Addr: addr, Handler: mux}
 	fmt.Printf("WebSocket GTFS-RT server on ws://%s  (0x01=vehicles  0x02=trips  0x03=alerts)\n", addr)
+	fmt.Printf("OTP TripUpdates feed on http://%s/gtfs-rt/trip-updates\n", addr)
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("WS server error: %v\n", err)

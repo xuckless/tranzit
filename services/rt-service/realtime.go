@@ -82,7 +82,7 @@ func getRTFeed(appToken, url string, retries int) (*gtfs.FeedMessage, []byte) {
 	return nil, nil
 }
 
-func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToken string) error {
+func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, tuFeed *tripUpdateFeed, appToken string) error {
 	conn, err := pool.Acquire(ctx)
 	if err != nil {
 		return err
@@ -165,6 +165,12 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, appToke
 			return fmt.Errorf("stop_time_updates upsert: %w", err)
 		}
 		fmt.Printf("  %d trips, %d stop time updates.\n", tripCount, stuCount)
+
+		// Rebuild the OTP-facing TripUpdates feed (live feed + synthesized cancellations for
+		// scheduled trips that should be running now but are absent from the live feed).
+		if err := tuFeed.rebuild(ctx, conn, feed); err != nil {
+			fmt.Printf("  trip-update feed rebuild: %v\n", err)
+		}
 	}
 
 	// --- 2. Vehicle Positions (CHILDREN) ---

@@ -37,7 +37,8 @@ func main() {
 		port = fmt.Sprintf("%d", wsPort)
 	}
 	hub := newHub()
-	startWSServer(hub, "0.0.0.0:"+port)
+	tuFeed := newTripUpdateFeed()
+	startWSServer(hub, tuFeed, "0.0.0.0:"+port)
 
 	ctx := context.Background()
 
@@ -91,9 +92,23 @@ func main() {
 	}
 
 
+	// Cancellation synthesis needs the static GTFS schedule. Detect it regardless of whether
+	// --load-gtfs ran this session (it may have been loaded by a previous run). Without it the
+	// OTP feed is a straight passthrough of Calgary's live TripUpdates.
+	if loaded, err := isGTFSLoaded(ctx, pool); err != nil {
+		fmt.Printf("gtfs check failed: %v (cancellation synthesis disabled)\n", err)
+	} else {
+		tuFeed.gtfsLoaded = loaded
+		if loaded {
+			fmt.Println("Static GTFS present — OTP feed includes synthesized cancellations.")
+		} else {
+			fmt.Println("Static GTFS absent — OTP feed is a live passthrough (run with --load-gtfs to enable cancellations).")
+		}
+	}
+
 	fmt.Printf("Starting real-time polling every %ds. Ctrl+C to stop.\n", realtimeInterval)
 	for {
-		if err := scrapeRealtime(ctx, pool, hub, appToken); err != nil {
+		if err := scrapeRealtime(ctx, pool, hub, tuFeed, appToken); err != nil {
 			fmt.Printf("Realtime error: %v\n", err)
 		}
 		time.Sleep(realtimeInterval * time.Second)
