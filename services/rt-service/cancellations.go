@@ -72,13 +72,15 @@ func newTripUpdateFeed() *tripUpdateFeed {
 func (f *tripUpdateFeed) rebuild(ctx context.Context, q querier, live *gtfs.FeedMessage) error {
 	entities := live.GetEntity()
 
+	// Cancellation synthesis is best-effort: if the query fails we still publish the live feed
+	// as a passthrough. The augmentation must never be able to take down the whole feed (which
+	// would leave OTP with no trip updates at all).
+	var augErr error
 	if f.gtfsLoaded {
 		missing, err := missingActiveTrips(ctx, q)
 		if err != nil {
-			return err
-		}
-		confirmed := f.confirm(missing)
-		if len(confirmed) > 0 {
+			augErr = err
+		} else if confirmed := f.confirm(missing); len(confirmed) > 0 {
 			merged := make([]*gtfs.FeedEntity, 0, len(entities)+len(confirmed))
 			merged = append(merged, entities...)
 			for _, m := range confirmed {
@@ -96,7 +98,7 @@ func (f *tripUpdateFeed) rebuild(ctx context.Context, q querier, live *gtfs.Feed
 	f.mu.Lock()
 	f.bytes = b
 	f.mu.Unlock()
-	return nil
+	return augErr
 }
 
 // confirm advances the consecutive-missing counters and returns only the trips that have been
