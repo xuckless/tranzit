@@ -1,0 +1,46 @@
+# Runs the Calgary OTP routing engine in Docker and joins it to your tailnet as a
+# dedicated node "tranzit-otp" (MagicDNS: tranzit-otp.tailnet-example.ts.net).
+#
+# The tailscale sidecar owns the network namespace; the otp container shares it
+# (network_mode: service:tailscale), so OTP's :8080 is reachable at the node's
+# tailnet address from any peer — including a Cloud Run service that is also on the
+# tailnet. Port 8080 is also published to 127.0.0.1 for local testing.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console),
+# or leave it empty and click the login URL printed in `docker compose logs tailscale`.
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-otp-ts
+    hostname: tranzit-otp
+    environment:
+      - TS_HOSTNAME=tranzit-otp
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    ports:
+      # Local testing convenience — OTP also reachable at http://127.0.0.1:8080
+      - "127.0.0.1:8080:8080"
+    restart: unless-stopped
+
+  otp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        OTP_VERSION: "2.6.0"
+    container_name: tranzit-otp
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:

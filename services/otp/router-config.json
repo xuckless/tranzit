@@ -1,0 +1,31 @@
+{
+  "routingDefaults": {
+    "numItineraries": 5,
+    "streetRoutingTimeout": "10s",
+    "transferSlack": "2m",
+    "walkSpeed": 1.33,
+    "bikeSpeed": 5.0
+  },
+  "updaters": [
+    {
+      "type": "stop-time-updater",
+      "feedId": "CT",
+      "frequencySec": 30,
+      "fuzzyTripMatching": true,
+      "url": "https://data.calgary.ca/download/gs4m-mdc2/application%2Foctet-stream"
+    },
+    {
+      "type": "vehicle-positions",
+      "feedId": "CT",
+      "frequencySec": 30,
+      "fuzzyTripMatching": true,
+      "url": "https://data.calgary.ca/download/am7c-qe3u/application%2Foctet-stream"
+    },
+    {
+      "type": "real-time-alerts",
+      "feedId": "CT",
+      "frequencySec": 60,
+      "url": "https://data.calgary.ca/download/jhgn-ynqj/application%2Foctet-stream"
+    }
+  ]
+}

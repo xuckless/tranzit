@@ -1,0 +1,10 @@
+{
+  "osm": [
+    { "source": "calgary.osm.pbf" }
+  ],
+  "transitFeeds": [
+    { "type": "gtfs", "feedId": "CT", "source": "calgary.gtfs.zip" }
+  ],
+  "transitServiceStart": "-P1M",
+  "transitServiceEnd": "P1Y"
+}
