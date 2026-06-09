@@ -33,7 +33,6 @@ import { middlewareQuery } from "@/lib/middleware";
 import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-import { theme } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
@@ -44,6 +43,7 @@ import {
   SavePlaceModal,
   type PreselectedPlace,
 } from "@/components/SavePlaceModal";
+import type { AppTheme, CategoryIconKey } from "@/styles/themes";
 
 const { height: SCREEN_HEIGHT } = Dimensions.get("window");
 
@@ -51,20 +51,11 @@ const SNAP_COLLAPSED = SCREEN_HEIGHT * 0.28;
 const SNAP_EXPANDED  = SCREEN_HEIGHT * 0.62;
 const SNAP_FULL      = SCREEN_HEIGHT * 0.79;
 
-// Calgary downtown — used as the initial camera anchor before GPS resolves.
 const CALGARY_CENTER: [number, number] = [-114.059263, 51.070664];
 
-// 100 km bounding box around Calgary (LngLatBounds: [west, south, east, north]).
-// Prevents tile requests — and panning — outside the service area.
 const CALGARY_MAX_BOUNDS: [number, number, number, number] = [-115.5, 50.147, -112.645, 51.943];
 
-// Zoom-level threshold below which stops and buses are hidden by the GPU.
-// MapLibre's minZoomLevel is enforced in the shader — no React unmount cost.
 const MIN_MARKER_ZOOM = 12;
-
-const MAPTILER_KEY = process.env.EXPO_PUBLIC_MAPTILER_KEY;
-const STYLE_URL_LIGHT = `https://api.maptiler.com/maps/positron/style.json?key=${MAPTILER_KEY}`;
-const STYLE_URL_DARK = `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`;
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -81,32 +72,33 @@ interface NearbyState {
 
 // ─── Quick Access icon map ─────────────────────────────────────────────────────
 
-const CATEGORY_ICONS: Record<string, { icon: string; color: string }> = {
-  home:       { icon: "home",         color: theme.colors.primary },
-  work:       { icon: "briefcase",    color: "#0070EB" },
-  office:     { icon: "briefcase",    color: "#0070EB" },
-  school:     { icon: "university",   color: theme.colors.selected },
-  university: { icon: "university",   color: theme.colors.selected },
-  gym:        { icon: "dumbbell",     color: theme.colors.tertiary },
-  food:       { icon: "utensils",     color: "#E0A000" },
-  restaurant: { icon: "utensils",     color: "#E0A000" },
-  health:     { icon: "heartbeat",    color: "#D32F2F" },
-  hospital:   { icon: "hospital",     color: "#D32F2F" },
-  shopping:   { icon: "shopping-bag", color: "#9C27B0" },
-  park:       { icon: "tree",         color: "#388E3C" },
+const CATEGORY_ICON_NAMES: Record<string, { icon: string; key: CategoryIconKey }> = {
+  home:       { icon: "home",         key: "other" },
+  work:       { icon: "briefcase",    key: "work" },
+  office:     { icon: "briefcase",    key: "work" },
+  school:     { icon: "university",   key: "school" },
+  university: { icon: "university",   key: "school" },
+  gym:        { icon: "dumbbell",     key: "gym" },
+  food:       { icon: "utensils",     key: "food" },
+  restaurant: { icon: "utensils",     key: "food" },
+  health:     { icon: "heartbeat",    key: "health" },
+  hospital:   { icon: "hospital",     key: "health" },
+  shopping:   { icon: "shopping-bag", key: "shopping" },
+  park:       { icon: "tree",         key: "park" },
 };
 
-function quickIcon(categoryName: string) {
-  return (
-    CATEGORY_ICONS[categoryName.toLowerCase()] ?? {
-      icon: "map-marker-alt",
-      color: theme.colors.text,
-    }
-  );
+function quickIcon(categoryName: string, theme: AppTheme): { icon: string; color: string } {
+  const entry = CATEGORY_ICON_NAMES[categoryName.toLowerCase()];
+  if (!entry) {
+    return { icon: "map-marker-alt", color: theme.colors.ink2 };
+  }
+  return {
+    icon: entry.icon,
+    color: theme.semantic.categoryIcons[entry.key] ?? theme.colors.primary,
+  };
 }
 
 // ─── Tile math ─────────────────────────────────────────────────────────────────
-// Converts lat/lng to slippy-map tile indices at a given zoom level.
 
 function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: number } {
   const x = Math.floor(((lng + 180) / 360) * Math.pow(2, zoom));
@@ -123,12 +115,9 @@ function latLngToTile(lat: number, lng: number, zoom: number): { x: number; y: n
 export default function MapScreen() {
   const cameraRef = useRef<CameraRef>(null);
   const router = useRouter();
-  const { colors, isDark } = useTheme();
-  const styles = makeStyles(colors);
-  const styleUrl = useMemo(
-    () => (isDark ? STYLE_URL_DARK : STYLE_URL_LIGHT),
-    [isDark],
-  );
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
   const lastSnap = useRef(SNAP_COLLAPSED);
   const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
@@ -165,22 +154,14 @@ export default function MapScreen() {
   const [nearbyState, setNearbyState] = useState<NearbyState | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
 
-  // Refs to track current selected state inside memoized callbacks (avoids
-  // stale closures without adding them to every useCallback dep array).
   const selectedStopRef = useRef<typeof selectedStop>(null);
   const selectedBusRef = useRef<typeof selectedBus>(null);
   useEffect(() => { selectedStopRef.current = selectedStop; }, [selectedStop]);
   useEffect(() => { selectedBusRef.current = selectedBus; }, [selectedBus]);
 
-  // Set to true in layer-press handlers; onMapPress checks and skips deselect.
-  // Prevents the double-fire (layer press + map press same event) toggle loop.
   const layerTappedRef = useRef(false);
 
   // ── Load active transit stops with imminent-arrival filter ───────────────────
-  // When the live arrival feed is fresh, the stop set is narrowed to stops with an
-  // imminent arrival (~500-800 of ~3000). When the feed is stale/empty/errored we
-  // fall back to showing all ACTIVE stops rather than zero — the arrival gate must
-  // never be able to silently wipe every dot off the map.
   useEffect(() => {
     const fiveMinAgo = Math.floor(Date.now() / 1000) - 300;
     (async () => {
@@ -192,7 +173,7 @@ export default function MapScreen() {
         );
       } catch (e) {
         console.warn("[map] stop cache load failed", e);
-        return; // nothing to render
+        return;
       }
 
       let scheduled = new Set<string | null>();
@@ -210,7 +191,6 @@ export default function MapScreen() {
         console.warn("[map] stop_time_updates gate failed; showing all active stops", e);
       }
 
-      // Stale/empty feed → show all active stops instead of zero.
       setTransitStops(
         scheduled.size === 0
           ? activeStops
@@ -220,8 +200,6 @@ export default function MapScreen() {
   }, []);
 
   // ── Stops GeoJSON ─────────────────────────────────────────────────────────────
-  // Pre-parsed once when transitStops changes. WKT validation happens here so
-  // bad rows never reach the GPU layer.
   const stopsGeoJSON = useMemo(
     () => ({
       type: "FeatureCollection" as const,
@@ -246,14 +224,9 @@ export default function MapScreen() {
     [transitStops],
   );
 
-  // ── Vehicles GeoJSON ──────────────────────────────────────────────────────────
-  // Rebuilt on every SSE update — cheap (object construction only). MapLibre
-  // diffs the source data natively on the C++ side.
   const vehiclesGeoJSON = useMemo(() => vehiclesToGeoJSON(vehicles), [vehicles]);
 
   // ── Nearby stops (tile-filtered) ─────────────────────────────────────────────
-  // Filters loaded stops to those in the user's z=15 tile + 8 adjacent tiles.
-  // Pure math — no network call.
   const nearbyTransitStops = useMemo(() => {
     if (!userLocation) return [];
     const ZOOM = 15;
@@ -289,16 +262,12 @@ export default function MapScreen() {
   }, []);
 
   // ── Tap handlers on ShapeSources ─────────────────────────────────────────────
-  // Mapbox/MapLibre returns matched features as event.features[]. We pull
-  // properties off the first hit and delegate to the existing state setters.
-
   const handleStopLayerPress = useCallback((event: any) => {
     layerTappedRef.current = true;
     const feature = event?.nativeEvent?.features?.[0];
     const props = feature?.properties;
     if (!props || props.teleride_number == null) return;
 
-    // Toggle: tapping the already-selected stop deselects it.
     if (selectedStopRef.current?.teleride_number === props.teleride_number) {
       setSelectedStop(null);
       return;
@@ -324,7 +293,6 @@ export default function MapScreen() {
     const props = feature?.properties;
     if (!props?.vehicle_id || !props?.route_id || !props?.trip_id) return;
 
-    // Toggle: tapping the already-selected bus deselects it.
     if (selectedBusRef.current?.vehicleId === props.vehicle_id) {
       setSelectedBus(null);
       return;
@@ -375,13 +343,10 @@ export default function MapScreen() {
         const projected = lastSnap.current - g.dy;
         let target: number;
         if (g.vy > 0.4) {
-          // fast flick down → next lower snap
           target = lastSnap.current > SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_COLLAPSED;
         } else if (g.vy < -0.4) {
-          // fast flick up → next higher snap
           target = lastSnap.current < SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_FULL;
         } else {
-          // settle to nearest of the three snap points
           const dC = Math.abs(projected - SNAP_COLLAPSED);
           const dE = Math.abs(projected - SNAP_EXPANDED);
           const dF = Math.abs(projected - SNAP_FULL);
@@ -465,7 +430,6 @@ export default function MapScreen() {
   };
 
   // ── Long-press: nearby place lookup via /searchnearby ────────────────────────
-  // Triggered ONLY by long-press. Single tap on the basemap dismisses active cards.
   const handleMapPress = useCallback(
     async (coord: Coordinate) => {
       pressAbortRef.current?.abort();
@@ -507,8 +471,6 @@ export default function MapScreen() {
     setDestination(null);
   }, []);
 
-  // Opens PlaceDetailsPanel from a nearby result without clearing nearbyState,
-  // so the back button can restore the nearby list.
   const handleNearbyPlaceTap = useCallback(async (place: PlaceResult) => {
     setPlaceDetails({
       place: {
@@ -530,12 +492,8 @@ export default function MapScreen() {
   }, []);
 
   // ── Map gestures (MapLibre) ──────────────────────────────────────────────────
-  // MapLibre's MapView onPress receives a GeoJSON feature whose geometry is
-  // the tapped point. We use it only to dismiss active cards on empty-space
-  // taps (conservative behavior per user choice).
   const onMapPress = useCallback(
     (e: any) => {
-      // A layer-press (stop or bus) already fired — don't also deselect.
       if (layerTappedRef.current) {
         layerTappedRef.current = false;
         return;
@@ -565,8 +523,6 @@ export default function MapScreen() {
 
   // ── Cross-panel navigation ───────────────────────────────────────────────────
 
-  // Called when the user taps an arrival row in StopDetailsPanel.
-  // Finds the live vehicle by trip_id and flies the camera to it.
   const handleBusTapFromStop = useCallback((tripId: string) => {
     const vehicle = vehicles.find((v) => v.trip_id === tripId);
     if (!vehicle || vehicle.latitude == null || vehicle.longitude == null) {
@@ -583,8 +539,6 @@ export default function MapScreen() {
     flyTo({ latitude: vehicle.latitude, longitude: vehicle.longitude }, 16, 600);
   }, [vehicles, flyTo]);
 
-  // Called when the user taps a stop row in BusDetailsPanel.
-  // Switches to the stop panel and flies the camera to that stop.
   const handleStopTapFromBus = useCallback(async (telerideNumber: number, stopName: string) => {
     setSelectedBus(null);
     setSelectedStop({ teleride_number: telerideNumber, stop_name: stopName });
@@ -595,7 +549,6 @@ export default function MapScreen() {
       if (coord) { flyTo(coord, 16, 600); return; }
     }
 
-    // Stop not in the filtered active set — look it up in the full cache.
     const allStops = await loadAndCacheStops();
     const stop = allStops.find((s) => s.teleride_number === telerideNumber);
     if (stop?.point) {
@@ -641,7 +594,7 @@ export default function MapScreen() {
     <View style={styles.container}>
       <Map
         style={styles.map}
-        mapStyle={styleUrl}
+        mapStyle={mapPaint.baseStyle}
         onPress={onMapPress}
         onLongPress={onMapLongPress}
         compass={true}
@@ -658,17 +611,14 @@ export default function MapScreen() {
           maxBounds={CALGARY_MAX_BOUNDS}
         />
 
-        {/* Native blue-dot + heading indicator. Replaces DirectionMarker. */}
         <UserLocation heading={true} animated={true} />
 
-        {/* Bus icon image registered once for the symbol layer below */}
         <Images
           images={{
             tranzitBus: require("@/assets/images/tranzit_busView.png"),
           }}
         />
 
-        {/* Transit stops — GPU-rendered circles, no React per-marker cost */}
         <GeoJSONSource
           id="stops-source"
           data={stopsGeoJSON}
@@ -680,16 +630,14 @@ export default function MapScreen() {
             minzoom={MIN_MARKER_ZOOM}
             paint={{
               "circle-radius": 5,
-              "circle-color": theme.colors.primary,
-              "circle-stroke-color": "white",
-              "circle-stroke-width": 2,
-              "circle-opacity": 0.95,
+              "circle-color": mapPaint.stopCircle.color,
+              "circle-stroke-color": mapPaint.stopCircle.stroke,
+              "circle-stroke-width": mapPaint.stopCircle.strokeWidth,
+              "circle-opacity": mapPaint.stopCircle.opacity,
             }}
           />
         </GeoJSONSource>
 
-        {/* Live buses — single GeoJSON source, icon rotated per-feature.
-            Bearing snaps on each SSE update (same as the old implementation). */}
         <GeoJSONSource
           id="vehicles-source"
           data={vehiclesGeoJSON}
@@ -701,7 +649,7 @@ export default function MapScreen() {
             minzoom={MIN_MARKER_ZOOM}
             layout={{
               "icon-image": "tranzitBus",
-              "icon-size": 0.12,
+              "icon-size": mapPaint.busSymbol.iconSize,
               "icon-rotate": ["get", "bearing"],
               "icon-rotation-alignment": "map",
               "icon-allow-overlap": true,
@@ -715,7 +663,7 @@ export default function MapScreen() {
             minzoom={MIN_MARKER_ZOOM}
             layout={{
               "text-field": ["get", "route_id"],
-              "text-size": 10,
+              "text-size": mapPaint.busSymbol.textSize,
               "text-font": ["Noto Sans Regular"],
               "text-rotation-alignment": "viewport",
               "text-allow-overlap": true,
@@ -724,14 +672,13 @@ export default function MapScreen() {
               "text-offset": [0, 0],
             }}
             paint={{
-              "text-color": "white",
-              "text-halo-color": "rgba(0,0,0,0.45)",
-              "text-halo-width": 1,
+              "text-color": mapPaint.busSymbol.textColor,
+              "text-halo-color": mapPaint.busSymbol.haloColor,
+              "text-halo-width": mapPaint.busSymbol.haloWidth,
             }}
           />
         </GeoJSONSource>
 
-        {/* Destination pin — single Marker is cheap (1 instance only) */}
         {destination && (
           <Marker
             id="destination-pin"
@@ -743,7 +690,6 @@ export default function MapScreen() {
         )}
       </Map>
 
-      {/* Re-center button */}
       <TouchableOpacity
         style={[styles.recenterButton, { backgroundColor: colors.card }]}
         onPress={fetchCurrentLocation}
@@ -759,7 +705,7 @@ export default function MapScreen() {
 
       {errorMsg && (
         <View style={styles.errorBanner}>
-          <Ionicons name="warning-outline" size={15} color="#BA1A1A" />
+          <Ionicons name="warning-outline" size={15} color={semantic.errorBannerText} />
           <Text style={styles.errorText}>{errorMsg}</Text>
         </View>
       )}
@@ -767,8 +713,8 @@ export default function MapScreen() {
       {/* ════════ BOTTOM SHEET ════════ */}
       <Animated.View style={[styles.sheet, { height: sheetAnim, backgroundColor: colors.card }]}>
         <View {...panResponder.panHandlers} style={styles.handleArea}>
-          <View style={[styles.handle, { backgroundColor: colors.divider }]} />
-          <Text style={[styles.handleHint, { color: colors.ink3 }]}>
+          <View style={[styles.handle, { backgroundColor: semantic.handle }]} />
+          <Text style={[styles.handleHint, { color: semantic.handleHint }]}>
             {isExpanded ? "Nearby Stops" : "Explore"}
           </Text>
         </View>
@@ -855,7 +801,7 @@ export default function MapScreen() {
                       } as never)
                     }
                   >
-                    <Ionicons name="navigate" size={13} color="white" />
+                    <Ionicons name="navigate" size={13} color={colors.onPrimary} />
                     <Text style={styles.nearbyPlaceGoText}>Go</Text>
                   </TouchableOpacity>
                 </View>
@@ -907,7 +853,7 @@ export default function MapScreen() {
               contentContainerStyle={styles.quickRow}
             >
               {quickAccessPlaces.map((item: QuickAccessPlace) => {
-                const { icon, color } = quickIcon(item.categoryName);
+                const { icon, color } = quickIcon(item.categoryName, theme);
                 return (
                   <TouchableOpacity
                     key={`${item.categoryId}-${item.googlePlaceId}`}
@@ -979,7 +925,7 @@ export default function MapScreen() {
               ) : (
                 nearbyTransitStops.map((stop, i) => {
                   const isCTrain = stop.stop_name?.toLowerCase().includes("station") ?? false;
-                  const stopColor = isCTrain ? colors.primary : "#E0A000";
+                  const stopColor = isCTrain ? colors.primary : semantic.categoryIcons.food;
                   return (
                     <TouchableOpacity
                       key={String(stop.teleride_number)}
@@ -1047,228 +993,225 @@ export default function MapScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const makeStyles = (colors: typeof theme.colors) => StyleSheet.create({
-  container: { flex: 1, backgroundColor: colors.surface },
-  map: { ...StyleSheet.absoluteFillObject },
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = t;
+  return StyleSheet.create({
+    container: { flex: 1, backgroundColor: colors.surface },
+    map: { ...StyleSheet.absoluteFillObject },
 
-  recenterButton: {
-    position: "absolute",
-    bottom: SNAP_COLLAPSED + 16,
-    right: 16,
-    width: 48,
-    height: 48,
-    borderRadius: 14,
-    backgroundColor: "white",
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 8,
-    elevation: 6,
-  },
-  errorBanner: {
-    position: "absolute",
-    top: 16,
-    alignSelf: "center",
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: "#FFEDEA",
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderWidth: 1,
-    borderColor: "#FFCDC7",
-  },
-  errorText: { fontSize: 13, fontWeight: "600", color: "#BA1A1A" },
+    recenterButton: {
+      position: "absolute",
+      bottom: SNAP_COLLAPSED + 16,
+      right: 16,
+      width: 48,
+      height: 48,
+      borderRadius: 14,
+      backgroundColor: colors.card,
+      justifyContent: "center",
+      alignItems: "center",
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.12,
+      shadowRadius: 8,
+      elevation: 6,
+    },
+    errorBanner: {
+      position: "absolute",
+      top: 16,
+      alignSelf: "center",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: semantic.errorBannerBg,
+      borderRadius: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 9,
+      borderWidth: 1,
+      borderColor: semantic.errorBannerBorder,
+    },
+    errorText: {
+      ...typography.bodySmallStrong,
+      color: semantic.errorBannerText,
+    },
 
-  sheet: {
-    position: "absolute",
-    bottom: 0,
-    left: 0,
-    right: 0,
-    backgroundColor: "white",
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -6 },
-    shadowOpacity: 0.1,
-    shadowRadius: 20,
-    elevation: 24,
-  },
-  handleArea: { alignItems: "center", paddingTop: 10, paddingBottom: 6 },
-  handle: {
-    width: 38,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#DEDEDE",
-    marginBottom: 6,
-  },
-  handleHint: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: "#B0B4BF",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-  },
+    sheet: {
+      position: "absolute",
+      bottom: 0,
+      left: 0,
+      right: 0,
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 28,
+      borderTopRightRadius: 28,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: -6 },
+      shadowOpacity: 0.1,
+      shadowRadius: 20,
+      elevation: 24,
+    },
+    handleArea: { alignItems: "center", paddingTop: 10, paddingBottom: 6 },
+    handle: {
+      width: 38,
+      height: 4,
+      borderRadius: 2,
+      marginBottom: 6,
+    },
+    handleHint: {
+      ...typography.micro,
+      letterSpacing: 0.6,
+      textTransform: "uppercase",
+    },
 
-  sectionWrap: { paddingHorizontal: theme.spacing.screen, marginBottom: 4 },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: colors.ink3,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-    marginBottom: 10,
-  },
-  quickRow: { gap: 14, paddingBottom: 2 },
-  quickChip: { alignItems: "center", gap: 5 },
-  quickIconBox: {
-    width: 54,
-    height: 54,
-    borderRadius: 16,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  quickLabel: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: colors.ink2,
-  },
+    sectionWrap: { paddingHorizontal: spacing.screen, marginBottom: 4 },
+    sectionLabel: {
+      ...typography.micro,
+      color: colors.ink3,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+      marginBottom: 10,
+    },
+    quickRow: { gap: 14, paddingBottom: 2 },
+    quickChip: { alignItems: "center", gap: 5 },
+    quickIconBox: {
+      width: 54,
+      height: 54,
+      borderRadius: 16,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    quickLabel: {
+      ...typography.badge,
+      color: colors.ink2,
+    },
 
-  nearbyWrap: {
-    flex: 1,
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 14,
-    borderTopWidth: 1,
-    borderTopColor: colors.divider,
-    marginTop: 8,
-  },
-  nearbyHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 2,
-  },
-  nearbyTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  nearbyStopsEmpty: {
-    fontSize: theme.fontSize.caption,
-    color: colors.ink3,
-    textAlign: "center",
-    paddingVertical: 12,
-  },
-  stopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingVertical: 11,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.divider,
-  },
-  stopIconBox: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  stopInfo: { flex: 1, gap: 2 },
-  stopName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: colors.ink,
-  },
-  stopRoute: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "500",
-    color: colors.ink3,
-  },
-  nearbyPlacesPanel: {
-    marginHorizontal: theme.spacing.screen,
-    marginBottom: 12,
-    padding: 12,
-    borderRadius: 16,
-    backgroundColor: colors.surface2,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  nearbyPlacesHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: 6,
-  },
-  nearbyPlacesTitleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  nearbyPlacesTitle: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: colors.ink2,
-    textTransform: "uppercase",
-    letterSpacing: 0.6,
-  },
-  nearbyPlacesEmpty: {
-    fontSize: theme.fontSize.caption,
-    color: colors.ink3,
-    textAlign: "center",
-    paddingVertical: 8,
-  },
-  nearbyPlaceRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-  },
-  nearbyPlaceInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flex: 1,
-  },
-  nearbyPlaceIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: colors.primary + "15",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  nearbyPlaceText: { flex: 1, gap: 2 },
-  nearbyPlaceName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: colors.ink,
-  },
-  nearbyPlaceAddress: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "500",
-    color: colors.ink3,
-  },
-  nearbyPlaceGo: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    backgroundColor: colors.primary,
-    paddingHorizontal: 12,
-    paddingVertical: 7,
-    borderRadius: 9,
-    flexShrink: 0,
-  },
-  nearbyPlaceGoText: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: "white",
-  },
-
-});
+    nearbyWrap: {
+      flex: 1,
+      paddingHorizontal: spacing.screen,
+      paddingTop: 14,
+      borderTopWidth: 1,
+      borderTopColor: colors.divider,
+      marginTop: 8,
+    },
+    nearbyHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 2,
+    },
+    nearbyTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    nearbyStopsEmpty: {
+      ...typography.caption,
+      color: colors.ink3,
+      textAlign: "center",
+      paddingVertical: 12,
+    },
+    stopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingVertical: 11,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.divider,
+    },
+    stopIconBox: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    stopInfo: { flex: 1, gap: 2 },
+    stopName: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+    },
+    stopRoute: {
+      ...typography.caption,
+      fontWeight: "500",
+      color: colors.ink3,
+    },
+    nearbyPlacesPanel: {
+      marginHorizontal: spacing.screen,
+      marginBottom: 12,
+      padding: 12,
+      borderRadius: 16,
+      backgroundColor: colors.surface2,
+      borderWidth: 1,
+      borderColor: colors.border,
+    },
+    nearbyPlacesHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: 6,
+    },
+    nearbyPlacesTitleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+    },
+    nearbyPlacesTitle: {
+      ...typography.micro,
+      color: colors.ink2,
+      textTransform: "uppercase",
+      letterSpacing: 0.6,
+    },
+    nearbyPlacesEmpty: {
+      ...typography.caption,
+      color: colors.ink3,
+      textAlign: "center",
+      paddingVertical: 8,
+    },
+    nearbyPlaceRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 10,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.border,
+    },
+    nearbyPlaceInfo: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      flex: 1,
+    },
+    nearbyPlaceIconBox: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+      flexShrink: 0,
+    },
+    nearbyPlaceText: { flex: 1, gap: 2 },
+    nearbyPlaceName: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+    },
+    nearbyPlaceAddress: {
+      ...typography.caption,
+      fontWeight: "500",
+      color: colors.ink3,
+    },
+    nearbyPlaceGo: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      backgroundColor: colors.primary,
+      paddingHorizontal: 12,
+      paddingVertical: 7,
+      borderRadius: 9,
+      flexShrink: 0,
+    },
+    nearbyPlaceGoText: {
+      ...typography.captionStrong,
+      fontWeight: "700",
+      color: colors.onPrimary,
+    },
+  });
+}

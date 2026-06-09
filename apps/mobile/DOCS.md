@@ -31,7 +31,7 @@ Tranzit is a Calgary-specific public transit app built in React Native (Expo). T
 
 The app has four visible tabs: **Map**, **Routes**, **Commute**, and **Saved**, plus a hidden **Report** tab (`href: null`). The flow is: user searches a destination on Map or Routes → route is computed → user starts a journey → a server-side trip session is created → Commute screen takes over with live WebSocket tracking, push notifications, iOS Live Activities, and community reporting.
 
-**Theme System:** Full dark/light mode support via `ThemeContext`. Map base layer switches between MapTiler Positron (light) and Dataviz-Dark (dark). All UI tokens live in `styles/theme.ts`.
+**Theme System:** All themable values (colors, fonts, sizes, weights, letter-spacing, line-height, MapLibre paint colors, semantic status colors) are defined as **preset struct objects** in `styles/themes/`. Two presets ship today: `classic-light` and `classic-dark`. To add a new theme: drop a file in `styles/themes/` that implements `AppTheme` and register it in the `THEMES` map in `styles/themes/index.ts`. The active theme is selected via `ThemeContext` and exposed as a single `useTheme()` hook returning the full `AppTheme` object (no `isDark` boolean — use `theme.isDark` if needed). Map base layer, polyline colors, stop circle paint, bus label halo, and category icon palette are all part of the theme and switch with it.
 
 **Live Architecture:** The Commute screen is a state machine driven by WebSocket messages (`STATE`, `REROUTE`, `NOTIFY`). It integrates GPS tracking, push notifications for boarding confirmation, iOS Live Activities, and Android sticky notifications.
 
@@ -99,7 +99,13 @@ utils/
   decodePolyline.ts — Thin wrapper around @mapbox/polyline
 
 styles/
-  theme.ts     — Colors, font sizes, spacing, border radius, shadows
+  theme.ts             — Back-compat re-export of ClassicLight (deprecated; use `useTheme()`)
+  themes/
+    types.ts           — AppTheme, AppColors, AppTypography, AppSemantic, AppMapPaint, AppSpacing, AppRadius, AppShadow
+    base.ts            — Shared palette + typography skeletons, per-mode variants (light/dark)
+    classic-light.ts   — `ClassicLight` preset
+    classic-dark.ts    — `ClassicDark` preset
+    index.ts           — `THEMES` registry, `getTheme(id)`, default export
 ```
 
 ---
@@ -402,14 +408,16 @@ Key functions:
 
 ### `contexts/ThemeContext.tsx`
 
-Provides `isDark`, `toggle`, and `colors` to the entire app.
+Provides `{ theme, themeId, setThemeId }` to the entire app.
 
-- Dark mode preference is persisted in `expo-secure-store` under key `tranzit_dark_mode`.
-- `colors` is derived from `theme.colors` (light) or `darkColors` (dark) in `styles/theme.ts`.
-- `toggle` is a pure `useCallback` with no side effects; persistence happens in a separate `useEffect`.
+- `themeId` is persisted in `expo-secure-store` under key `tranzit_theme_id` (default `"classic-light"`).
+- `theme` is the resolved `AppTheme` struct — contains `colors`, `typography`, `semantic`, `spacing`, `radii`, `shadow`, and `mapPaint`. Components destructure what they need.
+- `setThemeId(id)` is a pure setter; persistence happens in a separate `useEffect`.
 - Almost every screen and component consumes this via `useTheme()`.
 
-**Map style implication:** `map.tsx` constructs two `STYLE_URL` constants: Positron for light mode, Dataviz-Dark for dark mode. The `MapView` `styleURL` prop switches dynamically based on `isDark`.
+**Adding a new theme:** Create a new file in `styles/themes/` (e.g. `high-contrast.ts`) that exports an `AppTheme` object, then register it in `THEMES` in `styles/themes/index.ts`. Surface it as a chip in `app/settings.tsx` (currently shows `classic-light` and `classic-dark`).
+
+**Map style implication:** Every MapLibre `mapStyle` prop reads from `theme.mapPaint.baseStyle`. Every paint expression (stop circle, bus label, polyline split, timeline match) reads from `theme.mapPaint.*` — so the entire map restyles when the theme switches.
 
 ---
 
@@ -745,7 +753,7 @@ Every public function in `lib/liveActivity.ts` is wrapped in `try/catch` with an
 
 ### Dark mode map styles
 
-Map style URL is not static — it switches between Positron (light) and Dataviz-Dark (dark) based on `isDark` from `ThemeContext`. The `STYLE_URL` is constructed from `EXPO_PUBLIC_MAPTILER_KEY` with the appropriate style ID.
+Map style URL is not static — it switches between Positron (light) and Dataviz-Dark (dark) based on the active theme. `STYLE_URL` is now `theme.mapPaint.baseStyle`, defined in `styles/themes/base.ts` as `LIGHT_MAP_PAINT.baseStyle` / `DARK_MAP_PAINT.baseStyle` (built from `EXPO_PUBLIC_MAPTILER_KEY`).
 
 ### Notification category setup
 

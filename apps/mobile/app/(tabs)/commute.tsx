@@ -25,7 +25,6 @@ import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useFocusEffect } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
-import { theme, PASTELS } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
 import { routeStore } from "@/lib/routeStore";
 import { parseRoute } from "@/lib/routeParser";
@@ -43,17 +42,15 @@ import type {
   TripStateMsg,
   TripSnapshotMsg,
 } from "@/types/trip";
+import type { AppTheme, PastelKey } from "@/styles/themes";
 
 const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
-const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
 const CALGARY_CENTER: [number, number] = [-114.0719, 51.0447];
 const MIN_MARKER_ZOOM = 12;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type ConnectorType = "solid-gray" | "solid-primary" | "dashed" | "none";
-
-type PastelKey = keyof typeof PASTELS;
 
 interface ReportType {
   id: string;
@@ -63,7 +60,6 @@ interface ReportType {
   icon: string;
 }
 
-// "missed" = bus was missed; "unsure" = server waiting for boarding confirmation
 type CommuteStopStatus =
   | "departed"
   | "current"
@@ -199,7 +195,7 @@ function formatTimeDelta(secs: number): string {
 
 // ─── DashedConnector ─────────────────────────────────────────────────────────
 
-function DashedConnector() {
+function DashedConnector({ color }: { color: string }) {
   return (
     <View style={{ flex: 1, alignItems: "center", marginTop: 3 }}>
       {Array.from({ length: 8 }).map((_, i) => (
@@ -208,7 +204,7 @@ function DashedConnector() {
           style={{
             width: 2,
             height: 4,
-            backgroundColor: "#BBCBB9",
+            backgroundColor: color,
             marginBottom: 3,
             borderRadius: 1,
           }}
@@ -241,7 +237,8 @@ function ReportIcon({
     );
   return <Ionicons name={name as any} size={size} color={color} />;
 }
-// ─── STOP ITEM ───────────────────────────────────────────────────────────────────
+
+// ─── STOP ITEM ────────────────────────────────────────────────────────────────
 
 function StopItem({
   stop,
@@ -250,7 +247,9 @@ function StopItem({
   stop: CommuteStop;
   connectorType: ConnectorType;
 }) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic, mapPaint } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const isDeparted = stop.status === "departed";
   const isCurrent = stop.status === "current";
@@ -293,22 +292,15 @@ function StopItem({
     );
     loop.start();
     return () => loop.stop();
-  }, [isCurrent, isUnsure]);
+  }, [isCurrent, isUnsure, pulseScale, pulseOpacity]);
 
-  // Semantic colors — warning/danger/success stay fixed (they carry meaning
-  // regardless of scheme), everything else pulls from the active theme.
-  const WARNING = "#F59E0B";
-  const WARNING_INK = "#D97706";
-  const DANGER = "#EF4444";
-  const SUCCESS = "#16A34A";
-
-  const dotRingColor = isUnsure ? WARNING : colors.primary;
-  const dotColor = isUnsure ? WARNING : colors.primary;
+  // Semantic colors carry meaning — pulled from theme.semantic.
+  const dotRingColor = isUnsure ? semantic.warning : colors.primary;
+  const dotColor = isUnsure ? semantic.warning : colors.primary;
   const connectorMuted = colors.divider;
 
   return (
     <View style={styles.stopRow}>
-      {/* ── Timeline column ── */}
       <View style={styles.stopTimelineCol}>
         {isCurrent || isUnsure ? (
           <View style={styles.currentDotContainer}>
@@ -341,13 +333,16 @@ function StopItem({
             style={[
               styles.departedDot,
               { backgroundColor: colors.surface2, borderColor: connectorMuted },
-              isMissed && { borderColor: DANGER, backgroundColor: "#FEF2F2" },
+              isMissed && {
+                borderColor: semantic.danger,
+                backgroundColor: semantic.warningBg,
+              },
             ]}
           >
             {isMissed ? (
-              <Ionicons name="close" size={11} color={DANGER} />
+              <Ionicons name="close" size={11} color={semantic.danger} />
             ) : (
-              <Ionicons name="checkmark" size={11} color={colors.text} />
+              <Ionicons name="checkmark" size={11} color={colors.ink2} />
             )}
           </View>
         ) : isDestination ? (
@@ -375,7 +370,7 @@ function StopItem({
 
         {connectorType !== "none" &&
           (connectorType === "dashed" ? (
-            <DashedConnector />
+            <DashedConnector color={semantic.neutralLine} />
           ) : (
             <View
               style={[
@@ -391,7 +386,6 @@ function StopItem({
           ))}
       </View>
 
-      {/* ── Stop content ── */}
       <View
         style={[
           styles.stopContentOuter,
@@ -402,7 +396,10 @@ function StopItem({
               borderLeftColor: colors.primary,
             },
           ],
-          isUnsure && styles.stopContentOuterUnsure,
+          isUnsure && {
+            backgroundColor: semantic.warningBg + "55",
+            borderLeftColor: semantic.warning,
+          },
         ]}
       >
         {isCurrent || isUnsure ? (
@@ -411,7 +408,7 @@ function StopItem({
               <Text
                 style={[
                   styles.currentStopName,
-                  { color: isUnsure ? WARNING_INK : colors.primary },
+                  { color: isUnsure ? semantic.warningInk : colors.primary },
                 ]}
                 numberOfLines={1}
               >
@@ -421,7 +418,7 @@ function StopItem({
                 <Text
                   style={[
                     styles.stopTimeText,
-                    { color: isUnsure ? WARNING_INK : colors.primary },
+                    { color: isUnsure ? semantic.warningInk : colors.primary },
                   ]}
                 >
                   {stop.time}
@@ -434,7 +431,7 @@ function StopItem({
               <Text
                 style={[
                   styles.currentStopChipText,
-                  { color: isUnsure ? "#92400E" : colors.text },
+                  { color: isUnsure ? semantic.warningInk : colors.ink2 },
                 ]}
               >
                 {isUnsure
@@ -452,8 +449,8 @@ function StopItem({
                         stop.timeRemaining > 60
                           ? colors.primary
                           : stop.timeRemaining < -60
-                            ? colors.text
-                            : SUCCESS,
+                            ? colors.ink2
+                            : semantic.success,
                     },
                   ]}
                 >
@@ -468,14 +465,11 @@ function StopItem({
               <Text
                 style={[
                   styles.stopName,
-                  { color: colors.text },
-                  (isDeparted || isMissed) && {
-                    color: colors.textMuted ?? colors.text,
-                    opacity: 0.6,
-                  },
-                  isMissed && { color: DANGER, opacity: 1 },
+                  { color: colors.ink2 },
+                  (isDeparted || isMissed) && { opacity: 0.6 },
+                  isMissed && { color: semantic.danger, opacity: 1 },
                   isDestination && styles.stopNameDestination,
-                  isDestination && { color: colors.text },
+                  isDestination && { color: colors.ink },
                 ]}
                 numberOfLines={1}
               >
@@ -485,7 +479,7 @@ function StopItem({
                 <Text
                   style={[
                     styles.stopTimeText,
-                    { color: colors.text },
+                    { color: colors.ink2 },
                     (isDeparted || isMissed) && { opacity: 0.5 },
                   ]}
                 >
@@ -497,14 +491,14 @@ function StopItem({
               <Text
                 style={[
                   styles.destinationLabel,
-                  { color: colors.text, opacity: 0.6 },
+                  { color: colors.ink3, opacity: 0.6 },
                 ]}
               >
                 Final Destination
               </Text>
             )}
             {isMissed && (
-              <Text style={[styles.missedLabel, { color: DANGER }]}>
+              <Text style={[styles.missedLabel, { color: semantic.danger }]}>
                 Missed
               </Text>
             )}
@@ -524,12 +518,12 @@ function StopItem({
                       <Ionicons
                         name="bus-outline"
                         size={10}
-                        color={colors.text}
+                        color={colors.ink2}
                       />
                       <Text
                         style={[
                           styles.stopRouteBadgeText,
-                          { color: colors.text },
+                          { color: colors.ink2 },
                         ]}
                       >
                         {stop.transitName}
@@ -545,8 +539,8 @@ function StopItem({
                             stop.timeRemaining > 60
                               ? colors.primary
                               : stop.timeRemaining < -60
-                                ? colors.text
-                                : SUCCESS,
+                                ? colors.ink2
+                                : semantic.success,
                         },
                       ]}
                     >
@@ -561,11 +555,14 @@ function StopItem({
     </View>
   );
 }
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function CommuteScreen() {
   const router = useRouter();
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [reportSelected, setReportSelected] = useState<string | null>(null);
   const [reportSeverity, setReportSeverity] = useState(1);
   const [reportSent, setReportSent] = useState(false);
@@ -585,7 +582,6 @@ export default function CommuteScreen() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsPath, setWsPath] = useState<string | null>(null);
 
-  // NOTIFY / REROUTE UI state
   const [notifyBanner, setNotifyBanner] = useState<string | null>(null);
   const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(
     null,
@@ -593,8 +589,6 @@ export default function CommuteScreen() {
   const [boardingConfirmMsg, setBoardingConfirmMsg] = useState<string | null>(
     null,
   );
-  // A reroute was received from the server but not yet applied to the polyline.
-  // Applied manually via the Refresh button (no automatic reroute churn).
   const [pendingReroute, setPendingReroute] = useState(false);
 
   const [userLocation, setUserLocation] = useState<{
@@ -604,10 +598,8 @@ export default function CommuteScreen() {
   const [currentSpeed, setCurrentSpeed] = useState<number | null>(null);
 
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
-  // Throttle LOCATION sends to ~5 s
   const lastLocationSentRef = useRef<number>(0);
 
-  // Cross-effect refs (avoid stale deps)
   const boardingConfirmStopRef = useRef<string | null>(null);
   const tripStateRef = useRef<TripStateMsg | null>(null);
   const activityStartedRef = useRef(false);
@@ -649,7 +641,6 @@ export default function CommuteScreen() {
     }, []),
   );
 
-  // ── Keep cross-effect refs in sync ────────────────────────────────────────
   useEffect(() => {
     boardingConfirmStopRef.current = boardingConfirmStop;
   }, [boardingConfirmStop]);
@@ -662,10 +653,8 @@ export default function CommuteScreen() {
       );
   }, [tripState]);
 
-  // ── NOTIFY handler ─────────────────────────────────────────────────────────
   useEffect(() => {
     if (!lastNotify) return;
-    // Any flag that needs a yes/no answer → actionable in-app flashcard + push.
     if (lastNotify.requires_response) {
       const matchingStop = tripStateRef.current?.stops.find(
         (s) => s.stop_id === lastNotify.stop_id,
@@ -683,9 +672,6 @@ export default function CommuteScreen() {
     }
   }, [lastNotify, sessionId]);
 
-  // ── Raise the boarding prompt from an UNSURE stop in STATE ─────────────────
-  // The server may signal "unsure you boarded" purely via a stop's STATE status
-  // (no NOTIFY message). Mirror the NOTIFY path so the flashcard still appears.
   useEffect(() => {
     if (!tripState || boardingConfirmStopRef.current) return;
     const unsure = tripState.stops.find((s) => s.status === "UNSURE");
@@ -697,16 +683,11 @@ export default function CommuteScreen() {
     }
   }, [tripState, sessionId]);
 
-  // ── REROUTE handler ────────────────────────────────────────────────────────
-  // No automatic refresh: the new route is buffered in lastReroute and only
-  // applied to the polyline when the user taps the manual Refresh button. Live
-  // STATE keeps flowing, so the timeline still advances on its own.
   useEffect(() => {
     if (!lastReroute) return;
     setPendingReroute(true);
   }, [lastReroute]);
 
-  // ── Auto-dismiss boarding prompt when stop leaves UNSURE ───────────────────
   useEffect(() => {
     if (!boardingConfirmStop || !tripState) return;
     const stop = tripState.stops.find((s) => s.stop_id === boardingConfirmStop);
@@ -717,7 +698,6 @@ export default function CommuteScreen() {
     }
   }, [tripState, boardingConfirmStop]);
 
-  // ── GPS subscription ──────────────────────────────────────────────────────
   useEffect(() => {
     if (!route) return;
     let cancelled = false;
@@ -742,7 +722,6 @@ export default function CommuteScreen() {
               setCurrentSpeed(Math.round(coords.speed * 3.6));
             }
 
-            // Send LOCATION to Route Save ~every 5 s
             const now = Date.now();
             if (now - lastLocationSentRef.current >= 5000) {
               lastLocationSentRef.current = now;
@@ -773,7 +752,6 @@ export default function CommuteScreen() {
     };
   }, [route, sendLocation]);
 
-  // ── Route IDs for vehicle filter (from server stops or Google fallback) ───
   const transitRouteIds = useMemo(() => {
     if (tripState?.stops?.length) {
       const ids = tripState.stops.map((s) => s.route_id).filter(Boolean);
@@ -807,7 +785,6 @@ export default function CommuteScreen() {
     [routeVehicles],
   );
 
-  // ── Stop GeoJSON from Route Save STATE ────────────────────────────────────
   const routeStopsGeoJSON = useMemo(
     () => ({
       type: "FeatureCollection" as const,
@@ -823,13 +800,11 @@ export default function CommuteScreen() {
     [tripState],
   );
 
-  // ── Build display stops from STATE ────────────────────────────────────────
   const stops = useMemo((): CommuteStop[] => {
     const originLabel = originInfo?.label ?? "Your Location";
     const destLabel = destinationInfo?.label ?? "Destination";
 
     if (!tripState?.stops?.length) {
-      // Fallback while WS connects: show origin + destination placeholders
       return [
         { id: "origin", name: originLabel, status: "departed", mode: "WALK" },
         {
@@ -864,7 +839,6 @@ export default function CommuteScreen() {
     ];
   }, [tripState, originInfo, destinationInfo]);
 
-  // ── Fit map to route polyline ─────────────────────────────────────────────
   useEffect(() => {
     if (!route?.polyline?.encodedPolyline) return;
     const coords = safeDecodePolyline(route.polyline.encodedPolyline);
@@ -887,7 +861,6 @@ export default function CommuteScreen() {
     }, 400);
   }, [route]);
 
-  // ── Polyline GeoJSON ──────────────────────────────────────────────────────
   const routePolylinesGeoJSON = useMemo(() => {
     if (!route?.polyline?.encodedPolyline) {
       return { type: "FeatureCollection" as const, features: [] };
@@ -897,7 +870,6 @@ export default function CommuteScreen() {
       return { type: "FeatureCollection" as const, features: [] };
     }
 
-    // Find current stop for split point
     const currentStop = stops.find((s) => s.status === "current");
     let splitIdx = 0;
 
@@ -922,6 +894,7 @@ export default function CommuteScreen() {
       .find((s) => s.travelMode === "TRANSIT");
     const lineColor = normalizeColor(
       transitStep?.transitDetails?.transitLine?.color,
+      colors.primary,
     );
 
     const completed = allCoords.slice(0, splitIdx + 1);
@@ -936,7 +909,7 @@ export default function CommuteScreen() {
     if (completed.length > 1) {
       features.push({
         type: "Feature",
-        properties: { color: theme.colors.primary },
+        properties: { color: mapPaint.polyline.completed },
         geometry: {
           type: "LineString",
           coordinates: completed.map((c) => [c.longitude, c.latitude]),
@@ -955,7 +928,7 @@ export default function CommuteScreen() {
     }
 
     return { type: "FeatureCollection" as const, features };
-  }, [route, stops]);
+  }, [route, stops, mapPaint.polyline.completed, colors.primary]);
 
   const timelineStopsGeoJSON = useMemo(
     () => ({
@@ -977,7 +950,6 @@ export default function CommuteScreen() {
     [stops],
   );
 
-  // ── Live Activity / persistent trip notification ───────────────────────────
   useEffect(() => {
     if (!tripState?.stops?.length) return;
 
@@ -1037,7 +1009,6 @@ export default function CommuteScreen() {
     }
   }, [tripState, destinationInfo]);
 
-  // ── ETA from server ────────────────────────────────────────────────────────
   const etaMinutes = useMemo(() => {
     const serverStops = tripState?.stops;
     if (serverStops?.length) {
@@ -1069,7 +1040,6 @@ export default function CommuteScreen() {
     });
   }, [tripState, route]);
 
-  // ── Progress labels ────────────────────────────────────────────────────────
   const progressLabels = useMemo(() => {
     if (!route) return ["Walking", "Riding"];
     const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
@@ -1107,12 +1077,10 @@ export default function CommuteScreen() {
   const progressFillPct =
     serverStopTotal > 1 ? serverStopCompleted / (serverStopTotal - 1) : 0;
 
-  // ── Boarding instruction ──────────────────────────────────────────────────
   const boardingStep = useMemo(() => {
     if (!route) return null;
     const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
     const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
-    // Find the first transit step that hasn't been fully completed
     const currentIdx = stops.findIndex(
       (s) => s.status === "current" || s.status === "unsure",
     );
@@ -1145,7 +1113,6 @@ export default function CommuteScreen() {
     [stops],
   );
 
-  // ── Missed/unsure flag → surface the manual Refresh control ────────────────
   const hasFlag = useMemo(
     () =>
       (tripState?.stops ?? []).some(
@@ -1154,13 +1121,6 @@ export default function CommuteScreen() {
     [tripState],
   );
 
-  // ── Missed status → pull the authoritative current route and rebuild ───────
-  // When Route Save flags a missed stop, the polyline the user is looking at may
-  // be stale (the server reroutes around a miss). GET /trips/{id} returns the
-  // full STATE plus the current route — the original before any reroute, the
-  // rerouted route after one. We parse that route and re-render the whole screen
-  // off it. Fired once per missed episode (the ref resets when the miss clears);
-  // a 404 means the session is unknown/closed, so we stop and leave the trip as-is.
   const hasMissed = useMemo(
     () =>
       tripState?.overall === "MISSED" ||
@@ -1192,8 +1152,6 @@ export default function CommuteScreen() {
         const parsed = parseRoute(snapshot.route);
         if (parsed) {
           setRoute(parsed);
-          // The pulled route is now authoritative; any buffered reroute is
-          // superseded, so clear the pending-refresh affordance.
           setPendingReroute(false);
         }
       } catch (e) {
@@ -1206,9 +1164,6 @@ export default function CommuteScreen() {
     };
   }, [hasMissed, sessionId]);
 
-  // ── Manual Refresh: apply the buffered reroute polyline ────────────────────
-  // The reroute route is a raw route object echoed by Route Save; normalize it
-  // through the route parser so it matches the shape the screen renders from.
   const handleRefresh = useCallback(() => {
     if (lastReroute) {
       const parsed = parseRoute(lastReroute.route);
@@ -1217,7 +1172,6 @@ export default function CommuteScreen() {
     setPendingReroute(false);
   }, [lastReroute]);
 
-  // ── End journey ───────────────────────────────────────────────────────────
   const handleExit = useCallback(async () => {
     endTripActivity();
     activityStartedRef.current = false;
@@ -1231,16 +1185,15 @@ export default function CommuteScreen() {
     router.navigate("/(tabs)/routes" as never);
   }, [disconnect, sessionId, router]);
 
-  // ── Empty state ────────────────────────────────────────────────────────────
   if (!route) {
     return (
       <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
-        <Ionicons name="navigate-outline" size={48} color={colors.text} />
-        <Text style={[styles.emptyTitle, { color: colors.text }]}>
+        <Ionicons name="navigate-outline" size={48} color={colors.ink2} />
+        <Text style={[styles.emptyTitle, { color: colors.ink }]}>
           No Active Journey
         </Text>
-        <Text style={[styles.emptySubtitle, { color: colors.text }]}>
-          Go to Routes, select a route, and tap "Start Journey".
+        <Text style={[styles.emptySubtitle, { color: colors.ink2 }]}>
+          Go to Routes, select a route, and tap &ldquo;Start Journey&rdquo;.
         </Text>
       </View>
     );
@@ -1248,14 +1201,13 @@ export default function CommuteScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.surface }]}>
-      {/* ── Manual Refresh (shown when a stop is missed/unsure) ── */}
       {(hasFlag || pendingReroute) && (
         <TouchableOpacity
           style={styles.refreshButton}
           onPress={handleRefresh}
           activeOpacity={0.85}
         >
-          <Ionicons name="refresh" size={18} color="white" />
+          <Ionicons name="refresh" size={18} color={colors.onPrimary} />
           <Text style={styles.refreshButtonText}>
             {pendingReroute
               ? "Route changed — tap to refresh"
@@ -1264,7 +1216,6 @@ export default function CommuteScreen() {
         </TouchableOpacity>
       )}
 
-      {/* ── Notify banner ── */}
       {notifyBanner && (
         <TouchableOpacity
           style={styles.notifyBanner}
@@ -1274,19 +1225,18 @@ export default function CommuteScreen() {
           <Ionicons
             name="information-circle"
             size={18}
-            color={theme.colors.primaryInk}
+            color={colors.primaryInk}
           />
           <Text
-            style={[styles.notifyBannerText, { color: colors.text }]}
+            style={[styles.notifyBannerText, { color: colors.ink2 }]}
             numberOfLines={2}
           >
             {notifyBanner}
           </Text>
-          <Ionicons name="close" size={16} color={theme.colors.primaryInk} />
+          <Ionicons name="close" size={16} color={colors.primaryInk} />
         </TouchableOpacity>
       )}
 
-      {/* ── Boarding confirm prompt ── */}
       {boardingConfirmStop && (
         <View style={styles.boardingConfirmOverlay}>
           <View
@@ -1295,10 +1245,10 @@ export default function CommuteScreen() {
               { backgroundColor: colors.card },
             ]}
           >
-            <Text style={[styles.boardingConfirmTitle, { color: colors.text }]}>
+            <Text style={[styles.boardingConfirmTitle, { color: colors.ink }]}>
               Did you board?
             </Text>
-            <Text style={[styles.boardingConfirmSub, { color: colors.text }]}>
+            <Text style={[styles.boardingConfirmSub, { color: colors.ink2 }]}>
               {boardingConfirmMsg ??
                 "Confirm whether you boarded the bus at this stop."}
             </Text>
@@ -1330,7 +1280,7 @@ export default function CommuteScreen() {
                 <Text
                   style={[
                     styles.boardingConfirmBtnText,
-                    { color: theme.colors.ink },
+                    { color: colors.ink },
                   ]}
                 >
                   I missed it
@@ -1346,11 +1296,10 @@ export default function CommuteScreen() {
         showsVerticalScrollIndicator={false}
         contentContainerStyle={{ paddingBottom: 100 }}
       >
-        {/* ── Live Map ── */}
         <View style={styles.mapContainer}>
           <Map
             style={styles.map}
-            mapStyle={STYLE_URL}
+            mapStyle={mapPaint.baseStyle}
             compass={false}
             logo={false}
             attribution={true}
@@ -1373,7 +1322,7 @@ export default function CommuteScreen() {
               <Layer
                 id="commute-route-line"
                 type="line"
-                paint={{ "line-color": ["get", "color"], "line-width": 5 }}
+                paint={{ "line-color": ["get", "color"], "line-width": mapPaint.polyline.width }}
                 layout={{ "line-cap": "round", "line-join": "round" }}
               />
             </GeoJSONSource>
@@ -1388,27 +1337,23 @@ export default function CommuteScreen() {
                     "match",
                     ["get", "status"],
                     "ACTIVE",
-                    7,
+                    mapPaint.stopCircle.activeRadius,
                     "UNSURE",
-                    7,
-                    4,
+                    mapPaint.stopCircle.activeRadius,
+                    mapPaint.stopCircle.upcomingRadius,
                   ],
                   "circle-color": [
                     "match",
                     ["get", "status"],
-                    "COMPLETED",
-                    theme.colors.primary,
-                    "ACTIVE",
-                    theme.colors.primary,
-                    "UNSURE",
-                    "#F59E0B",
-                    "MISSED",
-                    "#EF4444",
-                    "#C1C6D7",
+                    "COMPLETED", mapPaint.stopMatch.departed,
+                    "ACTIVE", mapPaint.stopMatch.active,
+                    "UNSURE", mapPaint.stopMatch.unsure,
+                    "MISSED", mapPaint.stopMatch.missed,
+                    mapPaint.stopMatch.upcoming,
                   ],
-                  "circle-stroke-color": "white",
-                  "circle-stroke-width": 1.5,
-                  "circle-opacity": 0.9,
+                  "circle-stroke-color": mapPaint.stopCircle.stroke,
+                  "circle-stroke-width": mapPaint.stopCircle.strokeWidth,
+                  "circle-opacity": mapPaint.stopCircle.opacity,
                 }}
               />
             </GeoJSONSource>
@@ -1424,35 +1369,26 @@ export default function CommuteScreen() {
                   "circle-radius": [
                     "match",
                     ["get", "status"],
-                    "current",
-                    9,
-                    "unsure",
-                    9,
+                    "current", 9,
+                    "unsure", 9,
                     6,
                   ],
                   "circle-color": [
                     "match",
                     ["get", "status"],
-                    "departed",
-                    theme.colors.primary,
-                    "current",
-                    theme.colors.primary,
-                    "unsure",
-                    "#F59E0B",
-                    "missed",
-                    "#EF4444",
-                    "destination",
-                    theme.colors.secondary,
-                    "#C1C6D7",
+                    "departed",   mapPaint.timelineMatch.departed,
+                    "current",    mapPaint.timelineMatch.current,
+                    "unsure",     mapPaint.timelineMatch.unsure,
+                    "missed",     mapPaint.timelineMatch.missed,
+                    "destination",mapPaint.timelineMatch.destination,
+                    mapPaint.timelineMatch.upcoming,
                   ],
-                  "circle-stroke-color": "white",
+                  "circle-stroke-color": mapPaint.stopCircle.stroke,
                   "circle-stroke-width": [
                     "match",
                     ["get", "status"],
-                    "current",
-                    4,
-                    "unsure",
-                    4,
+                    "current", 4,
+                    "unsure", 4,
                     2,
                   ],
                 }}
@@ -1466,7 +1402,7 @@ export default function CommuteScreen() {
                 minzoom={MIN_MARKER_ZOOM}
                 layout={{
                   "icon-image": "tranzitBus",
-                  "icon-size": 0.12,
+                  "icon-size": mapPaint.busSymbol.iconSize,
                   "icon-rotate": ["get", "bearing"],
                   "icon-rotation-alignment": "map",
                   "icon-allow-overlap": true,
@@ -1480,16 +1416,16 @@ export default function CommuteScreen() {
                 minzoom={MIN_MARKER_ZOOM}
                 layout={{
                   "text-field": ["get", "route_id"],
-                  "text-size": 10,
+                  "text-size": mapPaint.busSymbol.textSize,
                   "text-font": ["Noto Sans Regular"],
                   "text-rotation-alignment": "viewport",
                   "text-allow-overlap": true,
                   "text-ignore-placement": true,
                 }}
                 paint={{
-                  "text-color": "white",
-                  "text-halo-color": "rgba(0,0,0,0.45)",
-                  "text-halo-width": 1,
+                  "text-color": mapPaint.busSymbol.textColor,
+                  "text-halo-color": mapPaint.busSymbol.haloColor,
+                  "text-halo-width": mapPaint.busSymbol.haloWidth,
                 }}
               />
             </GeoJSONSource>
@@ -1517,7 +1453,7 @@ export default function CommuteScreen() {
                   <Ionicons
                     name="bus-outline"
                     size={13}
-                    color={theme.colors.primaryInk}
+                    color={colors.primaryInk}
                   />
                   <Text style={styles.lineBadgeText}>
                     {boardingStep.transitDetails?.transitLine?.nameShort ||
@@ -1536,7 +1472,7 @@ export default function CommuteScreen() {
                   <MaterialCommunityIcons
                     name="leaf"
                     size={14}
-                    color={theme.colors.primaryInk}
+                    color={colors.primaryInk}
                   />
                   <Text style={styles.heroCo2Text}>
                     {co2Saved} kg CO₂ saved
@@ -1561,48 +1497,47 @@ export default function CommuteScreen() {
               <Ionicons
                 name="speedometer-outline"
                 size={15}
-                color={theme.colors.ink3}
+                color={colors.ink3}
               />
-              <Text style={[styles.heroSpeedText, { color: colors.text }]}>
+              <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
                 {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
               </Text>
             </View>
           </View>
           <Text style={[styles.heroEtaNum, { color: colors.text }]}>
             {etaMinutes ?? "--"}
-            <Text style={[styles.heroEtaUnit, { color: colors.text }]}>
+            <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
               {" "}
               min
             </Text>
           </Text>
 
-          <Text style={[styles.heroNextStop, { color: colors.text }]}>
+          <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
             Next stop:{" "}
-            <Text style={[styles.heroNextStopName, { color: colors.text }]}>
+            <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
               {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
             </Text>
           </Text>
         </View>
 
         <View style={[styles.content]}>
-          {/* ── Journey summary + progress bar ── */}
           <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
             <View style={styles.journeyCardTop}>
               <View style={{ flex: 1, marginRight: 10 }}>
                 <Text
-                  style={[styles.journeyDestination, { color: colors.text }]}
+                  style={[styles.journeyDestination, { color: colors.ink }]}
                   numberOfLines={1}
                 >
                   To: {destinationInfo?.label ?? "Destination"}
                 </Text>
-                <Text style={[styles.journeyEta, { color: colors.text }]}>
+                <Text style={[styles.journeyEta, { color: colors.ink2 }]}>
                   Arriving around {arrivalTime ?? "--:--"}
                 </Text>
               </View>
               <View
-                style={[styles.arrivalBadge, { backgroundColor: colors.card }]}
+                style={[styles.arrivalBadge, { backgroundColor: colors.surface2 }]}
               >
-                <Text style={[styles.arrivalBadgeText, { color: colors.text }]}>
+                <Text style={[styles.arrivalBadgeText, { color: colors.primary }]}>
                   {arrivalTime ?? "--:--"}
                 </Text>
               </View>
@@ -1650,7 +1585,7 @@ export default function CommuteScreen() {
                   style={[
                     styles.progressLabel,
                     i < completedProgressSteps && {
-                      color: theme.colors.primary,
+                      color: colors.primary,
                     },
                   ]}
                 >
@@ -1660,7 +1595,6 @@ export default function CommuteScreen() {
             </View>
           </View>
 
-          {/* ── Route Progress Timeline ── */}
           <View
             style={[
               styles.timelineCard,
@@ -1671,9 +1605,9 @@ export default function CommuteScreen() {
               <Ionicons
                 name="navigate"
                 size={15}
-                color={theme.colors.primary}
+                color={colors.primary}
               />
-              <Text style={[styles.sectionLabel, { color: colors.text }]}>
+              <Text style={[styles.sectionLabel, { color: colors.ink2 }]}>
                 ROUTE PROGRESS
               </Text>
             </View>
@@ -1700,7 +1634,6 @@ export default function CommuteScreen() {
                 }
                 return (
                   <StopItem
-                    // color={colors.text}
                     key={stop.id}
                     stop={stop}
                     connectorType={connectorType}
@@ -1710,7 +1643,6 @@ export default function CommuteScreen() {
             </View>
           </View>
 
-          {/* ── Boarding Instruction ── */}
           {boardingStep && (
             <View style={styles.boardingCard}>
               <View style={styles.boardingIcon}>
@@ -1726,7 +1658,7 @@ export default function CommuteScreen() {
                       : "bus"
                   }
                   size={28}
-                  color={theme.colors.primary}
+                  color={colors.primary}
                 />
               </View>
               <View style={styles.boardingContent}>
@@ -1743,7 +1675,6 @@ export default function CommuteScreen() {
             </View>
           )}
 
-          {/* ── Community Reports ── */}
           <View
             style={[
               styles.communityCard,
@@ -1754,9 +1685,9 @@ export default function CommuteScreen() {
               <MaterialCommunityIcons
                 name="account-group"
                 size={22}
-                color={theme.colors.selected}
+                color={colors.selected}
               />
-              <Text style={[styles.communityTitle, { color: colors.text }]}>
+              <Text style={[styles.communityTitle, { color: colors.ink }]}>
                 Community Reports
               </Text>
             </View>
@@ -1767,20 +1698,20 @@ export default function CommuteScreen() {
                   <Ionicons
                     name="checkmark"
                     size={32}
-                    color={theme.colors.primary}
+                    color={colors.primary}
                   />
                 </View>
                 <Text
-                  style={[styles.reportThanksTitle, { color: colors.text }]}
+                  style={[styles.reportThanksTitle, { color: colors.ink }]}
                 >
                   Thanks for the heads up!
                 </Text>
-                <Text style={[styles.reportThanksBody, { color: colors.text }]}>
+                <Text style={[styles.reportThanksBody, { color: colors.ink2 }]}>
                   We just told{" "}
-                  <Text style={{ fontWeight: "800", color: colors.text }}>
+                  <Text style={{ fontWeight: "800", color: colors.ink }}>
                     1,240 commuters
                   </Text>{" "}
-                  on this line. You're a real one.
+                  on this line. You&apos;re a real one.
                 </Text>
                 <TouchableOpacity
                   onPress={() => {
@@ -1799,16 +1730,16 @@ export default function CommuteScreen() {
             ) : (
               <>
                 <Text
-                  style={[styles.communityQuestion, { color: colors.text }]}
+                  style={[styles.communityQuestion, { color: colors.ink2 }]}
                 >
-                  What's happening on the{" "}
+                  What&apos;s happening on the{" "}
                   <Text style={{ fontWeight: "700" }}>{activeTransitName}</Text>
                   ?
                 </Text>
 
                 <View style={styles.reportGrid}>
                   {REPORT_TYPES.map((r) => {
-                    const p = PASTELS[r.pastel];
+                    const p = theme.colors.pastels[r.pastel];
                     const active = reportSelected === r.id;
                     return (
                       <TouchableOpacity
@@ -1838,7 +1769,7 @@ export default function CommuteScreen() {
                           style={[
                             styles.reportGridLabel,
                             active && styles.reportGridLabelActive,
-                            { color: colors.text },
+                            { color: colors.ink },
                           ]}
                         >
                           {r.label}
@@ -1894,7 +1825,7 @@ export default function CommuteScreen() {
                     !reportSelected && styles.reportSendBtnDisabled,
                   ]}
                 >
-                  <Ionicons name="send" size={18} color="#fff" />
+                  <Ionicons name="send" size={18} color={colors.onPrimary} />
                   <Text style={styles.reportSendBtnText}>
                     {reportSelected
                       ? `Send "${REPORT_TYPES.find((r) => r.id === reportSelected)?.label}" report`
@@ -1908,7 +1839,7 @@ export default function CommuteScreen() {
               <FontAwesome5
                 name="thumbs-up"
                 size={16}
-                color={theme.colors.selected}
+                color={colors.selected}
               />
               <Text style={styles.thankButtonText}>Thank a Driver</Text>
             </TouchableOpacity>
@@ -1916,7 +1847,6 @@ export default function CommuteScreen() {
         </View>
       </ScrollView>
 
-      {/* ── End Journey Bar ── */}
       <View
         style={[
           styles.exitBar,
@@ -1928,7 +1858,7 @@ export default function CommuteScreen() {
           onPress={handleExit}
           activeOpacity={0.85}
         >
-          <Ionicons name="stop-circle-outline" size={20} color="white" />
+          <Ionicons name="stop-circle-outline" size={20} color={colors.onPrimary} />
           <Text style={styles.exitBtnText}>End Journey</Text>
         </TouchableOpacity>
       </View>
@@ -1938,736 +1868,701 @@ export default function CommuteScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: theme.colors.surface },
-  container: { flex: 1 },
-  content: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: theme.spacing.card,
-    gap: theme.spacing.card,
-    flexDirection: "column",
-  },
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = t;
+  return StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.surface },
+    container: { flex: 1 },
+    content: {
+      paddingHorizontal: spacing.screen,
+      paddingTop: spacing.card,
+      gap: spacing.card,
+      flexDirection: "column",
+    },
 
-  // ── Banners ──────────────────────────────────────────────────────────────
-  refreshButton: {
-    backgroundColor: theme.colors.primary,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    paddingVertical: 12,
-    paddingHorizontal: theme.spacing.screen,
-    zIndex: 10,
-  },
-  refreshButtonText: {
-    color: "white",
-    fontSize: 14,
-    fontWeight: "700",
-  },
-  notifyBanner: {
-    backgroundColor: theme.colors.primaryDim,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    paddingVertical: 10,
-    paddingHorizontal: theme.spacing.screen,
-    zIndex: 10,
-  },
-  notifyBannerText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "600",
-    color: theme.colors.primaryInk,
-    lineHeight: 20,
-  },
+    // ── Banners ──
+    refreshButton: {
+      backgroundColor: colors.primary,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: spacing.element,
+      paddingVertical: 12,
+      paddingHorizontal: spacing.screen,
+      zIndex: 10,
+    },
+    refreshButtonText: {
+      color: colors.onPrimary,
+      ...typography.buttonMd,
+    },
+    notifyBanner: {
+      backgroundColor: colors.primaryDim,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.element,
+      paddingVertical: 10,
+      paddingHorizontal: spacing.screen,
+      zIndex: 10,
+    },
+    notifyBannerText: {
+      flex: 1,
+      ...typography.bodyStrong,
+      color: colors.primaryInk,
+      lineHeight: 20,
+    },
 
-  // ── Boarding confirm ─────────────────────────────────────────────────────
-  boardingConfirmOverlay: {
-    position: "absolute",
-    bottom: 90,
-    left: theme.spacing.screen,
-    right: theme.spacing.screen,
-    zIndex: 20,
-  },
-  boardingConfirmCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: 20,
-    padding: theme.spacing.card + 8,
-    gap: 12,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 16,
-    elevation: 10,
-    borderWidth: 1.5,
-    borderColor: "#F59E0B",
-  },
-  boardingConfirmTitle: {
-    fontSize: 18,
-    fontWeight: "800",
-    color: theme.colors.ink,
-  },
-  boardingConfirmSub: {
-    fontSize: 14,
-    color: theme.colors.ink2,
-    lineHeight: 20,
-  },
-  boardingConfirmBtns: { flexDirection: "row", gap: 10 },
-  boardingConfirmBtn: {
-    flex: 1,
-    paddingVertical: 14,
-    borderRadius: theme.borderRadius.button,
-    alignItems: "center",
-  },
-  boardingConfirmYes: { backgroundColor: theme.colors.primary },
-  boardingConfirmNo: {
-    backgroundColor: theme.colors.surface2,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-  },
-  boardingConfirmBtnText: {
-    fontSize: 15,
-    fontWeight: "700",
-    color: "white",
-  },
+    // ── Boarding confirm ──
+    boardingConfirmOverlay: {
+      position: "absolute",
+      bottom: 90,
+      left: spacing.screen,
+      right: spacing.screen,
+      zIndex: 20,
+    },
+    boardingConfirmCard: {
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      padding: spacing.card + 8,
+      gap: 12,
+      ...shadow.floating,
+      borderWidth: 1.5,
+      borderColor: semantic.warning,
+    },
+    boardingConfirmTitle: {
+      ...typography.title,
+      fontWeight: "800",
+      color: colors.ink,
+    },
+    boardingConfirmSub: {
+      ...typography.body,
+      color: colors.ink2,
+      lineHeight: 20,
+    },
+    boardingConfirmBtns: { flexDirection: "row", gap: 10 },
+    boardingConfirmBtn: {
+      flex: 1,
+      paddingVertical: 14,
+      borderRadius: radii.button,
+      alignItems: "center",
+    },
+    boardingConfirmYes: { backgroundColor: colors.primary },
+    boardingConfirmNo: {
+      backgroundColor: colors.surface2,
+      borderWidth: 1,
+      borderColor: colors.divider,
+    },
+    boardingConfirmBtnText: {
+      ...typography.buttonLg,
+      color: colors.onPrimary,
+    },
 
-  // ── Empty state ──────────────────────────────────────────────────────────
-  emptyScreen: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 32,
-    backgroundColor: theme.colors.surface,
-  },
-  emptyTitle: {
-    fontSize: theme.fontSize.title,
-    fontWeight: "700",
-    color: theme.colors.ink,
-  },
-  emptySubtitle: {
-    fontSize: theme.fontSize.body,
-    color: theme.colors.ink2,
-    textAlign: "center",
-    lineHeight: 22,
-  },
+    // ── Empty state ──
+    emptyScreen: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 12,
+      paddingHorizontal: 32,
+      backgroundColor: colors.surface,
+    },
+    emptyTitle: {
+      ...typography.title,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    emptySubtitle: {
+      ...typography.body,
+      color: colors.ink2,
+      textAlign: "center",
+      lineHeight: 22,
+    },
 
-  // ── Map ──────────────────────────────────────────────────────────────────
-  mapContainer: {
-    height: 240,
-    backgroundColor: theme.colors.muted,
-    position: "relative",
-  },
-  map: { ...StyleSheet.absoluteFillObject },
-  liveBadge: {
-    position: "absolute",
-    top: 14,
-    right: 14,
-    backgroundColor: theme.colors.danger,
-    borderRadius: 99,
-    flexDirection: "row",
-    alignItems: "center",
-    paddingHorizontal: 10,
-    paddingVertical: 5,
-    gap: 6,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    elevation: 4,
-  },
-  liveBadgeDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "white",
-  },
-  liveBadgeDotOffline: { backgroundColor: "#FEF3C7" },
-  liveBadgeText: {
-    color: "white",
-    fontSize: 12,
-    fontWeight: "700",
-    letterSpacing: 0.5,
-  },
+    // ── Map ──
+    mapContainer: {
+      height: 240,
+      backgroundColor: colors.muted,
+      position: "relative",
+    },
+    map: { ...StyleSheet.absoluteFillObject },
+    liveBadge: {
+      position: "absolute",
+      top: 14,
+      right: 14,
+      backgroundColor: colors.danger,
+      borderRadius: radii.pill,
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 10,
+      paddingVertical: 5,
+      gap: 6,
+      ...shadow.liveBadge,
+    },
+    liveBadgeDot: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.onPrimary,
+    },
+    liveBadgeDotOffline: { backgroundColor: semantic.warningBg },
+    liveBadgeText: {
+      color: colors.onPrimary,
+      ...typography.badge,
+      letterSpacing: 0.5,
+    },
 
-  // ── Hero ─────────────────────────────────────────────────────────────────
-  hero: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 22,
-    paddingBottom: 18,
-    backgroundColor: theme.colors.surface,
-  },
-  heroBadgeRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: 10,
-  },
-  lineBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    backgroundColor: theme.colors.primaryDim,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 99,
-    alignSelf: "flex-start",
-  },
-  lineBadgeText: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: theme.colors.primaryInk,
-    letterSpacing: 0.2,
-  },
-  heroCo2Row: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 5,
-    backgroundColor: theme.colors.primaryDim,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 99,
-    alignSelf: "flex-start",
-  },
-  heroCo2Text: {
-    fontSize: 12,
-    fontWeight: "600",
-    color: theme.colors.primaryInk,
-  },
-  heroEtaLabelRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  heroEtaLabel: {
-    fontSize: 16,
-    color: theme.colors.ink2,
-    lineHeight: 22,
-  },
-  heroSpeedBadge: { flexDirection: "row", alignItems: "center", gap: 5 },
-  heroSpeedText: { fontSize: 14, fontWeight: "600", color: theme.colors.ink2 },
-  heroEtaNum: {
-    fontSize: 52,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -1.5,
-    lineHeight: 60,
-    marginBottom: 6,
-  },
-  heroEtaUnit: { fontSize: 28, fontWeight: "600", letterSpacing: -0.5 },
-  heroNextStop: { fontSize: 16, color: theme.colors.ink2, lineHeight: 24 },
-  heroNextStopName: { fontWeight: "700", color: theme.colors.ink },
+    // ── Hero ──
+    hero: {
+      paddingHorizontal: spacing.screen,
+      paddingTop: 22,
+      paddingBottom: 18,
+      backgroundColor: colors.surface,
+    },
+    heroBadgeRow: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "center",
+      marginBottom: 10,
+    },
+    lineBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.primaryDim,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: radii.pill,
+      alignSelf: "flex-start",
+    },
+    lineBadgeText: {
+      ...typography.badgeLg,
+      color: colors.primaryInk,
+    },
+    heroCo2Row: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      backgroundColor: colors.primaryDim,
+      paddingHorizontal: 10,
+      paddingVertical: 4,
+      borderRadius: radii.pill,
+      alignSelf: "flex-start",
+    },
+    heroCo2Text: {
+      ...typography.captionStrong,
+      color: colors.primaryInk,
+    },
+    heroEtaLabelRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+    },
+    heroEtaLabel: {
+      ...typography.subtitle,
+      color: colors.ink2,
+      lineHeight: 22,
+    },
+    heroSpeedBadge: { flexDirection: "row", alignItems: "center", gap: 5 },
+    heroSpeedText: { ...typography.bodyStrong, color: colors.ink2 },
+    heroEtaNum: {
+      ...typography.hero,
+      color: colors.ink,
+      marginBottom: 6,
+    },
+    heroEtaUnit: { ...typography.heroUnit },
+    heroNextStop: {
+      ...typography.subtitle,
+      color: colors.ink2,
+      lineHeight: 24,
+    },
+    heroNextStopName: { fontWeight: "700", color: colors.ink },
 
-  // ── Journey summary card ─────────────────────────────────────────────────
-  journeyCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: theme.borderRadius.card,
-    borderLeftWidth: 5,
-    borderLeftColor: theme.colors.secondary,
-    padding: theme.spacing.card,
-    ...theme.shadow.card,
-  },
-  journeyCardTop: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "flex-start",
-    marginBottom: 18,
-  },
-  journeyDestination: {
-    fontSize: 17,
-    fontWeight: "700",
-    color: theme.colors.ink,
-  },
-  journeyEta: {
-    fontSize: theme.fontSize.body,
-    fontStyle: "italic",
-    color: theme.colors.ink2,
-    marginTop: 3,
-  },
-  arrivalBadge: {
-    backgroundColor: theme.colors.surface2,
-    borderRadius: 99,
-    paddingHorizontal: 14,
-    paddingVertical: 6,
-  },
-  arrivalBadgeText: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: theme.colors.primary,
-  },
-  progressBarTrack: {
-    height: 10,
-    backgroundColor: theme.colors.surface2,
-    borderRadius: 99,
-    position: "relative",
-    justifyContent: "center",
-    marginBottom: 8,
-    overflow: "visible",
-  },
-  progressBarFill: {
-    height: 10,
-    backgroundColor: theme.colors.primary,
-    borderRadius: 99,
-    position: "absolute",
-    left: 0,
-  },
-  progressTick: {
-    position: "absolute",
-    width: 2,
-    height: 14,
-    marginLeft: -1,
-    backgroundColor: theme.colors.surface,
-    borderRadius: 1,
-  },
-  progressTickDone: { backgroundColor: theme.colors.primary },
-  progressThumb: {
-    position: "absolute",
-    marginLeft: -9,
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: theme.colors.primary,
-    borderWidth: 4,
-    borderColor: "white",
-    zIndex: 1,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.15,
-    shadowRadius: 2,
-    elevation: 3,
-  },
-  progressLabels: { flexDirection: "row", justifyContent: "space-between" },
-  progressLabel: {
-    flex: 1,
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.ink2,
-  },
+    // ── Journey summary card ──
+    journeyCard: {
+      backgroundColor: colors.card,
+      borderRadius: radii.card,
+      borderLeftWidth: 5,
+      borderLeftColor: colors.secondary,
+      padding: spacing.card,
+      ...shadow.card,
+    },
+    journeyCardTop: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "flex-start",
+      marginBottom: 18,
+    },
+    journeyDestination: {
+      ...typography.metaLg,
+      color: colors.ink,
+    },
+    journeyEta: {
+      ...typography.bodyItalic,
+      color: colors.ink2,
+      marginTop: 3,
+    },
+    arrivalBadge: {
+      backgroundColor: colors.surface2,
+      borderRadius: radii.pill,
+      paddingHorizontal: 14,
+      paddingVertical: 6,
+    },
+    arrivalBadgeText: {
+      ...typography.arrival,
+      color: colors.primary,
+    },
+    progressBarTrack: {
+      height: 10,
+      backgroundColor: colors.surface2,
+      borderRadius: radii.pill,
+      position: "relative",
+      justifyContent: "center",
+      marginBottom: 8,
+      overflow: "visible",
+    },
+    progressBarFill: {
+      height: 10,
+      backgroundColor: colors.primary,
+      borderRadius: radii.pill,
+      position: "absolute",
+      left: 0,
+    },
+    progressTick: {
+      position: "absolute",
+      width: 2,
+      height: 14,
+      marginLeft: -1,
+      backgroundColor: colors.surface,
+      borderRadius: 1,
+    },
+    progressTickDone: { backgroundColor: colors.primary },
+    progressThumb: {
+      position: "absolute",
+      marginLeft: -9,
+      width: 18,
+      height: 18,
+      borderRadius: 9,
+      backgroundColor: colors.primary,
+      borderWidth: 4,
+      borderColor: colors.onPrimary,
+      zIndex: 1,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: 1 },
+      shadowOpacity: 0.15,
+      shadowRadius: 2,
+      elevation: 3,
+    },
+    progressLabels: { flexDirection: "row", justifyContent: "space-between" },
+    progressLabel: {
+      flex: 1,
+      ...typography.captionStrong,
+      color: colors.ink2,
+    },
 
-  // ── Timeline card ────────────────────────────────────────────────────────
-  timelineCard: {
-    backgroundColor: theme.colors.surface2,
-    borderRadius: theme.borderRadius.card,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    padding: theme.spacing.card + 8,
-    gap: 20,
-  },
-  sectionLabelRow: { flexDirection: "row", alignItems: "center", gap: 8 },
-  sectionLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.ink2,
-    letterSpacing: 1.2,
-    textTransform: "uppercase",
-  },
-  stopList: { gap: 0 },
+    // ── Timeline card ──
+    timelineCard: {
+      backgroundColor: colors.surface2,
+      borderRadius: radii.card,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: spacing.card + 8,
+      gap: 20,
+    },
+    sectionLabelRow: { flexDirection: "row", alignItems: "center", gap: spacing.element },
+    sectionLabel: {
+      ...typography.captionStrong,
+      color: colors.ink2,
+      letterSpacing: 1.2,
+      textTransform: "uppercase",
+    },
+    stopList: { gap: 0 },
 
-  // ── Stop row ─────────────────────────────────────────────────────────────
-  stopRow: { flexDirection: "row", gap: 12, minHeight: 72 },
-  stopTimelineCol: { width: 32, alignItems: "center", alignSelf: "stretch" },
+    // ── Stop row ──
+    stopRow: { flexDirection: "row", gap: 12, minHeight: 72 },
+    stopTimelineCol: { width: 32, alignItems: "center", alignSelf: "stretch" },
 
-  currentDotContainer: {
-    width: 32,
-    height: 32,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 6,
-  },
-  currentDotRing: {
-    position: "absolute",
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-  },
-  currentDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    borderWidth: 3,
-    alignItems: "center",
-    justifyContent: "center",
-    zIndex: 1,
-  },
-  currentDotCore: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-    backgroundColor: "white",
-  },
+    currentDotContainer: {
+      width: 32,
+      height: 32,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 6,
+    },
+    currentDotRing: {
+      position: "absolute",
+      width: 32,
+      height: 32,
+      borderRadius: 16,
+    },
+    currentDot: {
+      width: 20,
+      height: 20,
+      borderRadius: 10,
+      borderWidth: 3,
+      alignItems: "center",
+      justifyContent: "center",
+      zIndex: 1,
+    },
+    currentDotCore: {
+      width: 7,
+      height: 7,
+      borderRadius: 4,
+      backgroundColor: colors.onPrimary,
+    },
 
-  departedDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: theme.colors.surface2,
-    borderWidth: 2,
-    borderColor: "#BBCBB9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 6,
-  },
-  missedDot: { borderColor: "#EF4444", backgroundColor: "#FEF2F2" },
+    departedDot: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.surface2,
+      borderWidth: 2,
+      borderColor: semantic.neutralLine,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 6,
+    },
 
-  destinationDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: theme.colors.card,
-    borderWidth: 2,
-    borderColor: "#BBCBB9",
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 6,
-  },
-  destinationDotCore: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#BBCBB9",
-  },
+    destinationDot: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: colors.card,
+      borderWidth: 2,
+      borderColor: semantic.neutralLine,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 6,
+    },
+    destinationDotCore: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: semantic.neutralLine,
+    },
 
-  upcomingDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: theme.colors.card,
-    borderWidth: 2,
-    borderColor: "#BBCBB9",
-    marginTop: 10,
-  },
+    upcomingDot: {
+      width: 14,
+      height: 14,
+      borderRadius: 7,
+      backgroundColor: colors.card,
+      borderWidth: 2,
+      borderColor: semantic.neutralLine,
+      marginTop: 10,
+    },
 
-  connectorSolid: { flex: 1, width: 2, marginTop: 3, borderRadius: 1 },
+    connectorSolid: { flex: 1, width: 2, marginTop: 3, borderRadius: 1 },
 
-  stopContentOuter: { flex: 1, paddingBottom: 20, paddingTop: 6, gap: 3 },
-  stopContentOuterCurrent: {
-    backgroundColor: theme.colors.primaryDim + "55",
-    borderRadius: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: theme.colors.primary,
-    paddingLeft: 12,
-    paddingRight: 10,
-    paddingTop: 8,
-    paddingBottom: 10,
-    marginBottom: 4,
-  },
-  stopContentOuterUnsure: {
-    backgroundColor: "#FEF3C755",
-    borderRadius: 12,
-    borderLeftWidth: 3,
-    borderLeftColor: "#F59E0B",
-    paddingLeft: 12,
-    paddingRight: 10,
-    paddingTop: 8,
-    paddingBottom: 10,
-    marginBottom: 4,
-  },
-  stopRowInner: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-    gap: 8,
-  },
-  stopName: { flex: 1, fontSize: 15, color: theme.colors.ink, lineHeight: 22 },
-  stopNameDeparted: { color: theme.colors.ink3 },
-  stopNameMissed: { color: "#EF4444" },
-  stopNameDestination: {
-    fontSize: 16,
-    fontWeight: "700",
-    color: theme.colors.ink,
-  },
-  currentStopName: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: "700",
-    color: theme.colors.primary,
-    lineHeight: 22,
-  },
-  stopTimeText: { fontSize: 13, fontWeight: "600", color: theme.colors.ink2 },
-  currentStopChip: {
-    backgroundColor: theme.colors.surface,
-    borderRadius: 6,
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    alignSelf: "flex-start",
-  },
-  unsureChip: { backgroundColor: "#FEF3C7" },
-  currentStopChipText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: theme.colors.ink2,
-    textTransform: "uppercase",
-    letterSpacing: 0.5,
-  },
-  destinationLabel: {
-    fontSize: 12,
-    color: theme.colors.ink3,
-    fontStyle: "italic",
-  },
-  missedLabel: { fontSize: 12, color: "#EF4444", fontWeight: "700" },
+    stopContentOuter: { flex: 1, paddingBottom: 20, paddingTop: 6, gap: 3 },
+    stopContentOuterCurrent: {
+      backgroundColor: colors.primaryDim + "55",
+      borderRadius: 12,
+      borderLeftWidth: 3,
+      borderLeftColor: colors.primary,
+      paddingLeft: 12,
+      paddingRight: 10,
+      paddingTop: 8,
+      paddingBottom: 10,
+      marginBottom: 4,
+    },
+    stopRowInner: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "baseline",
+      gap: spacing.element,
+    },
+    stopName: {
+      flex: 1,
+      ...typography.subtitle,
+      color: colors.ink2,
+      lineHeight: 22,
+    },
+    stopNameDestination: {
+      ...typography.subtitleStrong,
+      color: colors.ink,
+    },
+    currentStopName: {
+      flex: 1,
+      ...typography.subtitleStrong,
+      color: colors.primary,
+      lineHeight: 22,
+    },
+    stopTimeText: {
+      ...typography.bodySmallStrong,
+      color: colors.ink2,
+    },
+    currentStopChip: {
+      backgroundColor: colors.surface,
+      borderRadius: 6,
+      paddingHorizontal: 8,
+      paddingVertical: 4,
+      alignSelf: "flex-start",
+    },
+    unsureChip: { backgroundColor: semantic.warningBg },
+    currentStopChipText: {
+      ...typography.badge,
+      color: colors.ink2,
+      textTransform: "uppercase",
+      letterSpacing: 0.5,
+    },
+    destinationLabel: {
+      ...typography.caption,
+      color: colors.ink3,
+      fontStyle: "italic",
+    },
+    missedLabel: { ...typography.caption, color: semantic.danger, fontWeight: "700" },
 
-  stopMetaRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: 3,
-  },
-  stopRouteBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 3,
-    backgroundColor: theme.colors.surface2,
-    borderRadius: 99,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-  },
-  stopRouteBadgeText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: theme.colors.ink3,
-    letterSpacing: 0.2,
-  },
-  stopTimeDelta: { fontSize: 11, fontWeight: "600" },
-  stopTimeDeltaUpcoming: { color: theme.colors.primary },
-  stopTimeDeltaOnTime: { color: "#16A34A" },
-  stopTimeDeltaPast: { color: theme.colors.ink3 },
+    stopMetaRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: 3,
+    },
+    stopRouteBadge: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 3,
+      backgroundColor: colors.surface2,
+      borderRadius: radii.pill,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderWidth: 1,
+      borderColor: colors.divider,
+    },
+    stopRouteBadgeText: {
+      ...typography.micro,
+      color: colors.ink2,
+      letterSpacing: 0.2,
+    },
+    stopTimeDelta: { ...typography.monoBody, fontWeight: "600" },
 
-  // ── Boarding card ────────────────────────────────────────────────────────
-  boardingCard: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.card,
-    padding: theme.spacing.card + 8,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 16,
-    shadowColor: theme.colors.primaryInk,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 12,
-    elevation: 6,
-  },
-  boardingIcon: {
-    width: 64,
-    height: 64,
-    borderRadius: 16,
-    backgroundColor: "white",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  boardingContent: { flex: 1, gap: 4 },
-  boardingCategory: {
-    fontSize: 11,
-    fontWeight: "600",
-    color: "rgba(255,255,255,0.75)",
-    letterSpacing: 0.6,
-    textTransform: "uppercase",
-  },
-  boardingTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "white",
-    lineHeight: 26,
-  },
-  boardingTip: {
-    fontSize: theme.fontSize.subtitle,
-    color: "rgba(255,255,255,0.85)",
-    lineHeight: 22,
-    marginTop: 2,
-  },
+    // ── Boarding card ──
+    boardingCard: {
+      backgroundColor: colors.primary,
+      borderRadius: radii.card,
+      padding: spacing.card + 8,
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 16,
+      shadowColor: colors.primaryInk,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.2,
+      shadowRadius: 12,
+      elevation: 6,
+    },
+    boardingIcon: {
+      width: 64,
+      height: 64,
+      borderRadius: 16,
+      backgroundColor: colors.onPrimary,
+      justifyContent: "center",
+      alignItems: "center",
+      flexShrink: 0,
+    },
+    boardingContent: { flex: 1, gap: 4 },
+    boardingCategory: {
+      ...typography.badge,
+      color: semantic.offWhite,
+      letterSpacing: 0.6,
+      textTransform: "uppercase",
+    },
+    boardingTitle: {
+      ...typography.title,
+      color: colors.onPrimary,
+      lineHeight: 26,
+    },
+    boardingTip: {
+      ...typography.subtitle,
+      color: semantic.offWhiteStrong,
+      lineHeight: 22,
+      marginTop: 2,
+    },
 
-  // ── Community card ───────────────────────────────────────────────────────
-  communityCard: {
-    backgroundColor: theme.colors.surface2,
-    borderRadius: theme.borderRadius.card,
-    borderWidth: 2,
-    borderColor: theme.colors.divider,
-    padding: theme.spacing.card + 8,
-    gap: 14,
-  },
-  communityHeader: { flexDirection: "row", alignItems: "center", gap: 8 },
-  communityTitle: { fontSize: 18, fontWeight: "700", color: theme.colors.ink },
-  communityQuestion: {
-    fontSize: theme.fontSize.subtitle,
-    color: theme.colors.ink2,
-    lineHeight: 24,
-  },
+    // ── Community card ──
+    communityCard: {
+      backgroundColor: colors.surface2,
+      borderRadius: radii.card,
+      borderWidth: 2,
+      borderColor: colors.divider,
+      padding: spacing.card + 8,
+      gap: 14,
+    },
+    communityHeader: { flexDirection: "row", alignItems: "center", gap: spacing.element },
+    communityTitle: {
+      ...typography.title,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    communityQuestion: {
+      ...typography.subtitle,
+      color: colors.ink2,
+      lineHeight: 24,
+    },
 
-  reportGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
-  reportGridCard: {
-    width: "47.5%",
-    backgroundColor: theme.colors.card,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    padding: 14,
-    gap: 10,
-  },
-  reportGridCardActive: {
-    borderWidth: 2,
-    borderColor: theme.colors.primary,
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 4,
-  },
-  reportGridIcon: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  reportGridLabel: { fontSize: 15, fontWeight: "700", color: theme.colors.ink },
-  reportGridLabelActive: { color: theme.colors.primary },
+    reportGrid: { flexDirection: "row", flexWrap: "wrap", gap: 10 },
+    reportGridCard: {
+      width: "47.5%",
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: 14,
+      gap: 10,
+    },
+    reportGridCardActive: {
+      borderWidth: 2,
+      borderColor: colors.primary,
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 4 },
+      shadowOpacity: 0.12,
+      shadowRadius: 10,
+      elevation: 4,
+    },
+    reportGridIcon: {
+      width: 40,
+      height: 40,
+      borderRadius: 12,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    reportGridLabel: {
+      ...typography.subtitle,
+      fontWeight: "700",
+      color: colors.ink,
+    },
+    reportGridLabelActive: { color: colors.primary },
 
-  severityCard: {
-    backgroundColor: theme.colors.card,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    padding: 14,
-    gap: 10,
-  },
-  severityHeading: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: theme.colors.ink3,
-    letterSpacing: 1.4,
-    textTransform: "uppercase",
-  },
-  severityRow: { flexDirection: "row", gap: 6 },
-  severityChip: {
-    flex: 1,
-    paddingVertical: 10,
-    borderRadius: 12,
-    borderWidth: 1.5,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.card,
-    alignItems: "center",
-  },
-  severityChipActive: {
-    borderColor: theme.colors.primary,
-    backgroundColor: theme.colors.primaryDim,
-  },
-  severityChipText: {
-    fontSize: 11,
-    fontWeight: "700",
-    color: theme.colors.ink2,
-  },
-  severityChipTextActive: { color: theme.colors.primaryInk },
+    severityCard: {
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: 14,
+      gap: 10,
+    },
+    severityHeading: {
+      ...typography.microStrong,
+      color: colors.ink3,
+      letterSpacing: 1.4,
+      textTransform: "uppercase",
+    },
+    severityRow: { flexDirection: "row", gap: 6 },
+    severityChip: {
+      flex: 1,
+      paddingVertical: 10,
+      borderRadius: 12,
+      borderWidth: 1.5,
+      borderColor: colors.divider,
+      backgroundColor: colors.card,
+      alignItems: "center",
+    },
+    severityChipActive: {
+      borderColor: colors.primary,
+      backgroundColor: colors.primaryDim,
+    },
+    severityChipText: {
+      ...typography.badge,
+      color: colors.ink2,
+    },
+    severityChipTextActive: { color: colors.primaryInk },
 
-  reportSendBtn: {
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.button,
-    height: 50,
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  reportSendBtnDisabled: { opacity: 0.4, shadowOpacity: 0, elevation: 0 },
-  reportSendBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "700",
-    letterSpacing: -0.2,
-  },
+    reportSendBtn: {
+      backgroundColor: colors.primary,
+      borderRadius: radii.button,
+      height: 50,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: spacing.element,
+      ...shadow.button,
+    },
+    reportSendBtnDisabled: { opacity: 0.4, shadowOpacity: 0, elevation: 0 },
+    reportSendBtnText: {
+      color: colors.onPrimary,
+      ...typography.subtitleStrong,
+      letterSpacing: -0.2,
+    },
 
-  reportThanks: { alignItems: "center", gap: 10, paddingVertical: 8 },
-  reportThanksIcon: {
-    width: 72,
-    height: 72,
-    borderRadius: 22,
-    backgroundColor: theme.colors.primaryDim,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 4,
-  },
-  reportThanksTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.4,
-    textAlign: "center",
-  },
-  reportThanksBody: {
-    fontSize: 14,
-    color: theme.colors.ink2,
-    textAlign: "center",
-    lineHeight: 22,
-  },
-  reportAgainBtn: {
-    height: 44,
-    paddingHorizontal: 20,
-    borderRadius: theme.borderRadius.button,
-    borderWidth: 1.5,
-    borderColor: theme.colors.divider,
-    backgroundColor: theme.colors.card,
-    alignItems: "center",
-    justifyContent: "center",
-    marginTop: 4,
-  },
-  reportAgainBtnText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: theme.colors.ink,
-  },
+    reportThanks: { alignItems: "center", gap: 10, paddingVertical: 8 },
+    reportThanksIcon: {
+      width: 72,
+      height: 72,
+      borderRadius: 22,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 4,
+    },
+    reportThanksTitle: {
+      ...typography.titleLarge,
+      color: colors.ink,
+      textAlign: "center",
+    },
+    reportThanksBody: {
+      ...typography.body,
+      color: colors.ink2,
+      textAlign: "center",
+      lineHeight: 22,
+    },
+    reportAgainBtn: {
+      height: 44,
+      paddingHorizontal: 20,
+      borderRadius: radii.button,
+      borderWidth: 1.5,
+      borderColor: colors.divider,
+      backgroundColor: colors.card,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 4,
+    },
+    reportAgainBtnText: {
+      ...typography.subtitle,
+      color: colors.ink,
+    },
 
-  thankButton: {
-    backgroundColor: theme.colors.secondary,
-    borderRadius: 99,
-    paddingVertical: 18,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  thankButtonText: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "700",
-    color: theme.colors.accentInk,
-  },
+    thankButton: {
+      backgroundColor: colors.secondary,
+      borderRadius: radii.pill,
+      paddingVertical: 18,
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 10,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.08,
+      shadowRadius: 4,
+      elevation: 3,
+    },
+    thankButtonText: {
+      ...typography.subtitleStrong,
+      color: colors.accentInk,
+    },
 
-  // ── Exit bar ─────────────────────────────────────────────────────────────
-  exitBar: {
-    backgroundColor: theme.colors.surface,
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 12,
-    paddingBottom: 16,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.divider,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 6,
-    elevation: 8,
-  },
-  exitBtn: {
-    backgroundColor: theme.colors.tertiary,
-    borderRadius: theme.borderRadius.button,
-    paddingVertical: 16,
-    flexDirection: "row",
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-  },
-  exitBtnText: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "700",
-    color: "white",
-  },
-});
+    // ── Exit bar ──
+    exitBar: {
+      backgroundColor: colors.surface,
+      paddingHorizontal: spacing.screen,
+      paddingTop: 12,
+      paddingBottom: 16,
+      borderTopWidth: 1,
+      borderTopColor: colors.divider,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: -2 },
+      shadowOpacity: 0.06,
+      shadowRadius: 6,
+      elevation: 8,
+    },
+    exitBtn: {
+      backgroundColor: colors.tertiary,
+      borderRadius: radii.button,
+      paddingVertical: 16,
+      flexDirection: "row",
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 10,
+    },
+    exitBtnText: {
+      ...typography.subtitleStrong,
+      color: colors.onPrimary,
+    },
+  });
+}

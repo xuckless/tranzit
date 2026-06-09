@@ -1,5 +1,4 @@
-import React, { useCallback } from "react";
-import { theme } from "@/styles/theme";
+import React, { useCallback, useMemo } from "react";
 import {
   FlatList,
   View,
@@ -11,6 +10,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import type { PlaceResult, SelectedDestination } from "../../types/places";
 import { useTheme } from "@/contexts/ThemeContext";
+import type { AppTheme } from "@/styles/themes";
 
 interface Props {
   results: PlaceResult[];
@@ -18,8 +18,9 @@ interface Props {
 }
 
 export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { theme } = useTheme();
+  const { colors, typography } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const handlePress = useCallback(
     (place: PlaceResult) => {
@@ -75,20 +76,21 @@ export const SearchResultsList: React.FC<Props> = ({ results, onSelect }) => {
   );
 };
 
-const makeStyles = (colors: typeof theme.colors) =>
-  StyleSheet.create({
-    list: { marginTop: 4 },
+const makeStyles = (t: AppTheme) => {
+  const { colors, typography, radii, spacing } = t;
+  return StyleSheet.create({
+    list: { marginTop: spacing.xs },
     row: {
       flexDirection: "row",
       alignItems: "center",
       paddingVertical: 10,
-      paddingHorizontal: 4,
+      paddingHorizontal: spacing.xs,
       gap: 10,
     },
     iconWrap: {
       width: 34,
       height: 34,
-      borderRadius: 8,
+      borderRadius: radii.element,
       backgroundColor: colors.primaryDim,
       borderWidth: 0.5,
       borderColor: colors.border,
@@ -97,13 +99,11 @@ const makeStyles = (colors: typeof theme.colors) =>
     },
     textWrap: { flex: 1 },
     primaryText: {
-      fontFamily: "Syne-Medium",
-      fontSize: 13,
+      ...typography.bodySmallStrong,
       color: colors.ink,
     },
     subText: {
-      fontFamily: "DMmono-Regular",
-      fontSize: 11,
+      ...typography.monoBody,
       color: colors.ink2,
       marginTop: 2,
     },
@@ -113,3 +113,4 @@ const makeStyles = (colors: typeof theme.colors) =>
       marginLeft: 44,
     },
   });
+};

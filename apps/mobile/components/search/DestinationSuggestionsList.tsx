@@ -1,4 +1,4 @@
-import React, { useCallback } from "react";
+import React, { useCallback, useMemo } from "react";
 import {
   FlatList,
   View,
@@ -8,8 +8,8 @@ import {
   ListRenderItemInfo,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { theme } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
+import type { AppTheme } from "@/styles/themes";
 import type { SearchSuggestion } from "@/types/places";
 
 interface Props {
@@ -21,10 +21,12 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
   suggestions,
   onSelect,
 }) => {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<SearchSuggestion>) => {
-      // Heuristic: main text starting with a digit is likely a street address
       const isAddress = /^\d/.test(item.mainText);
       return (
         <>
@@ -39,7 +41,7 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
               <Ionicons
                 name={isAddress ? "navigate-outline" : "location-outline"}
                 size={16}
-                color="#3b7bff"
+                color={semantic.primaryChipBlue}
               />
             </View>
             <View style={styles.textWrap}>
@@ -57,7 +59,7 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
         </>
       );
     },
-    [onSelect, suggestions.length],
+    [onSelect, suggestions.length, styles, colors.ink, colors.ink3, semantic.primaryChipBlue],
   );
 
   return (
@@ -72,40 +74,41 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  list: { marginTop: 4 },
-  row: {
-    flexDirection: "row",
-    alignItems: "center",
-    paddingVertical: 10,
-    paddingHorizontal: 4,
-    gap: 10,
-  },
-  iconWrap: {
-    width: 34,
-    height: 34,
-    borderRadius: 8,
-    backgroundColor: "rgba(59,123,255,0.1)",
-    borderWidth: 0.5,
-    borderColor: "rgba(59,123,255,0.25)",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  textWrap: { flex: 1 },
-  primaryText: {
-    fontFamily: "Syne-Medium",
-    fontSize: 13,
-    color: theme.colors.text,
-  },
-  subText: {
-    fontFamily: "DMmono-Regular",
-    fontSize: 11,
-    color: theme.colors.text,
-    marginTop: 2,
-  },
-  divider: {
-    height: 0.5,
-    backgroundColor: "rgba(255,255,255,0.06)",
-    marginLeft: 44,
-  },
-});
+const makeStyles = (t: AppTheme) => {
+  const { colors, typography, semantic, radii, spacing } = t;
+  return StyleSheet.create({
+    list: { marginTop: spacing.xs },
+    row: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 10,
+      paddingHorizontal: spacing.xs,
+      gap: 10,
+    },
+    iconWrap: {
+      width: 34,
+      height: 34,
+      borderRadius: radii.element,
+      backgroundColor: semantic.primaryChipBlueBg,
+      borderWidth: 0.5,
+      borderColor: semantic.primaryChipBlueBorder,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    textWrap: { flex: 1 },
+    primaryText: {
+      ...typography.bodySmallStrong,
+      color: colors.ink,
+    },
+    subText: {
+      ...typography.monoBody,
+      color: colors.ink2,
+      marginTop: 2,
+    },
+    divider: {
+      height: 0.5,
+      backgroundColor: colors.divider,
+      marginLeft: 44,
+    },
+  });
+};

@@ -1,5 +1,5 @@
-import { ScrollView, View, Text, StyleSheet } from "react-native";
-import { theme } from "@/styles/theme";
+import { ScrollView, View, StyleSheet } from "react-native";
+import { useTheme } from "@/contexts/ThemeContext";
 
 export default function HorizontalView({
   children,
@@ -8,6 +8,8 @@ export default function HorizontalView({
   children: React.ReactNode;
   style?: object;
 }) {
+  const { theme } = useTheme();
+
   return (
     <ScrollView
       horizontal

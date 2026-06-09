@@ -7,56 +7,51 @@ import React, {
   useState,
 } from "react";
 import * as SecureStore from "expo-secure-store";
-import { theme, darkColors, lightColors } from "@/styles/theme";
-import { useColorScheme } from "react-native";
+import { DEFAULT_THEME_ID, THEMES, getTheme } from "@/styles/themes";
+import type { AppTheme, ThemeId } from "@/styles/themes";
 
-const DARK_MODE_KEY = "tranzit_dark_mode";
-
-type ThemeColors = typeof theme.colors;
+const THEME_ID_KEY = "tranzit_theme_id";
 
 interface ThemeContextValue {
-  isDark: boolean;
-  toggle: () => void;
-  colors: ThemeColors;
+  theme: AppTheme;
+  themeId: ThemeId;
+  setThemeId: (id: ThemeId) => void;
 }
 
+const fallbackTheme = getTheme(DEFAULT_THEME_ID);
+
 const ThemeContext = createContext<ThemeContextValue>({
-  isDark: false,
-  toggle: () => {},
-  colors: theme.colors,
+  theme: fallbackTheme,
+  themeId: DEFAULT_THEME_ID,
+  setThemeId: () => {},
 });
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
-  const [isDark, setIsDark] = useState(false);
-  // const system = useColorScheme();
-  // const colors = isDark ? darkColors : lightColors;
+  const [themeId, setThemeIdState] = useState<ThemeId>(DEFAULT_THEME_ID);
 
-  // Load persisted preference on mount
   useEffect(() => {
-    SecureStore.getItemAsync(DARK_MODE_KEY).then((val) => {
-      if (val === "true") setIsDark(true);
+    SecureStore.getItemAsync(THEME_ID_KEY).then((val) => {
+      if (val && (THEMES as Record<string, AppTheme>)[val]) {
+        setThemeIdState(val as ThemeId);
+      }
     });
   }, []);
 
-  // Persist whenever isDark changes (separated from the state updater)
   useEffect(() => {
-    SecureStore.setItemAsync(DARK_MODE_KEY, String(isDark));
-  }, [isDark]);
+    SecureStore.setItemAsync(THEME_ID_KEY, themeId);
+  }, [themeId]);
 
-  // Pure toggle — no side effects inside the updater
-  const toggle = useCallback(() => {
-    setIsDark((prev) => !prev);
+  const setThemeId = useCallback((id: ThemeId) => {
+    setThemeIdState(id);
   }, []);
 
   const value = useMemo<ThemeContextValue>(
     () => ({
-      isDark,
-      toggle,
-      colors: isDark
-        ? (darkColors as ThemeColors)
-        : (lightColors as ThemeColors),
+      theme: getTheme(themeId),
+      themeId,
+      setThemeId,
     }),
-    [isDark, toggle],
+    [themeId, setThemeId],
   );
 
   return (

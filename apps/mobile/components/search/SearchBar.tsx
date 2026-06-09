@@ -1,5 +1,5 @@
-import React, { useRef } from "react";
-import { theme } from "@/styles/theme";
+import React, { useRef, useMemo } from "react";
+import { useTheme } from "@/contexts/ThemeContext";
 import {
   View,
   TextInput,
@@ -8,7 +8,7 @@ import {
   ActivityIndicator,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useTheme } from "@/contexts/ThemeContext";
+import type { AppTheme } from "@/styles/themes";
 
 interface Props {
   value: string;
@@ -23,9 +23,10 @@ export const SearchBar: React.FC<Props> = ({
   onChangeText,
   onClear,
 }) => {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const inputRef = useRef<TextInput>(null);
-  const styles = makeStyles(colors);
 
   return (
     <View style={styles.container}>
@@ -47,7 +48,7 @@ export const SearchBar: React.FC<Props> = ({
         returnKeyType="search"
         autoCorrect={false}
         autoCapitalize="none"
-        clearButtonMode="never" // we control this manually for cross-platform parity
+        clearButtonMode="never"
       />
 
       {value.length > 0 && (
@@ -63,18 +64,19 @@ export const SearchBar: React.FC<Props> = ({
   );
 };
 
-const makeStyles = (colors: typeof theme.colors) =>
-  StyleSheet.create({
+const makeStyles = (t: AppTheme) => {
+  const { colors, typography, radii } = t;
+  return StyleSheet.create({
     container: {
       flexDirection: "row",
       alignItems: "center",
       backgroundColor: colors.surface2,
-      borderRadius: 12,
+      borderRadius: radii.chip,
       borderWidth: 0.5,
       borderColor: colors.border,
       paddingHorizontal: 12,
       height: 48,
-      gap: 8,
+      gap: t.spacing.element,
     },
     iconSlot: {
       width: 20,
@@ -82,8 +84,8 @@ const makeStyles = (colors: typeof theme.colors) =>
     },
     input: {
       flex: 1,
-      fontFamily: "Syne-Regular",
-      fontSize: 15,
+      ...typography.buttonLg,
       color: colors.ink,
     },
   });
+};

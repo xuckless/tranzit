@@ -9,15 +9,16 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import type { Route, RouteStep } from "@/types/places";
-import { theme } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useRouteLiveStops } from "@/lib/routeSSE";
 import type { RouteSSEStop } from "@/lib/routeSSE";
+import type { AppTheme } from "@/styles/themes";
+import { ClassicLight } from "@/styles/themes";
 
 // ─── Helpers (exported so map.tsx can reuse them) ─────────────────────────────
 
-export function normalizeColor(c: string | undefined): string {
-  if (!c) return theme.colors.primary;
+export function normalizeColor(c: string | undefined, fallback: string): string {
+  if (!c) return fallback;
   return c.startsWith("#") ? c : `#${c}`;
 }
 
@@ -43,12 +44,15 @@ function fmtTime(iso: string): string {
   });
 }
 
-function fmtDelay(seconds: number): { label: string; color: string } | null {
-  if (Math.abs(seconds) < 60) return { label: "On time", color: "#2E7D32" };
+function fmtDelay(
+  seconds: number,
+  typography: AppTheme["typography"],
+): { label: string; color: string } | null {
+  if (Math.abs(seconds) < 60) return { label: "On time", color: typography.delayOnTime };
   const mins = Math.round(seconds / 60);
   return {
     label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
-    color: mins > 0 ? "#C62828" : "#1565C0",
+    color: mins > 0 ? typography.delayLate : typography.delayEarly,
   };
 }
 
@@ -66,11 +70,16 @@ function condense(steps: RouteStep[]): RouteStep[] {
 // Must be a proper component to call the hook.
 
 function TransitChipLive({ step }: { step: RouteStep }) {
+  const { theme } = useTheme();
+  const { typography } = theme;
   const nameShort =
     step.transitDetails?.transitLine?.nameShort ??
     step.transitDetails?.transitLine?.name ??
     "Transit";
-  const lineColor = normalizeColor(step.transitDetails?.transitLine?.color);
+  const lineColor = normalizeColor(
+    step.transitDetails?.transitLine?.color,
+    theme.colors.primary,
+  );
 
   const deptTimeStr = step.transitDetails?.stopDetails?.departureTime;
   const deptEpoch = deptTimeStr
@@ -96,16 +105,12 @@ function TransitChipLive({ step }: { step: RouteStep }) {
         closest = s;
       }
     }
-    // Prefer the feed's authoritative GTFS-RT delay; fall back to diffing the
-    // predicted departure against Google's scheduled time only when the stream
-    // carries no delay. Guard the -1 "no data" sentinel so it never renders as
-    // a wildly-early time.
     if (closest?.departure_delay != null) {
-      delay = fmtDelay(closest.departure_delay);
+      delay = fmtDelay(closest.departure_delay, typography);
     } else if (closest?.arrival_delay != null) {
-      delay = fmtDelay(closest.arrival_delay);
+      delay = fmtDelay(closest.arrival_delay, typography);
     } else if (closest?.departure_time != null && closest.departure_time > 0) {
-      delay = fmtDelay(closest.departure_time - deptEpoch);
+      delay = fmtDelay(closest.departure_time - deptEpoch, typography);
     }
   }
 
@@ -137,7 +142,8 @@ function TransitChipLive({ step }: { step: RouteStep }) {
 // ─── Step Chips row ───────────────────────────────────────────────────────────
 
 export function StepChips({ steps }: { steps: RouteStep[] }) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, semantic } = theme;
   const condensed = condense(steps);
 
   return (
@@ -145,7 +151,7 @@ export function StepChips({ steps }: { steps: RouteStep[] }) {
       {condensed.map((step, i) => (
         <React.Fragment key={i}>
           {step.travelMode === "WALK" ? (
-            <View style={[chipStyles.walkChip, { backgroundColor: colors.surface2 }]}>
+            <View style={[chipStyles.walkChip, { backgroundColor: semantic.walkChipBg }]}>
               <FontAwesome5 name="walking" size={10} color={colors.ink3} />
             </View>
           ) : (
@@ -172,7 +178,6 @@ const chipStyles = StyleSheet.create({
     width: 22,
     height: 22,
     borderRadius: 11,
-    backgroundColor: "#F0F0F0",
     justifyContent: "center",
     alignItems: "center",
   },
@@ -184,12 +189,10 @@ const chipStyles = StyleSheet.create({
     alignItems: "center",
   },
   transitLabel: {
-    fontSize: 11,
-    fontWeight: "700",
+    ...ClassicLight.typography.badge,
   },
   chipDelay: {
-    fontSize: 9,
-    fontWeight: "700",
+    ...ClassicLight.typography.chipDelay,
     marginTop: 1,
   },
 });
@@ -207,7 +210,9 @@ function RouteCard({
   isSelected: boolean;
   onSelect: () => void;
 }) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing, radii, shadow } = theme;
+  const styles = makeStyles(theme);
   const allSteps = route.legs.flatMap((l) => l.steps);
   const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
   const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
@@ -219,8 +224,10 @@ function RouteCard({
       style={[
         styles.card,
         { backgroundColor: colors.card, borderColor: colors.border },
-        isSelected && styles.cardSelected,
-        isSelected && { backgroundColor: colors.surface2 },
+        isSelected && [
+          styles.cardSelected,
+          { backgroundColor: semantic.cardSelectedBg },
+        ],
       ]}
       onPress={onSelect}
       activeOpacity={0.85}
@@ -233,7 +240,11 @@ function RouteCard({
 
       <View style={styles.cardHeader}>
         <Text
-          style={[styles.duration, { color: colors.ink }, isSelected && { color: theme.colors.primary }]}
+          style={[
+            styles.duration,
+            { color: colors.ink },
+            isSelected && { color: colors.primary },
+          ]}
         >
           {formatDuration(route.duration)}
         </Text>
@@ -274,7 +285,9 @@ interface Props {
 }
 
 export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing } = theme;
+  const styles = makeStyles(theme);
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -305,88 +318,85 @@ export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingHorizontal: theme.spacing.screen,
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginBottom: 12,
-  },
-  headerLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "700",
-    color: theme.colors.text,
-    textTransform: "uppercase",
-    letterSpacing: 0.8,
-  },
-  list: {
-    gap: theme.spacing.element,
-    paddingBottom: 12,
-  },
-  card: {
-    backgroundColor: "#FFFFFF",
-    borderRadius: 18,
-    padding: theme.spacing.card,
-    gap: 10,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 2,
-    borderWidth: 1.5,
-    borderColor: theme.colors.border,
-  },
-  cardSelected: {
-    borderColor: theme.colors.primary,
-    borderWidth: 2,
-    shadowColor: theme.colors.primary,
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 4,
-    backgroundColor: "#F5F8FF",
-  },
-  fastestBadge: {
-    alignSelf: "flex-start",
-    backgroundColor: theme.colors.primary + "15",
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
-  },
-  fastestText: {
-    fontSize: 10,
-    fontWeight: "700",
-    color: theme.colors.primary,
-    letterSpacing: 0.4,
-    textTransform: "uppercase",
-  },
-  cardHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "baseline",
-  },
-  duration: {
-    fontSize: 24,
-    fontWeight: "800",
-    color: "#1A1C1F",
-  },
-  distance: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  timeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-    marginTop: -4,
-  },
-  timeText: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-});
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  return StyleSheet.create({
+    container: {
+      flex: 1,
+      paddingHorizontal: spacing.screen,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginBottom: 12,
+    },
+    headerLabel: {
+      ...typography.captionStrong,
+      color: colors.ink3,
+      textTransform: "uppercase",
+      letterSpacing: 0.8,
+    },
+    list: {
+      gap: spacing.element,
+      paddingBottom: 12,
+    },
+    card: {
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      padding: spacing.card,
+      gap: 10,
+      ...shadow.card,
+      shadowOpacity: 0.06,
+      shadowRadius: 8,
+      shadowColor: semantic.shadow,
+      elevation: 2,
+      borderWidth: 1.5,
+      borderColor: colors.border,
+    },
+    cardSelected: {
+      borderColor: colors.primary,
+      borderWidth: 2,
+      shadowColor: colors.primary,
+      shadowOpacity: 0.15,
+      shadowRadius: 12,
+      elevation: 4,
+    },
+    fastestBadge: {
+      alignSelf: "flex-start",
+      backgroundColor: colors.primaryDim,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+    },
+    fastestText: {
+      ...typography.micro,
+      color: colors.primary,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+    },
+    cardHeader: {
+      flexDirection: "row",
+      justifyContent: "space-between",
+      alignItems: "baseline",
+    },
+    duration: {
+      ...typography.cardTitle,
+      color: semantic.panelTitle,
+    },
+    distance: {
+      ...typography.bodyStrong,
+      color: colors.ink3,
+    },
+    timeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      marginTop: -4,
+    },
+    timeText: {
+      ...typography.captionStrong,
+      color: colors.ink2,
+    },
+  });
+}

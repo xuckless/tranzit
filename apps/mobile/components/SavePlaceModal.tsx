@@ -14,8 +14,7 @@ import {
   View,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { theme } from "@/styles/theme";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { AutocompletePrediction } from "@/types/places";
@@ -25,6 +24,7 @@ import {
   linkPlaceToCategory,
   upsertPlace,
 } from "@/lib/db";
+import type { AppTheme } from "@/styles/themes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -61,7 +61,9 @@ export function SavePlaceModal({
   preselectedPlace,
   userLocation,
 }: Props) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing, radii, shadow } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   // ── Phase ──
   const [phase, setPhase] = useState<"search" | "details">(
@@ -248,7 +250,7 @@ export function SavePlaceModal({
         <View style={[styles.sheet, { backgroundColor: colors.card }]}>
           {/* Handle */}
           <View style={styles.handleRow}>
-            <View style={[styles.handle, { backgroundColor: colors.divider }]} />
+            <View style={[styles.handle, { backgroundColor: semantic.handle }]} />
           </View>
 
           {/* Header */}
@@ -286,7 +288,7 @@ export function SavePlaceModal({
                   {isSearching ? (
                     <ActivityIndicator
                       size="small"
-                      color={theme.colors.primary}
+                      color={colors.primary}
                     />
                   ) : (
                     <Ionicons name="search" size={18} color={colors.ink3} />
@@ -320,7 +322,7 @@ export function SavePlaceModal({
               {isResolvingSelection ? (
                 <ActivityIndicator
                   size="small"
-                  color={theme.colors.primary}
+                  color={colors.primary}
                   style={{ marginTop: 32 }}
                 />
               ) : (
@@ -339,7 +341,7 @@ export function SavePlaceModal({
                         <Ionicons
                           name="location-outline"
                           size={16}
-                          color={theme.colors.primary}
+                          color={colors.primary}
                         />
                       </View>
                       <View style={styles.resultText}>
@@ -377,7 +379,7 @@ export function SavePlaceModal({
                   <Ionicons
                     name="location"
                     size={18}
-                    color={theme.colors.primary}
+                    color={colors.primary}
                   />
                 </View>
                 <View style={styles.placeTextBlock}>
@@ -429,7 +431,7 @@ export function SavePlaceModal({
                         <Text
                           style={[
                             styles.categoryChipText,
-                            { color: selected ? "white" : colors.primary },
+                            { color: selected ? colors.onPrimary : colors.primary },
                           ]}
                         >
                           {cat.catName}
@@ -451,12 +453,12 @@ export function SavePlaceModal({
                     <Ionicons
                       name="add"
                       size={14}
-                      color={isCreatingCategory ? "white" : colors.primary}
+                      color={isCreatingCategory ? colors.onPrimary : colors.primary}
                     />
                     <Text
                       style={[
                         styles.categoryChipText,
-                        { color: isCreatingCategory ? "white" : colors.primary },
+                        { color: isCreatingCategory ? colors.onPrimary : colors.primary },
                       ]}
                     >
                       New
@@ -493,10 +495,10 @@ export function SavePlaceModal({
                   value={isDefault}
                   onValueChange={setIsDefault}
                   trackColor={{
-                    false: theme.colors.muted,
-                    true: theme.colors.primary + "88",
+                    false: colors.muted,
+                    true: colors.primary + "88",
                   }}
-                  thumbColor={isDefault ? theme.colors.primary : "#ccc"}
+                  thumbColor={isDefault ? colors.primary : colors.ink3}
                 />
               </View>
 
@@ -517,10 +519,10 @@ export function SavePlaceModal({
                 activeOpacity={0.85}
               >
                 {isSaving ? (
-                  <ActivityIndicator size="small" color="white" />
+                  <ActivityIndicator size="small" color={colors.onPrimary} />
                 ) : (
                   <>
-                    <Ionicons name="bookmark" size={16} color="white" />
+                    <Ionicons name="bookmark" size={16} color={colors.onPrimary} />
                     <Text style={styles.saveBtnText}>Save Place</Text>
                   </>
                 )}
@@ -535,229 +537,212 @@ export function SavePlaceModal({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  backdrop: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.45)",
-  },
-  keyboardView: {
-    flex: 1,
-    justifyContent: "flex-end",
-  },
-  sheet: {
-    backgroundColor: "white",
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    maxHeight: "85%",
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 16,
-    elevation: 20,
-  },
-  handleRow: { alignItems: "center", paddingTop: 10, paddingBottom: 4 },
-  handle: {
-    width: 36,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: "#DEDEDE",
-  },
-  header: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingHorizontal: theme.spacing.screen,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.muted,
-  },
-  title: {
-    fontSize: theme.fontSize.subtitle,
-    fontWeight: "700",
-    color: theme.colors.text,
-    flex: 1,
-    textAlign: "center",
-  },
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  return StyleSheet.create({
+    backdrop: {
+      ...StyleSheet.absoluteFillObject,
+      backgroundColor: semantic.backdrop,
+    },
+    keyboardView: {
+      flex: 1,
+      justifyContent: "flex-end",
+    },
+    sheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: 24,
+      borderTopRightRadius: 24,
+      maxHeight: "85%",
+      ...shadow.floating,
+      shadowColor: semantic.shadow,
+    },
+    handleRow: { alignItems: "center", paddingTop: 10, paddingBottom: 4 },
+    handle: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+    },
+    header: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingHorizontal: spacing.screen,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.muted,
+    },
+    title: {
+      ...typography.subtitleStrong,
+      flex: 1,
+      textAlign: "center",
+    },
 
-  // ── Search ──
-  searchRow: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingVertical: 12,
-  },
-  searchBox: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: theme.colors.neutral,
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 46,
-    borderWidth: 1,
-    borderColor: theme.colors.muted,
-  },
-  searchInput: {
-    flex: 1,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text,
-  },
-  resultsList: { maxHeight: 320 },
-  resultRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingHorizontal: theme.spacing.screen,
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: theme.colors.muted,
-  },
-  resultIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 8,
-    backgroundColor: theme.colors.primary + "12",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  resultText: { flex: 1 },
-  resultName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  resultAddress: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    opacity: 0.55,
-    marginTop: 1,
-  },
-  emptyResults: {
-    textAlign: "center",
-    padding: 24,
-    color: theme.colors.text,
-    opacity: 0.45,
-    fontSize: theme.fontSize.body,
-  },
+    // ── Search ──
+    searchRow: {
+      paddingHorizontal: spacing.screen,
+      paddingVertical: 12,
+    },
+    searchBox: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: spacing.element,
+      borderRadius: radii.chip,
+      paddingHorizontal: 12,
+      height: 46,
+      borderWidth: 1,
+    },
+    searchInput: {
+      flex: 1,
+      ...typography.body,
+      color: colors.ink,
+    },
+    resultsList: { maxHeight: 320 },
+    resultRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingHorizontal: spacing.screen,
+      paddingVertical: 12,
+      borderBottomWidth: 1,
+      borderBottomColor: colors.muted,
+    },
+    resultIconBox: {
+      width: 32,
+      height: 32,
+      borderRadius: 8,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    resultText: { flex: 1 },
+    resultName: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+    },
+    resultAddress: {
+      ...typography.caption,
+      color: colors.ink3,
+      opacity: 0.55,
+      marginTop: 1,
+    },
+    emptyResults: {
+      textAlign: "center",
+      padding: 24,
+      color: colors.ink3,
+      opacity: 0.45,
+      ...typography.body,
+    },
 
-  // ── Details ──
-  detailsContent: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingBottom: 12,
-    gap: 20,
-  },
-  placeCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    backgroundColor: theme.colors.primary + "0D",
-    borderRadius: theme.borderRadius.card,
-    padding: 12,
-    marginTop: 16,
-  },
-  placeIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: theme.colors.primary + "18",
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  placeTextBlock: { flex: 1 },
-  placeName: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: theme.colors.text,
-  },
-  placeAddress: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    opacity: 0.55,
-    marginTop: 2,
-  },
-  field: { gap: 8 },
-  fieldLabel: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "700",
-    letterSpacing: 0.6,
-    color: theme.colors.text,
-    opacity: 0.5,
-    textTransform: "uppercase",
-  },
-  textInput: {
-    height: 46,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    borderRadius: theme.borderRadius.element,
-    paddingHorizontal: 14,
-    fontSize: theme.fontSize.body,
-    color: theme.colors.text,
-    backgroundColor: theme.colors.neutral,
-  },
-  categoryRow: { gap: 8, paddingVertical: 2 },
-  categoryChip: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 20,
-    borderWidth: 1.5,
-    borderColor: theme.colors.primary,
-  },
-  categoryChipSelected: {
-    backgroundColor: theme.colors.primary,
-  },
-  categoryChipText: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: theme.colors.primary,
-  },
-  categoryChipTextSelected: {
-    color: "white",
-  },
-  toggleRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: 4,
-  },
-  toggleText: { flex: 1, marginRight: 12 },
-  toggleLabel: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  toggleSub: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    opacity: 0.5,
-    marginTop: 2,
-  },
-  saveError: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.error,
-    textAlign: "center",
-  },
+    // ── Details ──
+    detailsContent: {
+      paddingHorizontal: spacing.screen,
+      paddingBottom: 12,
+      gap: 20,
+    },
+    placeCard: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      backgroundColor: colors.primaryDim,
+      borderRadius: radii.card,
+      padding: 12,
+      marginTop: 16,
+    },
+    placeIconBox: {
+      width: 36,
+      height: 36,
+      borderRadius: 10,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    placeTextBlock: { flex: 1 },
+    placeName: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+    },
+    placeAddress: {
+      ...typography.caption,
+      color: colors.ink3,
+      opacity: 0.55,
+      marginTop: 2,
+    },
+    field: { gap: 8 },
+    fieldLabel: {
+      ...typography.captionStrong,
+      letterSpacing: 0.6,
+      color: colors.ink3,
+      opacity: 0.5,
+      textTransform: "uppercase",
+    },
+    textInput: {
+      height: 46,
+      borderWidth: 1,
+      borderColor: colors.border,
+      borderRadius: radii.element,
+      paddingHorizontal: 14,
+      ...typography.body,
+      color: colors.ink,
+      backgroundColor: colors.surface2,
+    },
+    categoryRow: { gap: spacing.element, paddingVertical: 2 },
+    categoryChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 14,
+      paddingVertical: 8,
+      borderRadius: 20,
+      borderWidth: 1.5,
+      borderColor: colors.primary,
+    },
+    categoryChipText: {
+      ...typography.captionStrong,
+      color: colors.primary,
+    },
+    toggleRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      paddingVertical: 4,
+    },
+    toggleText: { flex: 1, marginRight: 12 },
+    toggleLabel: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+    },
+    toggleSub: {
+      ...typography.caption,
+      color: colors.ink3,
+      opacity: 0.5,
+      marginTop: 2,
+    },
+    saveError: {
+      ...typography.caption,
+      color: colors.error,
+      textAlign: "center",
+    },
 
-  // ── Save button ──
-  saveRow: {
-    padding: theme.spacing.screen,
-    paddingBottom: Platform.OS === "ios" ? 28 : theme.spacing.screen,
-    borderTopWidth: 1,
-    borderTopColor: theme.colors.muted,
-  },
-  saveBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    gap: 8,
-    backgroundColor: theme.colors.primary,
-    borderRadius: theme.borderRadius.card,
-    height: 50,
-  },
-  saveBtnDisabled: { opacity: 0.4 },
-  saveBtnText: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: "white",
-  },
-});
+    // ── Save button ──
+    saveRow: {
+      padding: spacing.screen,
+      paddingBottom: Platform.OS === "ios" ? 28 : spacing.screen,
+      borderTopWidth: 1,
+      borderTopColor: colors.muted,
+    },
+    saveBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: spacing.element,
+      backgroundColor: colors.primary,
+      borderRadius: radii.card,
+      height: 50,
+    },
+    saveBtnDisabled: { opacity: 0.4 },
+    saveBtnText: {
+      ...typography.bodyStrong,
+      color: colors.onPrimary,
+    },
+  });
+}

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   View,
   Text,
@@ -6,15 +6,14 @@ import {
   TouchableOpacity,
   ScrollView,
 } from "react-native";
-import { theme, PASTELS } from "@/styles/theme";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useTheme } from "@/contexts/ThemeContext";
+import type { AppTheme, PastelKey } from "@/styles/themes";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
-
-type PastelKey = keyof typeof PASTELS;
 
 interface ReportType {
   id: string;
@@ -79,7 +78,7 @@ function ReportIcon({
   size,
   color,
 }: {
-  lib: "ionicons" | "fa5" | "fa6";
+  lib: "ionicons" | "fa5" | "fa6" | "mci";
   name: string;
   size: number;
   color: string;
@@ -88,14 +87,19 @@ function ReportIcon({
     return <FontAwesome5 name={name as any} size={size} color={color} />;
   if (lib === "fa6")
     return <FontAwesome6 name={name as any} size={size} color={color} />;
+  if (lib === "mci")
+    return (
+      <MaterialCommunityIcons name={name as any} size={size} color={color} />
+    );
   return <Ionicons name={name as any} size={size} color={color} />;
 }
 
 // ─── Thank-you state ──────────────────────────────────────────────────────────
 
 function ThankYou({ onReset }: { onReset: () => void }) {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { theme } = useTheme();
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const { colors } = theme;
   return (
     <ScrollView
       contentContainerStyle={styles.thankYouContainer}
@@ -110,7 +114,7 @@ function ThankYou({ onReset }: { onReset: () => void }) {
         <Text style={{ fontWeight: "800", color: colors.ink }}>
           1,240 commuters
         </Text>{" "}
-        on this line. You're a real one.
+        on this line. You&apos;re a real one.
       </Text>
       <TouchableOpacity
         style={styles.secondaryBtn}
@@ -126,8 +130,9 @@ function ThankYou({ onReset }: { onReset: () => void }) {
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function ReportScreen() {
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { theme } = useTheme();
+  const { colors } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [selected, setSelected] = useState<string | null>(null);
   const [severity, setSeverity] = useState(1);
   const [sent, setSent] = useState(false);
@@ -156,7 +161,7 @@ export default function ReportScreen() {
       >
         {/* Header copy */}
         <View style={styles.headerCopy}>
-          <Text style={styles.title}>What's happening?</Text>
+          <Text style={styles.title}>What&apos;s happening?</Text>
           <Text style={styles.subtitle}>
             Your report helps{" "}
             <Text style={{ fontWeight: "800", color: colors.ink }}>
@@ -169,7 +174,7 @@ export default function ReportScreen() {
         {/* 2-column category grid */}
         <View style={styles.grid}>
           {REPORT_TYPES.map((r) => {
-            const p = PASTELS[r.pastel];
+            const p = theme.colors.pastels[r.pastel];
             const active = selected === r.id;
             return (
               <TouchableOpacity
@@ -238,7 +243,7 @@ export default function ReportScreen() {
           activeOpacity={0.85}
           style={[styles.sendBtn, !selected && styles.sendBtnDisabled]}
         >
-          <Ionicons name="send" size={20} color="#fff" />
+          <Ionicons name="send" size={20} color={colors.onPrimary} />
           <Text style={styles.sendBtnText}>
             {sel ? `Send "${sel.label}" report` : "Pick what you saw"}
           </Text>
@@ -250,26 +255,25 @@ export default function ReportScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const makeStyles = (colors: typeof theme.colors) =>
-  StyleSheet.create({
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  return StyleSheet.create({
     screen: { flex: 1, backgroundColor: colors.surface },
     scroll: { flex: 1 },
     scrollContent: { paddingBottom: 28 },
 
     headerCopy: {
-      paddingHorizontal: theme.spacing.screen,
+      paddingHorizontal: spacing.screen,
       paddingTop: 8,
       paddingBottom: 20,
     },
     title: {
-      fontSize: 28,
-      fontWeight: "800",
+      ...typography.display,
       color: colors.ink,
-      letterSpacing: -0.7,
       marginBottom: 8,
     },
     subtitle: {
-      fontSize: 14.5,
+      ...typography.bodyMedium,
       color: colors.ink2,
       lineHeight: 22,
     },
@@ -278,7 +282,7 @@ const makeStyles = (colors: typeof theme.colors) =>
     grid: {
       flexDirection: "row",
       flexWrap: "wrap",
-      paddingHorizontal: theme.spacing.screen,
+      paddingHorizontal: spacing.screen,
       gap: 10,
     },
     gridCard: {
@@ -287,13 +291,9 @@ const makeStyles = (colors: typeof theme.colors) =>
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.divider,
-      padding: 16,
+      padding: spacing.card,
       gap: 12,
-      shadowColor: "rgba(20,30,80,0.04)",
-      shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 1,
-      shadowRadius: 2,
-      elevation: 1,
+      ...shadow.soft,
     },
     gridCardActive: {
       borderWidth: 2,
@@ -312,7 +312,7 @@ const makeStyles = (colors: typeof theme.colors) =>
       alignItems: "center",
     },
     gridLabel: {
-      fontSize: 16,
+      ...typography.subtitle,
       fontWeight: "800",
       color: colors.ink,
       letterSpacing: -0.2,
@@ -323,25 +323,24 @@ const makeStyles = (colors: typeof theme.colors) =>
 
     // Severity
     severityCard: {
-      marginHorizontal: theme.spacing.screen,
+      marginHorizontal: spacing.screen,
       marginTop: 14,
       backgroundColor: colors.card,
       borderRadius: 20,
       borderWidth: 1,
       borderColor: colors.divider,
-      padding: 16,
+      padding: spacing.card,
       gap: 12,
     },
     severityHeading: {
-      fontSize: 11,
-      fontWeight: "700",
+      ...typography.micro,
       color: colors.ink3,
       letterSpacing: 1.4,
       textTransform: "uppercase",
     },
     severityRow: {
       flexDirection: "row",
-      gap: 8,
+      gap: spacing.element,
     },
     severityChip: {
       flex: 1,
@@ -357,8 +356,7 @@ const makeStyles = (colors: typeof theme.colors) =>
       backgroundColor: colors.primaryDim,
     },
     severityChipText: {
-      fontSize: 12,
-      fontWeight: "700",
+      ...typography.badge,
       color: colors.ink2,
     },
     severityChipTextActive: {
@@ -367,7 +365,7 @@ const makeStyles = (colors: typeof theme.colors) =>
 
     // Bottom bar
     bottomBar: {
-      paddingHorizontal: theme.spacing.screen,
+      paddingHorizontal: spacing.screen,
       paddingTop: 12,
       paddingBottom: 16,
       borderTopWidth: 1,
@@ -376,12 +374,12 @@ const makeStyles = (colors: typeof theme.colors) =>
     },
     sendBtn: {
       backgroundColor: colors.primary,
-      borderRadius: theme.borderRadius.button,
+      borderRadius: radii.button,
       height: 54,
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "center",
-      gap: 8,
+      gap: spacing.element,
       shadowColor: colors.primary,
       shadowOffset: { width: 0, height: 6 },
       shadowOpacity: 0.25,
@@ -394,9 +392,8 @@ const makeStyles = (colors: typeof theme.colors) =>
       elevation: 0,
     },
     sendBtnText: {
-      color: "#fff",
-      fontSize: 17,
-      fontWeight: "700",
+      color: colors.onPrimary,
+      ...typography.metaLg,
       letterSpacing: -0.2,
     },
 
@@ -420,15 +417,14 @@ const makeStyles = (colors: typeof theme.colors) =>
       marginBottom: 22,
     },
     thankYouTitle: {
-      fontSize: 28,
-      fontWeight: "800",
-      color: colors.ink,
+      ...typography.display,
       letterSpacing: -0.6,
       textAlign: "center",
+      color: colors.ink,
       marginBottom: 12,
     },
     thankYouBody: {
-      fontSize: 15,
+      ...typography.buttonLg,
       color: colors.ink2,
       textAlign: "center",
       lineHeight: 24,
@@ -438,7 +434,7 @@ const makeStyles = (colors: typeof theme.colors) =>
     secondaryBtn: {
       height: 50,
       paddingHorizontal: 20,
-      borderRadius: theme.borderRadius.button,
+      borderRadius: radii.button,
       borderWidth: 1.5,
       borderColor: colors.divider,
       backgroundColor: colors.card,
@@ -446,8 +442,8 @@ const makeStyles = (colors: typeof theme.colors) =>
       justifyContent: "center",
     },
     secondaryBtnText: {
-      fontSize: 16,
-      fontWeight: "600",
+      ...typography.subtitleStrong,
       color: colors.ink,
     },
   });
+}

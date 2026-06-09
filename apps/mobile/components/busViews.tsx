@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -11,8 +11,8 @@ import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
 import type { StopTimeUpdate, CalgaryTransitRoute } from "@/types/database";
-import { theme } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
+import type { AppTheme } from "@/styles/themes";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -23,13 +23,16 @@ function fmtEpoch(epoch: number): string {
   });
 }
 
-function fmtDelay(seconds: number | null): { label: string; color: string } {
+function formatDelay(
+  seconds: number | null,
+  typography: AppTheme["typography"],
+): { label: string; color: string } {
   if (seconds === null || Math.abs(seconds) < 60)
-    return { label: "On Time", color: "#2E7D32" };
+    return { label: "On Time", color: typography.delayOnTime };
   const mins = Math.round(seconds / 60);
   return {
     label: mins > 0 ? `+${mins} min` : `${Math.abs(mins)} min early`,
-    color: mins > 0 ? theme.colors.error : "#1565C0",
+    color: mins > 0 ? typography.delayLate : typography.delayEarly,
   };
 }
 
@@ -60,7 +63,9 @@ export function BusDetailsPanel({
   onClose,
   onStopTap,
 }: BusDetailsPanelProps) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography, semantic } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
   const [loading, setLoading] = useState(true);
@@ -113,16 +118,16 @@ export function BusDetailsPanel({
   const isEmpty = !loading && tripStops.length === 0;
 
   return (
-    <View style={[s.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
-      <View style={[s.panelHeader, { borderBottomColor: colors.border }]}>
-        <View style={s.panelHeaderLeft}>
-          <View style={s.panelIconBox}>
-            <Ionicons name="bus" size={16} color={theme.colors.primary} />
+    <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
+      <View style={[styles.panelHeader, { borderBottomColor: colors.border }]}>
+        <View style={styles.panelHeaderLeft}>
+          <View style={styles.panelIconBox}>
+            <Ionicons name="bus" size={16} color={colors.primary} />
           </View>
-          <View style={s.panelTitleBlock}>
-            <Text style={[s.panelTitle, { color: colors.ink }]}>Bus {routeId}</Text>
+          <View style={styles.panelTitleBlock}>
+            <Text style={[styles.panelTitle, { color: colors.ink }]}>Bus {routeId}</Text>
             {routeName ? (
-              <Text style={[s.panelSub, { color: colors.ink3 }]} numberOfLines={1}>{routeName}</Text>
+              <Text style={[styles.panelSub, { color: colors.ink3 }]} numberOfLines={1}>{routeName}</Text>
             ) : null}
           </View>
         </View>
@@ -131,48 +136,48 @@ export function BusDetailsPanel({
         </TouchableOpacity>
       </View>
 
-      <View style={s.panelContent}>
+      <View style={styles.panelContent}>
         {loading ? (
-          <ActivityIndicator size="small" color={theme.colors.primary} />
+          <ActivityIndicator size="small" color={colors.primary} />
         ) : isEmpty ? (
-          <Text style={[s.empty, { color: colors.ink3 }]}>No schedule data</Text>
+          <Text style={[styles.empty, { color: colors.ink3 }]}>No schedule data</Text>
         ) : (
-          <ScrollView style={s.scroll} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
             {tripStops.map((stop) => {
               const telerideNum = parseInt(stop.stop_id, 10);
               const tappable = onStopTap && !isNaN(telerideNum);
-              const delay = fmtDelay(stop.arrival_delay);
+              const delay = formatDelay(stop.arrival_delay, typography);
               return (
                 <TouchableOpacity
                   key={stop.stop_sequence}
-                  style={[s.stopRow, { borderBottomColor: colors.border }, stop.passed && s.stopRowPassed]}
+                  style={[styles.stopRow, { borderBottomColor: colors.border }, stop.passed && styles.stopRowPassed]}
                   onPress={tappable ? () => onStopTap!(telerideNum, stop.stop_name) : undefined}
                   disabled={!tappable}
                   activeOpacity={tappable ? 0.65 : 1}
                 >
                   <View
                     style={[
-                      s.sequenceDot,
+                      styles.sequenceDot,
                       { backgroundColor: stop.passed ? colors.ink3 : colors.primary },
                     ]}
                   />
-                  <View style={s.stopInfo}>
+                  <View style={styles.stopInfo}>
                     <Text
-                      style={[s.stopName, { color: stop.passed ? colors.ink3 : colors.ink }]}
+                      style={[styles.stopName, { color: stop.passed ? colors.ink3 : colors.ink }]}
                       numberOfLines={1}
                     >
                       {stop.stop_name}
                     </Text>
-                    <Text style={[s.stopTime, { color: colors.ink3 }]}>
+                    <Text style={[styles.stopTime, { color: colors.ink3 }]}>
                       {fmtEpoch(stop.arrival_time)}
                     </Text>
                   </View>
                   {stop.passed ? (
-                    <View style={[s.passedPill, { backgroundColor: colors.surface2 }]}>
-                      <Text style={[s.passedPillText, { color: colors.ink3 }]}>Passed</Text>
+                    <View style={[styles.passedPill, { backgroundColor: colors.surface2 }]}>
+                      <Text style={[styles.passedPillText, { color: colors.ink3 }]}>Passed</Text>
                     </View>
                   ) : (
-                    <Text style={[s.delayLabel, { color: delay.color }]} numberOfLines={1}>
+                    <Text style={[styles.delayLabel, { color: delay.color }]} numberOfLines={1}>
                       {delay.label}
                     </Text>
                   )}
@@ -188,105 +193,103 @@ export function BusDetailsPanel({
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const s = StyleSheet.create({
-  panel: {
-    marginHorizontal: theme.spacing.screen,
-    marginBottom: 12,
-    backgroundColor: "white",
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    overflow: "hidden",
-  },
-  panelHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    padding: 12,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.border,
-  },
-  panelHeaderLeft: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    flex: 1,
-  },
-  panelIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    backgroundColor: theme.colors.primary + "15",
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  panelTitleBlock: { flex: 1 },
-  panelTitle: {
-    fontSize: theme.fontSize.body,
-    fontWeight: "700",
-    color: "#1A1C1F",
-  },
-  panelSub: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    marginTop: 1,
-  },
-  panelContent: {
-    height: 180,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    justifyContent: "center",
-  },
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii } = t;
+  return StyleSheet.create({
+    panel: {
+      marginHorizontal: spacing.screen,
+      marginBottom: 12,
+      backgroundColor: colors.card,
+      borderRadius: 16,
+      borderWidth: 1,
+      borderColor: colors.border,
+      overflow: "hidden",
+    },
+    panelHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      padding: 12,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    panelHeaderLeft: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      flex: 1,
+    },
+    panelIconBox: {
+      width: 32,
+      height: 32,
+      borderRadius: 9,
+      backgroundColor: colors.primaryDim,
+      justifyContent: "center",
+      alignItems: "center",
+      flexShrink: 0,
+    },
+    panelTitleBlock: { flex: 1 },
+    panelTitle: {
+      ...typography.bodyStrong,
+      color: semantic.panelTitle,
+    },
+    panelSub: {
+      ...typography.caption,
+      color: colors.ink3,
+      marginTop: 1,
+    },
+    panelContent: {
+      height: 180,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      justifyContent: "center",
+    },
 
-  empty: {
-    fontSize: theme.fontSize.caption,
-    color: theme.colors.text,
-    textAlign: "center",
-    paddingVertical: 8,
-  },
-  scroll: { flex: 1 },
+    empty: {
+      ...typography.caption,
+      color: colors.ink3,
+      textAlign: "center",
+      paddingVertical: 8,
+    },
+    scroll: { flex: 1 },
 
-  stopRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 10,
-    paddingVertical: 7,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: theme.colors.border,
-  },
-  stopRowPassed: { opacity: 0.45 },
-  sequenceDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: theme.colors.primary,
-    flexShrink: 0,
-  },
-  sequenceDotPassed: { backgroundColor: theme.colors.text },
-  stopInfo: { flex: 1, gap: 1 },
-  stopName: {
-    fontSize: theme.fontSize.caption,
-    fontWeight: "600",
-    color: "#1A1C1F",
-  },
-  stopTime: { fontSize: 11, color: theme.colors.text },
-  passedText: { color: theme.colors.text },
-  passedPill: {
-    backgroundColor: theme.colors.muted,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 4,
-  },
-  passedPillText: {
-    fontSize: 10,
-    fontWeight: "600",
-    color: theme.colors.text,
-  },
-  delayLabel: {
-    fontSize: 10,
-    fontWeight: "700",
-    flexShrink: 0,
-    textAlign: "right",
-  },
-});
+    stopRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 7,
+      borderBottomWidth: StyleSheet.hairlineWidth,
+      borderBottomColor: colors.border,
+    },
+    stopRowPassed: { opacity: 0.45 },
+    sequenceDot: {
+      width: 8,
+      height: 8,
+      borderRadius: 4,
+      backgroundColor: colors.primary,
+      flexShrink: 0,
+    },
+    stopInfo: { flex: 1, gap: 1 },
+    stopName: {
+      ...typography.captionStrong,
+      color: semantic.panelTitle,
+    },
+    stopTime: { ...typography.monoBody, color: colors.ink3 },
+    passedPill: {
+      backgroundColor: colors.muted,
+      paddingHorizontal: 6,
+      paddingVertical: 2,
+      borderRadius: 4,
+    },
+    passedPillText: {
+      ...typography.micro,
+      fontWeight: "600",
+      color: colors.ink3,
+    },
+    delayLabel: {
+      ...typography.micro,
+      flexShrink: 0,
+      textAlign: "right",
+    },
+  });
+}

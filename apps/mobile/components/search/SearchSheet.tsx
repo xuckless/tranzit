@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useMemo } from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { SearchBar } from "./SearchBar";
 import { DestinationSuggestionsList } from "./DestinationSuggestionsList";
@@ -6,7 +6,7 @@ import { useDestinationSearch } from "../../hooks/useDestinationSearch";
 import { TranzitApiService } from "../../services/TranzitApiService";
 import type { SelectedDestination, SearchSuggestion } from "../../types/places";
 import { useTheme } from "../../contexts/ThemeContext";
-import { theme } from "../../styles/theme";
+import type { AppTheme } from "../../styles/themes";
 
 interface UserLocation {
   latitude: number;
@@ -26,7 +26,9 @@ export const SearchSheet: React.FC<Props> = ({
   onSearchActiveChange,
   onClear,
 }) => {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const [query, setQuery] = useState("");
   const { status, suggestions, search, reset } = useDestinationSearch(userLocation);
 
@@ -93,15 +95,17 @@ export const SearchSheet: React.FC<Props> = ({
   );
 };
 
-const styles = StyleSheet.create({
-  container: {
-    paddingHorizontal: 16,
-    paddingBottom: 8,
-  },
-  emptyText: {
-    fontFamily: "DMmono-Regular",
-    fontSize: 12,
-    textAlign: "center",
-    paddingVertical: 20,
-  },
-});
+const makeStyles = (t: AppTheme) => {
+  const { typography, spacing } = t;
+  return StyleSheet.create({
+    container: {
+      paddingHorizontal: spacing.card,
+      paddingBottom: t.spacing.element,
+    },
+    emptyText: {
+      ...typography.mono,
+      textAlign: "center",
+      paddingVertical: 20,
+    },
+  });
+};

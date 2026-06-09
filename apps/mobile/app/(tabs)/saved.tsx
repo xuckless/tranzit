@@ -9,15 +9,13 @@ import {
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-import { useState } from "react";
-import { theme, PASTELS } from "@/styles/theme";
+import { useState, useMemo } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
 import type { SavedPlace } from "@/lib/db";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
+import type { AppTheme, PastelKey } from "@/styles/themes";
 // ─── Category → pastel + icon ─────────────────────────────────────────────────
-
-type PastelKey = keyof typeof PASTELS;
 
 const CATEGORY_STYLE: Record<string, { icon: string; pastel: PastelKey }> = {
   home: { icon: "home", pastel: "lavender" },
@@ -56,9 +54,11 @@ function PlaceRow({
   categoryId: number;
   onSetDefault: (categoryId: number, placeId: string) => void;
 }) {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const { icon, pastel } = categoryStyle(categoryName);
-  const p = PASTELS[pastel];
+  const p = theme.colors.pastels[pastel];
   const displayName = place.label ?? place.address;
   const subtitle = place.label ? place.address : null;
 
@@ -97,7 +97,7 @@ function PlaceRow({
         <Ionicons
           name={place.isDefault ? "star" : "star-outline"}
           size={20}
-          color={place.isDefault ? theme.colors.accent : theme.colors.ink3}
+          color={place.isDefault ? colors.accent : colors.ink3}
         />
       </TouchableOpacity>
     </TouchableOpacity>
@@ -107,17 +107,19 @@ function PlaceRow({
 // ─── Empty state ──────────────────────────────────────────────────────────────
 
 function EmptyState() {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   return (
     <View style={styles.emptyState}>
       <View style={styles.emptyIconWrap}>
-        <Ionicons name="bookmark" size={42} color={theme.colors.ink3} />
+        <Ionicons name="bookmark" size={42} color={colors.ink3} />
       </View>
-      <Text style={[styles.emptyTitle, { color: colors.text }]}>
+      <Text style={[styles.emptyTitle, { color: colors.ink }]}>
         Nothing pinned yet
       </Text>
-      <Text style={[styles.emptySubtitle, { color: colors.text }]}>
-        Star a stop, route, or place and it'll live here for quick access.
+      <Text style={[styles.emptySubtitle, { color: colors.ink2 }]}>
+        Star a stop, route, or place and it&apos;ll live here for quick access.
       </Text>
     </View>
   );
@@ -132,7 +134,9 @@ type Section = {
 };
 
 export default function SavedScreen() {
-  const { colors } = useTheme();
+  const { theme } = useTheme();
+  const { colors, typography } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const { data, loading, error, markDefault, refresh } = useSavedPlaces();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
@@ -147,7 +151,7 @@ export default function SavedScreen() {
   if (loading) {
     return (
       <SafeAreaView style={styles.center}>
-        <ActivityIndicator color={theme.colors.primary} />
+        <ActivityIndicator color={colors.primary} />
       </SafeAreaView>
     );
   }
@@ -222,7 +226,7 @@ export default function SavedScreen() {
         onPress={() => setShowSaveModal(true)}
         activeOpacity={0.85}
       >
-        <Ionicons name="add" size={26} color="white" />
+        <Ionicons name="add" size={26} color={colors.onPrimary} />
       </TouchableOpacity>
 
       <SavePlaceModal
@@ -236,143 +240,139 @@ export default function SavedScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const styles = StyleSheet.create({
-  screen: { flex: 1, backgroundColor: theme.colors.surface },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  return StyleSheet.create({
+    screen: { flex: 1, backgroundColor: colors.surface },
+    center: { flex: 1, justifyContent: "center", alignItems: "center" },
 
-  // Page header
-  pageHeader: {
-    flexDirection: "row",
-    alignItems: "flex-end",
-    justifyContent: "space-between",
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 12,
-    paddingBottom: 16,
-    backgroundColor: theme.colors.surface,
-  },
-  pageTitle: {
-    fontSize: 30,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.8,
-  },
-  pageSubtitle: {
-    fontSize: 14,
-    color: theme.colors.ink2,
-    marginTop: 2,
-  },
-  placeCount: {
-    fontSize: 13,
-    fontWeight: "600",
-    color: theme.colors.ink3,
-  },
+    // Page header
+    pageHeader: {
+      flexDirection: "row",
+      alignItems: "flex-end",
+      justifyContent: "space-between",
+      paddingHorizontal: spacing.screen,
+      paddingTop: 12,
+      paddingBottom: 16,
+      backgroundColor: colors.surface,
+    },
+    pageTitle: {
+      ...typography.displayLg,
+      color: colors.ink,
+    },
+    pageSubtitle: {
+      ...typography.body,
+      color: colors.ink2,
+      marginTop: 2,
+    },
+    placeCount: {
+      ...typography.bodySmall,
+      fontWeight: "600",
+      color: colors.ink3,
+    },
 
-  list: { paddingBottom: 80 },
+    list: { paddingBottom: 80 },
 
-  // Section
-  sectionHeader: {
-    paddingHorizontal: theme.spacing.screen,
-    paddingTop: 8,
-    paddingBottom: 6,
-  },
-  sectionTitle: {
-    fontSize: 11,
-    fontWeight: "700",
-    letterSpacing: 1.4,
-    color: theme.colors.ink3,
-    textTransform: "uppercase",
-  },
+    // Section
+    sectionHeader: {
+      paddingHorizontal: spacing.screen,
+      paddingTop: 8,
+      paddingBottom: 6,
+    },
+    sectionTitle: {
+      ...typography.microStrong,
+      letterSpacing: 1.4,
+      color: colors.ink3,
+      textTransform: "uppercase",
+    },
 
-  // Rows
-  rowWrap: {
-    marginHorizontal: theme.spacing.screen,
-    backgroundColor: theme.colors.card,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.divider,
-    overflow: "hidden",
-  },
-  placeRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 14,
-  },
-  placeIconBox: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    justifyContent: "center",
-    alignItems: "center",
-    flexShrink: 0,
-  },
-  placeText: { flex: 1 },
-  placeName: {
-    fontSize: 15.5,
-    fontWeight: "700",
-    color: theme.colors.ink,
-    letterSpacing: -0.2,
-  },
-  placeAddress: {
-    fontSize: 13,
-    color: theme.colors.ink3,
-    marginTop: 2,
-  },
-  itemSeparator: {
-    height: 1,
-    backgroundColor: theme.colors.divider,
-    marginLeft: 14 + 44 + 12,
-  },
+    // Rows
+    rowWrap: {
+      marginHorizontal: spacing.screen,
+      backgroundColor: colors.card,
+      borderRadius: 18,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      overflow: "hidden",
+    },
+    placeRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 12,
+      paddingHorizontal: 14,
+      paddingVertical: 14,
+    },
+    placeIconBox: {
+      width: 44,
+      height: 44,
+      borderRadius: 14,
+      justifyContent: "center",
+      alignItems: "center",
+      flexShrink: 0,
+    },
+    placeText: { flex: 1 },
+    placeName: {
+      ...typography.meta,
+      color: colors.ink,
+    },
+    placeAddress: {
+      ...typography.bodySmall,
+      color: colors.ink3,
+      marginTop: 2,
+    },
+    itemSeparator: {
+      height: 1,
+      backgroundColor: colors.divider,
+      marginLeft: 14 + 44 + 12,
+    },
 
-  // Empty
-  emptyState: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    gap: 10,
-    padding: 40,
-  },
-  emptyIconWrap: {
-    width: 90,
-    height: 90,
-    borderRadius: 30,
-    backgroundColor: theme.colors.surface2,
-    justifyContent: "center",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  emptyTitle: {
-    fontSize: 20,
-    fontWeight: "800",
-    color: theme.colors.ink,
-    letterSpacing: -0.3,
-  },
-  emptySubtitle: {
-    fontSize: 14,
-    color: theme.colors.ink2,
-    textAlign: "center",
-    lineHeight: 22,
-    maxWidth: 280,
-  },
+    // Empty
+    emptyState: {
+      flex: 1,
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 10,
+      padding: 40,
+    },
+    emptyIconWrap: {
+      width: 90,
+      height: 90,
+      borderRadius: 30,
+      backgroundColor: colors.surface2,
+      justifyContent: "center",
+      alignItems: "center",
+      marginBottom: 8,
+    },
+    emptyTitle: {
+      ...typography.titleLarge,
+      color: colors.ink,
+    },
+    emptySubtitle: {
+      ...typography.body,
+      color: colors.ink2,
+      textAlign: "center",
+      lineHeight: 22,
+      maxWidth: 280,
+    },
 
-  errorText: { fontSize: 14, color: theme.colors.error },
+    errorText: { ...typography.body, color: colors.error },
 
-  // FAB
-  fab: {
-    position: "absolute",
-    bottom: 28,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: theme.colors.primary,
-    justifyContent: "center",
-    alignItems: "center",
-    shadowColor: theme.colors.primary,
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 8,
-  },
-});
+    // FAB
+    fab: {
+      position: "absolute",
+      bottom: 28,
+      right: 20,
+      width: 56,
+      height: 56,
+      borderRadius: radii.fab,
+      backgroundColor: colors.primary,
+      justifyContent: "center",
+      alignItems: "center",
+      shadowColor: colors.primary,
+      shadowOffset: { width: 0, height: 8 },
+      shadowOpacity: 0.35,
+      shadowRadius: 16,
+      elevation: 8,
+    },
+  });
+}

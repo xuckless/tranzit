@@ -28,7 +28,6 @@ import AntDesign from "@expo/vector-icons/AntDesign";
 import { useLocalSearchParams, useRouter } from "expo-router";
 import { useFocusEffect } from "@react-navigation/native";
 import * as Location from "expo-location";
-import { theme } from "@/styles/theme";
 import { useTheme } from "@/contexts/ThemeContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import { useDestinationSearch } from "@/hooks/useDestinationSearch";
@@ -41,8 +40,8 @@ import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
 import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
+import type { AppTheme } from "@/styles/themes";
 
-const STYLE_URL = `https://api.maptiler.com/maps/positron/style.json?key=${process.env.EXPO_PUBLIC_MAPTILER_KEY}`;
 const CALGARY_CENTER: [number, number] = [-114.058, 51.044];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -57,8 +56,6 @@ interface RouteEndpoint {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const ROUTE_PALETTE = ["#0058BC", "#FF5722", "#2E7D32", "#6A1B9A"];
-
 const FILTERS: { mode: FilterMode; icon: string }[] = [
   { mode: "All", icon: "list" },
   { mode: "Bus", icon: "bus" },
@@ -69,8 +66,9 @@ const FILTERS: { mode: FilterMode; icon: string }[] = [
 
 export default function RouteScreen() {
   const router = useRouter();
-  const { colors } = useTheme();
-  const styles = makeStyles(colors);
+  const { theme } = useTheme();
+  const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = theme;
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const {
     destinationId,
     destinationLat,
@@ -233,7 +231,6 @@ export default function RouteScreen() {
         });
 
         if (fetchedRoutes.length > 0) {
-          // v11 fitBounds: ([west, south, east, north], options)
           const lats = [effectiveOrigin.lat, destination.lat];
           const lngs = [effectiveOrigin.lng, destination.lng];
           const bounds: [number, number, number, number] = [
@@ -260,9 +257,6 @@ export default function RouteScreen() {
   }, [origin, gpsLocation, destination, originLabel, destinationLabel]);
 
   // ── Polyline GeoJSON ──────────────────────────────────────────────────────────
-  // One FeatureCollection across all routes. Each feature carries color + width
-  // properties, read by the LineLayer's data-driven expressions.
-
   const routesGeoJSON = useMemo(() => {
     const features = routes.flatMap((r, i) => {
       const encoded = r.polyline?.encodedPolyline;
@@ -280,14 +274,14 @@ export default function RouteScreen() {
         .flatMap((l) => l.steps ?? [])
         .find((s) => s.travelMode === "TRANSIT");
       const lineColor = transitStep?.transitDetails?.transitLine?.color
-        ? normalizeColor(transitStep.transitDetails.transitLine.color)
-        : ROUTE_PALETTE[i % ROUTE_PALETTE.length];
+        ? normalizeColor(transitStep.transitDetails.transitLine.color, theme.colors.primary)
+        : semantic.routePalette[i % semantic.routePalette.length];
 
       return [
         {
           type: "Feature" as const,
           properties: {
-            color: isSelected ? lineColor : "#C1C6D7",
+            color: isSelected ? lineColor : semantic.unselectedPolyline,
             width: isSelected ? 5 : 3,
             isSelected,
           },
@@ -300,7 +294,7 @@ export default function RouteScreen() {
     });
 
     return { type: "FeatureCollection" as const, features };
-  }, [routes, selectedRoute]);
+  }, [routes, selectedRoute, theme.colors.primary, semantic.routePalette, semantic.unselectedPolyline]);
 
   // ── Filter ────────────────────────────────────────────────────────────────────
   const filteredRoutes = useMemo(() => {
@@ -505,7 +499,7 @@ export default function RouteScreen() {
     <View style={[styles.screen, { backgroundColor: colors.surface }]}>
       <Map
         style={styles.map}
-        mapStyle={STYLE_URL}
+        mapStyle={mapPaint.baseStyle}
         compass={false}
         logo={false}
         attribution={true}
@@ -518,9 +512,6 @@ export default function RouteScreen() {
           }}
         />
 
-        {/* All route polylines — color and width are data-driven per feature.
-            line-dasharray is not data-driven in MapLibre, so we render two
-            separate Layers over the same source, filtered by isSelected. */}
         <GeoJSONSource id="routes-source" data={routesGeoJSON}>
           <Layer
             id="routes-line-selected"
@@ -551,7 +542,6 @@ export default function RouteScreen() {
           />
         </GeoJSONSource>
 
-        {/* Origin dot */}
         {origin && (
           <Marker
             id="origin-marker"
@@ -562,7 +552,6 @@ export default function RouteScreen() {
           </Marker>
         )}
 
-        {/* Destination pin */}
         {destination && (
           <Marker
             id="destination-marker"
@@ -597,7 +586,7 @@ export default function RouteScreen() {
                 if (!originLabel.trim()) setOriginLabel("Current Location");
               }}
               placeholder="Origin"
-              placeholderTextColor={colors.text}
+              placeholderTextColor={colors.ink2}
               returnKeyType="search"
               blurOnSubmit={false}
               autoCorrect={false}
@@ -625,7 +614,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="close-circle"
                   size={16}
-                  color={colors.text}
+                  color={colors.ink2}
                 />
               </TouchableOpacity>
             )}
@@ -650,7 +639,7 @@ export default function RouteScreen() {
                 originSearch.reset();
               }}
               placeholder="Where to?"
-              placeholderTextColor={colors.text}
+              placeholderTextColor={colors.ink2}
               returnKeyType="search"
               blurOnSubmit={false}
               autoCorrect={false}
@@ -671,7 +660,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="close-circle"
                   size={16}
-                  color={colors.text}
+                  color={colors.ink2}
                 />
               </TouchableOpacity>
             )}
@@ -692,7 +681,7 @@ export default function RouteScreen() {
                 <Ionicons
                   name="search"
                   size={14}
-                  color={destination?.placeId ? "white" : colors.text}
+                  color={destination?.placeId ? colors.onPrimary : colors.ink3}
                 />
                 <Text
                   style={[
@@ -721,7 +710,7 @@ export default function RouteScreen() {
         <View
           style={[
             styles.searchResultsArea,
-            { paddingHorizontal: theme.spacing.screen },
+            { paddingHorizontal: spacing.screen },
           ]}
         >
           {destinationSearch.status === "loading" && (
@@ -745,7 +734,7 @@ export default function RouteScreen() {
         <View
           style={[
             styles.searchResultsArea,
-            { paddingHorizontal: theme.spacing.screen },
+            { paddingHorizontal: spacing.screen },
           ]}
         >
           {originSearch.status === "loading" && (
@@ -791,7 +780,7 @@ export default function RouteScreen() {
               <Ionicons
                 name="navigate-outline"
                 size={36}
-                color={colors.text}
+                color={colors.ink2}
               />
               <Text style={styles.stateText}>
                 {destination
@@ -805,9 +794,9 @@ export default function RouteScreen() {
             <>
               <HorizontalView
                 style={{
-                  paddingHorizontal: theme.spacing.screen,
+                  paddingHorizontal: spacing.screen,
                   paddingVertical: 6,
-                  gap: theme.spacing.element,
+                  gap: spacing.element,
                 }}
               >
                 {FILTERS.map(({ mode, icon }) => {
@@ -826,7 +815,7 @@ export default function RouteScreen() {
                         name={icon as any}
                         size={12}
                         color={
-                          isActive ? colors.selected : colors.text
+                          isActive ? colors.selected : colors.ink2
                         }
                       />
                       <Text
@@ -872,9 +861,9 @@ export default function RouteScreen() {
             activeOpacity={0.85}
           >
             {isStarting ? (
-              <ActivityIndicator size="small" color="white" />
+              <ActivityIndicator size="small" color={colors.onPrimary} />
             ) : (
-              <Ionicons name="navigate" size={18} color="white" />
+              <Ionicons name="navigate" size={18} color={colors.onPrimary} />
             )}
             <Text style={styles.startBtnText}>
               {isStarting ? "Starting…" : "Start Journey"}
@@ -888,8 +877,9 @@ export default function RouteScreen() {
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
-const makeStyles = (colors: typeof theme.colors) =>
-  StyleSheet.create({
+function makeStyles(t: AppTheme) {
+  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  return StyleSheet.create({
     screen: { flex: 1, backgroundColor: colors.surface },
     map: { height: 220 },
     originDot: {
@@ -898,37 +888,37 @@ const makeStyles = (colors: typeof theme.colors) =>
       borderRadius: 7,
       backgroundColor: colors.primary,
       borderWidth: 3,
-      borderColor: "white",
+      borderColor: colors.onPrimary,
     },
 
     searchPanel: {
       backgroundColor: colors.card,
-      marginHorizontal: theme.spacing.screen,
+      marginHorizontal: spacing.screen,
       marginTop: -20,
       borderRadius: 20,
-      paddingHorizontal: theme.spacing.card,
-      paddingVertical: theme.spacing.element + 4,
-      shadowColor: "#000",
+      paddingHorizontal: spacing.card,
+      paddingVertical: spacing.element + 4,
+      ...shadow.card,
+      shadowColor: semantic.shadow,
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.1,
       shadowRadius: 12,
       elevation: 6,
       flexDirection: "row",
       alignItems: "center",
-      gap: 8,
+      gap: spacing.element,
     },
     searchRows: { flex: 1, gap: 2 },
     searchRow: {
       flexDirection: "row",
       alignItems: "center",
-      gap: 8,
+      gap: spacing.element,
       paddingVertical: 6,
     },
     rowIcon: { width: 22, textAlign: "center" },
     searchInput: {
       flex: 1,
-      fontSize: theme.fontSize.body,
-      fontWeight: "600",
+      ...typography.bodyStrong,
       color: colors.ink,
     },
     searchDivider: {
@@ -936,10 +926,9 @@ const makeStyles = (colors: typeof theme.colors) =>
       backgroundColor: colors.divider,
       marginLeft: 30,
     },
-    cancelBtn: { paddingLeft: 8 },
+    cancelBtn: { paddingLeft: spacing.element },
     cancelText: {
-      fontSize: theme.fontSize.body,
-      fontWeight: "600",
+      ...typography.bodyStrong,
       color: colors.primary,
     },
 
@@ -955,21 +944,20 @@ const makeStyles = (colors: typeof theme.colors) =>
     },
     findRoutesBtnDisabled: { backgroundColor: colors.muted },
     findRoutesBtnText: {
-      fontSize: theme.fontSize.body,
-      fontWeight: "700",
-      color: "white",
+      ...typography.bodyStrong,
+      color: colors.onPrimary,
     },
     findRoutesBtnTextDisabled: { color: colors.ink2 },
 
-    searchResultsArea: { flex: 1, paddingTop: theme.spacing.element },
+    searchResultsArea: { flex: 1, paddingTop: spacing.element },
     emptyText: {
-      fontSize: theme.fontSize.body,
+      ...typography.body,
       color: colors.ink2,
       textAlign: "center",
       marginTop: 24,
     },
 
-    routeArea: { flex: 1, paddingTop: theme.spacing.element },
+    routeArea: { flex: 1, paddingTop: spacing.element },
     centerState: {
       flex: 1,
       justifyContent: "center",
@@ -978,13 +966,12 @@ const makeStyles = (colors: typeof theme.colors) =>
       paddingBottom: 40,
     },
     stateText: {
-      fontSize: theme.fontSize.subtitle,
-      fontWeight: "600",
+      ...typography.subtitleStrong,
       color: colors.ink,
       textAlign: "center",
     },
     stateSubText: {
-      fontSize: theme.fontSize.caption,
+      ...typography.caption,
       color: colors.ink2,
       textAlign: "center",
       maxWidth: 260,
@@ -993,16 +980,15 @@ const makeStyles = (colors: typeof theme.colors) =>
     modeChip: {
       backgroundColor: colors.surface2,
       borderRadius: 30,
-      paddingHorizontal: theme.spacing.card,
-      paddingVertical: theme.spacing.element,
+      paddingHorizontal: spacing.card,
+      paddingVertical: spacing.element,
       flexDirection: "row",
       alignItems: "center",
       gap: 4,
     },
     modeChipActive: { backgroundColor: colors.secondary },
     modeChipText: {
-      fontSize: theme.fontSize.body,
-      fontWeight: "700",
+      ...typography.bodyStrong,
       color: colors.ink,
     },
     modeChipTextActive: { color: colors.selected },
@@ -1012,8 +998,8 @@ const makeStyles = (colors: typeof theme.colors) =>
     startWrap: {
       position: "absolute",
       bottom: 16,
-      left: theme.spacing.screen,
-      right: theme.spacing.screen,
+      left: spacing.screen,
+      right: spacing.screen,
       shadowColor: colors.primary,
       shadowOffset: { width: 0, height: 4 },
       shadowOpacity: 0.3,
@@ -1022,7 +1008,7 @@ const makeStyles = (colors: typeof theme.colors) =>
     },
     startBtn: {
       backgroundColor: colors.primary,
-      borderRadius: 18,
+      borderRadius: radii.button,
       paddingVertical: 16,
       flexDirection: "row",
       justifyContent: "center",
@@ -1030,17 +1016,17 @@ const makeStyles = (colors: typeof theme.colors) =>
       gap: 10,
     },
     startBtnText: {
-      fontSize: theme.fontSize.subtitle,
+      ...typography.subtitleStrong,
       fontWeight: "800",
-      color: "white",
+      color: colors.onPrimary,
       letterSpacing: 0.3,
     },
     startBtnDisabled: { opacity: 0.6 },
     startErrorText: {
-      fontSize: theme.fontSize.caption,
+      ...typography.captionStrong,
       color: colors.error,
       textAlign: "center",
       marginBottom: 8,
-      fontWeight: "600",
     },
   });
+}
