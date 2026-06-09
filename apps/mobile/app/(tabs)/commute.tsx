@@ -1568,7 +1568,7 @@ export default function CommuteScreen() {
               </Text>
             </View>
           </View>
-          <Text style={[styles.heroEtaNum, { color: colors.ink }]}>
+          <Text style={[styles.heroEtaNum, { color: colors.text }]}>
             {etaMinutes ?? "--"}
             <Text style={[styles.heroEtaUnit, { color: colors.text }]}>
               {" "}
