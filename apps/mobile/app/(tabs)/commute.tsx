@@ -1634,7 +1634,7 @@ export default function CommuteScreen() {
                 }
                 return (
                   <StopItem
-                    key={stop.id}
+                    key={`${stop.id}-${i}`}
                     stop={stop}
                     connectorType={connectorType}
                   />
