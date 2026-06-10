@@ -19,7 +19,9 @@ import {
   Marker,
   Images,
   type CameraRef,
+  type ViewStateChangeEvent,
 } from "@maplibre/maplibre-react-native";
+import type { NativeSyntheticEvent } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
 import { StopDetailsPanel, parseWKTPoint } from "@/components/stopViews";
 import { BusDetailsPanel } from "@/components/busViews";
@@ -151,6 +153,14 @@ export default function MapScreen() {
 
   const vehicles = useVehicles();
 
+  // Current camera bounds ([w, s, e, n]), refreshed when a pan/zoom settles.
+  // Used only to cull the per-tick GeoJSON allocation — never the vehicle
+  // data itself (handleBusTapFromStop needs the full fleet).
+  const [viewBounds, setViewBounds] = useState<
+    [number, number, number, number] | null
+  >(null);
+  const viewBoundsRef = useRef<typeof viewBounds>(null);
+
   const [nearbyState, setNearbyState] = useState<NearbyState | null>(null);
   const pressAbortRef = useRef<AbortController | null>(null);
 
@@ -224,7 +234,41 @@ export default function MapScreen() {
     [transitStops],
   );
 
-  const vehiclesGeoJSON = useMemo(() => vehiclesToGeoJSON(vehicles), [vehicles]);
+  const handleRegionDidChange = useCallback(
+    (e: NativeSyntheticEvent<ViewStateChangeEvent>) => {
+      const next = e.nativeEvent.bounds;
+      const prev = viewBoundsRef.current;
+      // Epsilon guard: ignore sub-rounding no-op events so render churn
+      // doesn't invalidate the visibleVehicles memo for nothing.
+      const EPS = 1e-4;
+      if (prev && next.every((v, i) => Math.abs(v - prev[i]) < EPS)) return;
+      viewBoundsRef.current = next;
+      setViewBounds(next);
+    },
+    [],
+  );
+
+  // Cull vehicles to the padded viewport before allocating GeoJSON. The 50%
+  // pad per side keeps just-off-screen buses present mid-pan; bounds refresh
+  // at gesture end, so visible behavior matches the unfiltered version.
+  const visibleVehicles = useMemo(() => {
+    if (!viewBounds) return vehicles;
+    const [w, s, e, n] = viewBounds;
+    const padLng = (e - w) * 0.5;
+    const padLat = (n - s) * 0.5;
+    return vehicles.filter(
+      (v) =>
+        v.longitude! >= w - padLng &&
+        v.longitude! <= e + padLng &&
+        v.latitude! >= s - padLat &&
+        v.latitude! <= n + padLat,
+    );
+  }, [vehicles, viewBounds]);
+
+  const vehiclesGeoJSON = useMemo(
+    () => vehiclesToGeoJSON(visibleVehicles),
+    [visibleVehicles],
+  );
 
   // ── Nearby stops (tile-filtered) ─────────────────────────────────────────────
   const nearbyTransitStops = useMemo(() => {
@@ -597,6 +641,7 @@ export default function MapScreen() {
         mapStyle={mapPaint.baseStyle}
         onPress={onMapPress}
         onLongPress={onMapLongPress}
+        onRegionDidChange={handleRegionDidChange}
         compass={true}
         logo={false}
         attribution={true}

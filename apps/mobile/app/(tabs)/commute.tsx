@@ -16,7 +16,7 @@ import {
   Images,
   type CameraRef,
 } from "@maplibre/maplibre-react-native";
-import { useVehicles, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
+import { useVehiclesForRoutes, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
 import { useTripWebSocket } from "@/lib/tripWebSocket";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
@@ -29,8 +29,13 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { routeStore } from "@/lib/routeStore";
 import { parseRoute } from "@/lib/routeParser";
 import { decodePolyline } from "@/utils/decodePolyline";
-import { normalizeColor } from "@/components/routes/RoutePickerSheet";
+import {
+  normalizeColor,
+  formatDuration,
+  formatDistance,
+} from "@/components/routes/RoutePickerSheet";
 import { scheduleBoarding, cancelBoarding } from "@/lib/boardingNotifications";
+import { scheduleLeaveBy, cancelLeaveBy } from "@/lib/leaveByNotifications";
 import {
   startTripActivity,
   updateTripActivity,
@@ -78,6 +83,8 @@ interface CommuteStop {
   transitName?: string;
   transitColor?: string;
   timeRemaining?: number;
+  /** Present only on walking-segment rows (not origin/destination anchors). */
+  walkInfo?: { distance?: string; transfer?: boolean };
 }
 
 const REPORT_TYPES: ReportType[] = [
@@ -302,7 +309,17 @@ function StopItem({
   return (
     <View style={styles.stopRow}>
       <View style={styles.stopTimelineCol}>
-        {isCurrent || isUnsure ? (
+        {stop.walkInfo ? (
+          <View
+            style={[styles.walkDot, { backgroundColor: semantic.walkChipBg }]}
+          >
+            <FontAwesome5
+              name="walking"
+              size={11}
+              color={isDeparted ? colors.ink3 : colors.ink2}
+            />
+          </View>
+        ) : isCurrent || isUnsure ? (
           <View style={styles.currentDotContainer}>
             <Animated.View
               style={[
@@ -502,6 +519,43 @@ function StopItem({
                 Missed
               </Text>
             )}
+            {stop.walkInfo && (
+              <View style={styles.stopMetaRow}>
+                {stop.walkInfo.transfer && (
+                  <View
+                    style={[
+                      styles.stopRouteBadge,
+                      {
+                        backgroundColor: colors.surface2,
+                        borderColor: colors.divider,
+                      },
+                    ]}
+                  >
+                    <FontAwesome5
+                      name="exchange-alt"
+                      size={9}
+                      color={colors.ink2}
+                    />
+                    <Text
+                      style={[styles.stopRouteBadgeText, { color: colors.ink2 }]}
+                    >
+                      TRANSFER
+                    </Text>
+                  </View>
+                )}
+                {stop.walkInfo.distance && (
+                  <Text
+                    style={[
+                      styles.stopTimeDelta,
+                      { color: colors.ink3 },
+                      isDeparted && { opacity: 0.6 },
+                    ]}
+                  >
+                    {stop.walkInfo.distance}
+                  </Text>
+                )}
+              </View>
+            )}
             {stop.mode === "TRANSIT" &&
               (stop.transitName || stop.timeRemaining !== undefined) && (
                 <View style={styles.stopMetaRow}>
@@ -604,8 +658,6 @@ export default function CommuteScreen() {
   const tripStateRef = useRef<TripStateMsg | null>(null);
   const activityStartedRef = useRef(false);
 
-  const allVehicles = useVehicles();
-
   // ── WebSocket ──────────────────────────────────────────────────────────────
   const {
     tripState,
@@ -616,6 +668,28 @@ export default function CommuteScreen() {
     sendUnsureResponse,
     disconnect,
   } = useTripWebSocket(wsPath);
+
+  const transitRouteIds = useMemo(() => {
+    if (tripState?.stops?.length) {
+      const ids = tripState.stops.map((s) => s.route_id).filter(Boolean);
+      return [...new Set(ids)];
+    }
+    if (!route) return [];
+    const ids = (route.legs ?? [])
+      .flatMap((l) => l.steps ?? [])
+      .filter((s) => s.travelMode === "TRANSIT")
+      .map(
+        (s) =>
+          s.transitDetails?.transitLine?.nameShort ||
+          s.transitDetails?.transitLine?.name,
+      )
+      .filter((id): id is string => Boolean(id));
+    return [...new Set(ids)];
+  }, [tripState, route]);
+
+  // Store-side selector: only notifies when one of the trip's buses actually
+  // changed, so the screen no longer re-renders on every fleet-wide SSE tick.
+  const routeVehicles = useVehiclesForRoutes(transitRouteIds);
 
   // ── Load from routeStore on focus ─────────────────────────────────────────
   useFocusEffect(
@@ -646,11 +720,6 @@ export default function CommuteScreen() {
   }, [boardingConfirmStop]);
   useEffect(() => {
     tripStateRef.current = tripState;
-    if (tripState)
-      console.log(
-        "[routeSave] STATE response:",
-        JSON.stringify(tripState, null, 2),
-      );
   }, [tripState]);
 
   useEffect(() => {
@@ -752,34 +821,6 @@ export default function CommuteScreen() {
     };
   }, [route, sendLocation]);
 
-  const transitRouteIds = useMemo(() => {
-    if (tripState?.stops?.length) {
-      const ids = tripState.stops.map((s) => s.route_id).filter(Boolean);
-      return [...new Set(ids)];
-    }
-    if (!route) return [];
-    const ids = (route.legs ?? [])
-      .flatMap((l) => l.steps ?? [])
-      .filter((s) => s.travelMode === "TRANSIT")
-      .map(
-        (s) =>
-          s.transitDetails?.transitLine?.nameShort ||
-          s.transitDetails?.transitLine?.name,
-      )
-      .filter((id): id is string => Boolean(id));
-    return [...new Set(ids)];
-  }, [tripState, route]);
-
-  const routeVehicles = useMemo(
-    () =>
-      transitRouteIds.length === 0
-        ? []
-        : allVehicles.filter(
-            (v) => v.route_id != null && transitRouteIds.includes(v.route_id),
-          ),
-    [allVehicles, transitRouteIds],
-  );
-
   const vehiclesGeoJSON = useMemo(
     () => vehiclesToGeoJSON(routeVehicles),
     [routeVehicles],
@@ -800,21 +841,109 @@ export default function CommuteScreen() {
     [tripState],
   );
 
+  // ── Boarding / leave-by data ────────────────────────────────────────────────
+  // The boarding stop is the first server stop (the list is replaced wholesale
+  // on reroute, so this self-heals). Before the first STATE frame, fall back
+  // to the route's first transit step.
+  const boardingStopServer = tripState?.stops?.[0] ?? null;
+
+  const firstTransitStep = useMemo(
+    () =>
+      (route?.legs ?? [])
+        .flatMap((l) => l.steps ?? [])
+        .find((s) => s.travelMode === "TRANSIT") ?? null,
+    [route],
+  );
+
+  // Boarding counts as confirmed once the server moves past the first stop
+  // (completed/missed) or starts tracking a later stop — the leave-by hint
+  // has served its purpose at that point.
+  const boardingConfirmed = useMemo(() => {
+    const s = tripState?.stops;
+    if (!s?.length) return false;
+    if (s[0].status === "COMPLETED" || s[0].status === "MISSED") return true;
+    return s.some(
+      (st, i) =>
+        i > 0 && (st.status === "ACTIVE" || st.status === "COMPLETED"),
+    );
+  }, [tripState]);
+
+  // Total walking time before the first transit leg.
+  const firstWalkSecs = useMemo(() => {
+    let secs = 0;
+    for (const st of (route?.legs ?? []).flatMap((l) => l.steps ?? [])) {
+      if (st.travelMode !== "WALK") break;
+      secs += parseDurationSecs(st.duration ?? "") ?? 0;
+    }
+    return secs > 0 ? secs : null;
+  }, [route]);
+
+  const busArrivalEpoch = useMemo(() => {
+    if (boardingStopServer && boardingStopServer.eta > 0)
+      return boardingStopServer.eta;
+    const iso = firstTransitStep?.transitDetails?.stopDetails?.departureTime;
+    if (iso) {
+      const t = new Date(iso).getTime();
+      if (!isNaN(t)) return Math.floor(t / 1000);
+    }
+    return null;
+  }, [boardingStopServer, firstTransitStep]);
+
+  const busArrivesInMin = useMemo(() => {
+    if (boardingStopServer && boardingStopServer.eta > 0)
+      return Math.max(0, Math.round(boardingStopServer.time_remaining_s / 60));
+    if (busArrivalEpoch == null) return null;
+    return Math.max(0, Math.round((busArrivalEpoch - Date.now() / 1000) / 60));
+  }, [boardingStopServer, busArrivalEpoch]);
+
+  const boardingStopName =
+    boardingStopServer?.stop_name ??
+    firstTransitStep?.transitDetails?.stopDetails?.departureStop?.name ??
+    null;
+
+  // Leave-by = bus arrival − walk to the stop − 3 min buffer. Shown (and
+  // notified) only until boarding is confirmed.
+  const leaveByEpoch = useMemo(() => {
+    if (boardingConfirmed || busArrivalEpoch == null) return null;
+    return busArrivalEpoch - (firstWalkSecs ?? 0) - 180;
+  }, [boardingConfirmed, busArrivalEpoch, firstWalkSecs]);
+
+  const lastScheduledLeaveByRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!sessionId) return;
+    if (leaveByEpoch == null) {
+      if (lastScheduledLeaveByRef.current != null) {
+        lastScheduledLeaveByRef.current = null;
+        cancelLeaveBy(sessionId);
+      }
+      return;
+    }
+    // The server refreshes the boarding stop's eta on every STATE frame;
+    // only touch the scheduler when the leave-by moment drifts meaningfully.
+    const prev = lastScheduledLeaveByRef.current;
+    if (prev != null && Math.abs(prev - leaveByEpoch) <= 60) return;
+    lastScheduledLeaveByRef.current = leaveByEpoch;
+    scheduleLeaveBy(sessionId, boardingStopName ?? "your stop", leaveByEpoch);
+  }, [sessionId, leaveByEpoch, boardingStopName]);
+
   const stops = useMemo((): CommuteStop[] => {
     const originLabel = originInfo?.label ?? "Your Location";
     const destLabel = destinationInfo?.label ?? "Destination";
 
-    if (!tripState?.stops?.length) {
-      return [
-        { id: "origin", name: originLabel, status: "departed", mode: "WALK" },
-        {
-          id: "destination",
-          name: destLabel,
-          status: "destination",
-          mode: "WALK",
-        },
-      ];
-    }
+    const originStop: CommuteStop = {
+      id: "origin",
+      name: originLabel,
+      status: "departed",
+      mode: "WALK",
+    };
+    const destStop: CommuteStop = {
+      id: "destination",
+      name: destLabel,
+      status: "destination",
+      mode: "WALK",
+    };
+
+    if (!tripState?.stops?.length) return [originStop, destStop];
 
     const serverStops: CommuteStop[] = tripState.stops.map((s) => ({
       id: s.stop_id,
@@ -827,17 +956,94 @@ export default function CommuteScreen() {
       timeRemaining: s.eta > 0 ? s.time_remaining_s : undefined,
     }));
 
-    return [
-      { id: "origin", name: originLabel, status: "departed", mode: "WALK" },
-      ...serverStops,
-      {
-        id: "destination",
-        name: destLabel,
-        status: "destination",
-        mode: "WALK",
+    // ── Interleave walking segments from the route steps ──
+    // Collapse consecutive WALK steps into one segment per gap; transit step k
+    // is preceded by walkBefore[k] (or null), with `trailing` after the last.
+    type WalkSeg = { secs: number; meters: number };
+    const allSteps = (route?.legs ?? []).flatMap((l) => l.steps ?? []);
+    const walkBefore: (WalkSeg | null)[] = [];
+    let pending: WalkSeg | null = null;
+    for (const st of allSteps) {
+      if (st.travelMode === "WALK") {
+        const secs = parseDurationSecs(st.duration ?? "") ?? 0;
+        const meters = st.distanceMeters ?? 0;
+        if (pending) {
+          pending.secs += secs;
+          pending.meters += meters;
+        } else {
+          pending = { secs, meters };
+        }
+      } else {
+        walkBefore.push(pending);
+        pending = null;
+      }
+    }
+    const trailing = pending;
+
+    // Group server stops into consecutive runs per transit leg (route_id
+    // changes at each transfer).
+    const runs: CommuteStop[][] = [];
+    tripState.stops.forEach((s, i) => {
+      if (i === 0 || s.route_id !== tripState.stops[i - 1].route_id) {
+        runs.push([serverStops[i]]);
+      } else {
+        runs[runs.length - 1].push(serverStops[i]);
+      }
+    });
+
+    // Runs must align 1:1 with the route's transit steps; on mismatch (e.g.
+    // mid-reroute, before the refreshed route lands) fall back to the flat
+    // layout rather than mislabeling segments.
+    if (runs.length !== walkBefore.length) {
+      return [originStop, ...serverStops, destStop];
+    }
+
+    const walkRow = (
+      seg: WalkSeg,
+      k: number,
+      target: string,
+      transfer: boolean,
+      departed: boolean,
+    ): CommuteStop => ({
+      id: `walk-${k}`,
+      name: transfer ? `Transfer · walk to ${target}` : `Walk to ${target}`,
+      time: formatDuration(`${seg.secs}s`),
+      status: departed ? "departed" : "upcoming",
+      mode: "WALK",
+      walkInfo: {
+        distance: seg.meters > 0 ? formatDistance(seg.meters) : undefined,
+        transfer,
       },
-    ];
-  }, [tripState, originInfo, destinationInfo]);
+    });
+
+    const out: CommuteStop[] = [originStop];
+    runs.forEach((run, k) => {
+      const seg = walkBefore[k];
+      if (seg && seg.secs > 0) {
+        const firstStatus = run[0]?.status;
+        const departed =
+          firstStatus === "departed" ||
+          firstStatus === "missed" ||
+          (k === 0 && boardingConfirmed);
+        out.push(walkRow(seg, k, run[0]?.name ?? "stop", k > 0, departed));
+      }
+      out.push(...run);
+    });
+    if (trailing && trailing.secs > 0) {
+      const lastStatus = runs.at(-1)?.at(-1)?.status;
+      out.push(
+        walkRow(
+          trailing,
+          runs.length,
+          destLabel,
+          false,
+          lastStatus === "departed" || lastStatus === "missed",
+        ),
+      );
+    }
+    out.push(destStop);
+    return out;
+  }, [tripState, route, originInfo, destinationInfo, boardingConfirmed]);
 
   useEffect(() => {
     if (!route?.polyline?.encodedPolyline) return;
@@ -862,73 +1068,115 @@ export default function CommuteScreen() {
   }, [route]);
 
   const routePolylinesGeoJSON = useMemo(() => {
-    if (!route?.polyline?.encodedPolyline) {
-      return { type: "FeatureCollection" as const, features: [] };
-    }
-    const allCoords = safeDecodePolyline(route.polyline.encodedPolyline);
-    if (allCoords.length === 0) {
-      return { type: "FeatureCollection" as const, features: [] };
-    }
+    const empty = {
+      type: "FeatureCollection" as const,
+      features: [] as Array<{
+        type: "Feature";
+        properties: { color: string; mode: "WALK" | "TRANSIT" };
+        geometry: { type: "LineString"; coordinates: [number, number][] };
+      }>,
+    };
+    if (!route) return empty;
 
+    // Per-step geometry (OTP always carries it) lets walk segments render as
+    // dotted lines; a route missing any step polyline (Google standby) falls
+    // back to one solid route-level segment, exactly the old behavior.
+    type Segment = {
+      mode: "WALK" | "TRANSIT";
+      coords: { latitude: number; longitude: number }[];
+      color: string;
+    };
+    const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
+    const hasStepGeometry =
+      allSteps.length > 0 &&
+      allSteps.every((s) => s.polyline?.encodedPolyline);
+
+    let segments: Segment[];
+    if (hasStepGeometry) {
+      segments = allSteps
+        .map((s) => ({
+          mode: s.travelMode,
+          coords: safeDecodePolyline(s.polyline!.encodedPolyline),
+          color:
+            s.travelMode === "WALK"
+              ? mapPaint.polyline.walk
+              : normalizeColor(
+                  s.transitDetails?.transitLine?.color,
+                  colors.primary,
+                ),
+        }))
+        .filter((seg) => seg.coords.length > 1);
+    } else {
+      const allCoords = safeDecodePolyline(
+        route.polyline?.encodedPolyline ?? "",
+      );
+      if (allCoords.length === 0) return empty;
+      const transitStep = allSteps.find((s) => s.travelMode === "TRANSIT");
+      segments = [
+        {
+          mode: "TRANSIT",
+          coords: allCoords,
+          color: normalizeColor(
+            transitStep?.transitDetails?.transitLine?.color,
+            colors.primary,
+          ),
+        },
+      ];
+    }
+    if (segments.length === 0) return empty;
+
+    // Split the whole path at the coordinate nearest the current stop: before
+    // it renders as "completed" (muted), after it in segment colors.
     const currentStop = stops.find((s) => s.status === "current");
+    let splitSeg = -1;
     let splitIdx = 0;
-
     if (currentStop?.coordinate) {
       let minDist = Infinity;
-      allCoords.forEach((c, i) => {
-        const d = haversineMeters(
-          currentStop.coordinate!.latitude,
-          currentStop.coordinate!.longitude,
-          c.latitude,
-          c.longitude,
-        );
-        if (d < minDist) {
-          minDist = d;
-          splitIdx = i;
-        }
+      segments.forEach((seg, si) => {
+        seg.coords.forEach((c, i) => {
+          const d = haversineMeters(
+            currentStop.coordinate!.latitude,
+            currentStop.coordinate!.longitude,
+            c.latitude,
+            c.longitude,
+          );
+          if (d < minDist) {
+            minDist = d;
+            splitSeg = si;
+            splitIdx = i;
+          }
+        });
       });
     }
 
-    const transitStep = (route.legs ?? [])
-      .flatMap((l) => l.steps ?? [])
-      .find((s) => s.travelMode === "TRANSIT");
-    const lineColor = normalizeColor(
-      transitStep?.transitDetails?.transitLine?.color,
-      colors.primary,
-    );
-
-    const completed = allCoords.slice(0, splitIdx + 1);
-    const remaining = allCoords.slice(splitIdx);
-
-    const features: Array<{
-      type: "Feature";
-      properties: { color: string };
-      geometry: { type: "LineString"; coordinates: [number, number][] };
-    }> = [];
-
-    if (completed.length > 1) {
+    const features: typeof empty.features = [];
+    const push = (seg: Segment, coords: Segment["coords"], done: boolean) => {
+      if (coords.length < 2) return;
       features.push({
         type: "Feature",
-        properties: { color: mapPaint.polyline.completed },
+        properties: {
+          color: done ? mapPaint.polyline.completed : seg.color,
+          mode: seg.mode,
+        },
         geometry: {
           type: "LineString",
-          coordinates: completed.map((c) => [c.longitude, c.latitude]),
+          coordinates: coords.map((c) => [c.longitude, c.latitude]),
         },
       });
-    }
-    if (remaining.length > 1) {
-      features.push({
-        type: "Feature",
-        properties: { color: lineColor },
-        geometry: {
-          type: "LineString",
-          coordinates: remaining.map((c) => [c.longitude, c.latitude]),
-        },
-      });
-    }
+    };
+    segments.forEach((seg, si) => {
+      if (splitSeg < 0 || si > splitSeg) {
+        push(seg, seg.coords, false);
+      } else if (si < splitSeg) {
+        push(seg, seg.coords, true);
+      } else {
+        push(seg, seg.coords.slice(0, splitIdx + 1), true);
+        push(seg, seg.coords.slice(splitIdx), false);
+      }
+    });
 
     return { type: "FeatureCollection" as const, features };
-  }, [route, stops, mapPaint.polyline.completed, colors.primary]);
+  }, [route, stops, mapPaint.polyline, colors.primary]);
 
   const timelineStopsGeoJSON = useMemo(
     () => ({
@@ -1009,7 +1257,10 @@ export default function CommuteScreen() {
     }
   }, [tripState, destinationInfo]);
 
-  const etaMinutes = useMemo(() => {
+  // ETA to the FINAL destination (the old hero number — kept for the journey
+  // card and the post-boarding fallback, renamed so it can't be mistaken for
+  // the bus's arrival at the boarding stop).
+  const destinationEtaMinutes = useMemo(() => {
     const serverStops = tripState?.stops;
     if (serverStops?.length) {
       const last = serverStops[serverStops.length - 1];
@@ -1176,6 +1427,10 @@ export default function CommuteScreen() {
     endTripActivity();
     activityStartedRef.current = false;
     disconnect();
+    if (sessionId) {
+      cancelLeaveBy(sessionId);
+      lastScheduledLeaveByRef.current = null;
+    }
     if (sessionId && ROUTE_SAVE_URL) {
       fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, { method: "DELETE" }).catch(
         () => {},
@@ -1320,9 +1575,22 @@ export default function CommuteScreen() {
               data={routePolylinesGeoJSON}
             >
               <Layer
-                id="commute-route-line"
+                id="commute-route-line-transit"
                 type="line"
+                filter={["!=", ["get", "mode"], "WALK"]}
                 paint={{ "line-color": ["get", "color"], "line-width": mapPaint.polyline.width }}
+                layout={{ "line-cap": "round", "line-join": "round" }}
+              />
+              {/* Walking: thick dotted ([0, 2] dash + round cap = dots). */}
+              <Layer
+                id="commute-route-line-walk"
+                type="line"
+                filter={["==", ["get", "mode"], "WALK"]}
+                paint={{
+                  "line-color": ["get", "color"],
+                  "line-width": mapPaint.polyline.width + 2,
+                  "line-dasharray": [0, 2],
+                }}
                 layout={{ "line-cap": "round", "line-join": "round" }}
               />
             </GeoJSONSource>
@@ -1484,61 +1752,135 @@ export default function CommuteScreen() {
             </View>
           )}
 
-          <View style={styles.heroEtaLabelRow}>
-            <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
-              Arriving in
-            </Text>
-            <View
-              style={[
-                styles.heroSpeedBadge,
-                { backgroundColor: colors.surface },
-              ]}
-            >
-              <Ionicons
-                name="speedometer-outline"
-                size={15}
-                color={colors.ink3}
-              />
-              <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
-                {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
-              </Text>
-            </View>
-          </View>
-          <Text style={[styles.heroEtaNum, { color: colors.text }]}>
-            {etaMinutes ?? "--"}
-            <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
-              {" "}
-              min
-            </Text>
-          </Text>
+          {!boardingConfirmed && busArrivesInMin != null && boardingStopName ? (
+            <>
+              {/* Pre-boarding: the bus's arrival at the BOARDING stop. */}
+              <View style={styles.heroEtaLabelRow}>
+                <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
+                  Boarding{" "}
+                  <Text
+                    style={[styles.heroNextStopName, { color: colors.ink }]}
+                  >
+                    {activeTransitName}
+                  </Text>
+                </Text>
+                <View
+                  style={[
+                    styles.heroSpeedBadge,
+                    { backgroundColor: colors.surface },
+                  ]}
+                >
+                  <Ionicons
+                    name="speedometer-outline"
+                    size={15}
+                    color={colors.ink3}
+                  />
+                  <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
+                    {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
+                  </Text>
+                </View>
+              </View>
 
-          <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
-            Next stop:{" "}
-            <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
-              {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
-            </Text>
-          </Text>
+              <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
+                from{" "}
+                <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
+                  {boardingStopName}
+                </Text>
+              </Text>
+
+              <View style={styles.heroArrivalRow}>
+                <Text style={[styles.heroEtaNum, { color: colors.text }]}>
+                  <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
+                    arrives in{" "}
+                  </Text>
+                  {busArrivesInMin}
+                  <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
+                    {" "}
+                    min
+                  </Text>
+                </Text>
+                {leaveByEpoch != null && formatEta(leaveByEpoch) !== "" && (
+                  <View
+                    style={[
+                      styles.leaveByChip,
+                      { backgroundColor: colors.primaryDim },
+                    ]}
+                  >
+                    <Ionicons name="walk" size={13} color={colors.primaryInk} />
+                    <Text
+                      style={[
+                        styles.leaveByChipText,
+                        { color: colors.primaryInk },
+                      ]}
+                    >
+                      Leave by {formatEta(leaveByEpoch)}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </>
+          ) : (
+            <>
+              {/* On board (or walk-only route): the next stop ahead. */}
+              <View style={styles.heroEtaLabelRow}>
+                <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
+                  {heroNextStop?.timeRemaining != null
+                    ? "Next stop in"
+                    : "Arriving in"}
+                </Text>
+                <View
+                  style={[
+                    styles.heroSpeedBadge,
+                    { backgroundColor: colors.surface },
+                  ]}
+                >
+                  <Ionicons
+                    name="speedometer-outline"
+                    size={15}
+                    color={colors.ink3}
+                  />
+                  <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
+                    {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
+                  </Text>
+                </View>
+              </View>
+              <Text style={[styles.heroEtaNum, { color: colors.text }]}>
+                {heroNextStop?.timeRemaining != null
+                  ? Math.max(0, Math.round(heroNextStop.timeRemaining / 60))
+                  : (destinationEtaMinutes ?? "--")}
+                <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
+                  {" "}
+                  min
+                </Text>
+              </Text>
+
+              <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
+                Next stop:{" "}
+                <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
+                  {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
+                </Text>
+              </Text>
+            </>
+          )}
         </View>
 
         <View style={[styles.content]}>
           <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
             <View style={styles.journeyCardTop}>
-              <View style={{ flex: 1, marginRight: 10 }}>
-                <Text
-                  style={[styles.journeyDestination, { color: colors.ink }]}
-                  numberOfLines={1}
-                >
-                  To: {destinationInfo?.label ?? "Destination"}
-                </Text>
-                <Text style={[styles.journeyEta, { color: colors.ink2 }]}>
-                  Arriving around {arrivalTime ?? "--:--"}
-                </Text>
-              </View>
+              <Text
+                style={[
+                  styles.journeyDestination,
+                  { color: colors.ink, flex: 1, marginRight: 10 },
+                ]}
+                numberOfLines={1}
+              >
+                To: {destinationInfo?.label ?? "Destination"}
+              </Text>
               <View
                 style={[styles.arrivalBadge, { backgroundColor: colors.surface2 }]}
               >
                 <Text style={[styles.arrivalBadgeText, { color: colors.primary }]}>
-                  {arrivalTime ?? "--:--"}
+                  ETA: {arrivalTime ?? "--:--"}
                 </Text>
               </View>
             </View>
@@ -2075,6 +2417,27 @@ function makeStyles(t: AppTheme) {
       lineHeight: 24,
     },
     heroNextStopName: { fontWeight: "700", color: colors.ink },
+    heroArrivalRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      gap: 10,
+      flexWrap: "wrap",
+    },
+    leaveByChip: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 5,
+      backgroundColor: colors.primaryDim,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderRadius: radii.pill,
+      alignSelf: "center",
+    },
+    leaveByChipText: {
+      ...typography.captionStrong,
+      color: colors.primaryInk,
+    },
 
     // ── Journey summary card ──
     journeyCard: {
@@ -2088,17 +2451,12 @@ function makeStyles(t: AppTheme) {
     journeyCardTop: {
       flexDirection: "row",
       justifyContent: "space-between",
-      alignItems: "flex-start",
+      alignItems: "center",
       marginBottom: 18,
     },
     journeyDestination: {
       ...typography.metaLg,
       color: colors.ink,
-    },
-    journeyEta: {
-      ...typography.bodyItalic,
-      color: colors.ink2,
-      marginTop: 3,
     },
     arrivalBadge: {
       backgroundColor: colors.surface2,
@@ -2216,6 +2574,16 @@ function makeStyles(t: AppTheme) {
       backgroundColor: colors.surface2,
       borderWidth: 2,
       borderColor: semantic.neutralLine,
+      alignItems: "center",
+      justifyContent: "center",
+      marginTop: 6,
+    },
+
+    walkDot: {
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      backgroundColor: semantic.walkChipBg,
       alignItems: "center",
       justifyContent: "center",
       marginTop: 6,

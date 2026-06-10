@@ -32,6 +32,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
+import { groupRoutes, routeUsesTrain } from "@/lib/routeRanking";
 import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
 import type { AppTheme } from "@/styles/themes";
@@ -40,21 +41,11 @@ const CALGARY_CENTER: [number, number] = [-114.058, 51.044];
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type FilterMode = "All" | "Bus" | "CTrain";
-
 interface RouteEndpoint {
     placeId?: string;
     lat: number;
     lng: number;
 }
-
-// ─── Constants ────────────────────────────────────────────────────────────────
-
-const FILTERS: { mode: FilterMode; icon: string }[] = [
-    { mode: "All", icon: "list" },
-    { mode: "Bus", icon: "bus" },
-    { mode: "CTrain", icon: "subway" },
-];
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -97,7 +88,7 @@ export default function RouteScreen() {
     const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
     const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
     const [routeError, setRouteError] = useState<string | null>(null);
-    const [activeFilter, setActiveFilter] = useState<FilterMode>("All");
+    const [activeFilter, setActiveFilter] = useState<string>("All");
     const [isStarting, setIsStarting] = useState(false);
     const [startError, setStartError] = useState<string | null>(null);
 
@@ -203,6 +194,7 @@ export default function RouteScreen() {
         setRouteError(null);
         setRoutes([]);
         setSelectedRoute(null);
+        setActiveFilter("All");
         Keyboard.dismiss();
         setFocusedField(null);
 
@@ -214,6 +206,7 @@ export default function RouteScreen() {
             {
                 origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
                 destination: { lat: destination.lat, lng: destination.lng },
+                num_itineraries: 10,
             },
             ctrl.signal,
         );
@@ -339,44 +332,79 @@ export default function RouteScreen() {
         semantic.unselectedPolyline,
     ]);
 
-    // ── Filter ────────────────────────────────────────────────────────────────────
+    // ── Grouping / ranking ────────────────────────────────────────────────────────
+    // Routes are sectioned by the line(s) they ride ("201", "201+30", "Walk"),
+    // each section ascending by first bus departure. (Built in routeRanking —
+    // the MapLibre `Map` import shadows the Map constructor in this file.)
+    const { meta: routeMeta, groups: routeGroups } = useMemo(
+        () => groupRoutes(routes),
+        [routes],
+    );
+
+    // Fastest = earliest arrival at the destination, across all routes.
+    const overallFastest = useMemo(() => {
+        let best: Route | null = null;
+        for (const r of routes) {
+            if (!best || routeMeta.get(r)!.arrival < routeMeta.get(best)!.arrival)
+                best = r;
+        }
+        return best;
+    }, [routes, routeMeta]);
+
+    const filterChips = useMemo(() => {
+        const keys = [...routeGroups.entries()]
+            .map(([key, arr]) => ({
+                key,
+                best: Math.min(...arr.map((r) => routeMeta.get(r)!.arrival)),
+                icon: arr.some(routeUsesTrain)
+                    ? "subway"
+                    : key === "Walk"
+                      ? "walking"
+                      : "bus",
+            }))
+            .sort((a, b) => a.best - b.best)
+            .map(({ key, icon }) => ({ key, icon }));
+        return [{ key: "All", icon: "list" }, ...keys];
+    }, [routeGroups, routeMeta]);
+
     const filteredRoutes = useMemo(() => {
-        if (activeFilter === "All") return routes;
-        return routes.filter((route) => {
-            const transitSteps = (route.legs ?? [])
-                .flatMap((l) => l.steps ?? [])
-                .filter((s) => s.travelMode === "TRANSIT");
-            if (transitSteps.length === 0) return false;
-            return transitSteps.some((s) => {
-                const name = (
-                    s.transitDetails?.transitLine?.name ?? ""
-                ).toLowerCase();
-                const ns = (
-                    s.transitDetails?.transitLine?.nameShort ?? ""
-                ).toLowerCase();
-                if (activeFilter === "CTrain")
-                    return (
-                        name.includes("ctrain") ||
-                        ns.includes("ctrain") ||
-                        name.includes("lrt")
-                    );
-                return (
-                    !name.includes("ctrain") &&
-                    !name.includes("lrt") &&
-                    !ns.includes("ctrain")
-                );
-            });
-        });
-    }, [routes, activeFilter]);
+        const arrival = (r: Route) => routeMeta.get(r)?.arrival ?? Infinity;
+        if (activeFilter === "All") {
+            // Curated view: the overall fastest + the fastest of each section.
+            const picks = new Set<Route>();
+            if (overallFastest) picks.add(overallFastest);
+            for (const arr of routeGroups.values()) {
+                let best: Route | null = null;
+                for (const r of arr)
+                    if (!best || arrival(r) < arrival(best)) best = r;
+                if (best) picks.add(best);
+            }
+            return [...picks].sort((a, b) => arrival(a) - arrival(b));
+        }
+        return routeGroups.get(activeFilter) ?? [];
+    }, [activeFilter, routeGroups, overallFastest, routeMeta]);
 
     // ── Search handlers ───────────────────────────────────────────────────────────
+    // Editing either endpoint invalidates any routes on screen. Clearing the
+    // routeStore too is load-bearing: the focus-restore effect above would
+    // otherwise resurrect the cached results the moment local state empties.
+    const clearStaleResults = useCallback(() => {
+        if (routes.length === 0 && !selectedRoute && !routeError) return;
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        setActiveFilter("All");
+        routeStore.setRoutes([]);
+    }, [routes.length, selectedRoute, routeError]);
+
     const handleOriginChange = useCallback(
         (text: string) => {
             setOriginLabel(text);
+            clearStaleResults();
             if (text.trim()) originSearch.search(text);
             else originSearch.reset();
         },
-        [originSearch],
+        [originSearch, clearStaleResults],
     );
 
     const handleSelectOrigin = useCallback(
@@ -388,6 +416,7 @@ export default function RouteScreen() {
             setRoutes([]);
             setSelectedRoute(null);
             setRouteError(null);
+            routeStore.setRoutes([]);
             if (suggestion.location) {
                 setOrigin({
                     placeId: suggestion.placeId,
@@ -416,10 +445,11 @@ export default function RouteScreen() {
     const handleDestChange = useCallback(
         (text: string) => {
             setDestinationLabel(text);
+            clearStaleResults();
             if (text.trim()) destinationSearch.search(text);
             else destinationSearch.reset();
         },
-        [destinationSearch],
+        [destinationSearch, clearStaleResults],
     );
 
     const handleSelectDest = useCallback(
@@ -431,6 +461,7 @@ export default function RouteScreen() {
             setRoutes([]);
             setSelectedRoute(null);
             setRouteError(null);
+            routeStore.setRoutes([]);
             if (suggestion.location) {
                 setDestination({
                     placeId: suggestion.placeId,
@@ -699,6 +730,7 @@ export default function RouteScreen() {
                                         setRoutes([]);
                                         setSelectedRoute(null);
                                         setRouteError(null);
+                                        routeStore.setRoutes([]);
                                     }}
                                     hitSlop={{
                                         top: 8,
@@ -755,6 +787,7 @@ export default function RouteScreen() {
                                     setRoutes([]);
                                     setSelectedRoute(null);
                                     setRouteError(null);
+                                    routeStore.setRoutes([]);
                                 }}
                                 hitSlop={{
                                     top: 8,
@@ -925,18 +958,18 @@ export default function RouteScreen() {
                                     gap: spacing.element,
                                 }}
                             >
-                                {FILTERS.map(({ mode, icon }) => {
-                                    const isActive = activeFilter === mode;
+                                {filterChips.map(({ key, icon }) => {
+                                    const isActive = activeFilter === key;
                                     return (
                                         <TouchableOpacity
-                                            key={mode}
+                                            key={key}
                                             style={[
                                                 styles.modeChip,
                                                 isActive &&
                                                     styles.modeChipActive,
                                             ]}
                                             onPress={() =>
-                                                setActiveFilter(mode)
+                                                setActiveFilter(key)
                                             }
                                             activeOpacity={0.8}
                                         >
@@ -956,7 +989,7 @@ export default function RouteScreen() {
                                                         styles.modeChipTextActive,
                                                 ]}
                                             >
-                                                {mode}
+                                                {key}
                                             </Text>
                                         </TouchableOpacity>
                                     );
@@ -968,6 +1001,7 @@ export default function RouteScreen() {
                                     <RoutePickerSheet
                                         routes={filteredRoutes}
                                         selectedRoute={selectedRoute}
+                                        fastestRoute={overallFastest}
                                         onSelectRoute={(r) =>
                                             setSelectedRoute(r)
                                         }

@@ -10,6 +10,7 @@ import {
   setupBoardingChannel,
   cancelBoarding,
 } from "@/lib/boardingNotifications";
+import { setupLeaveByChannel } from "@/lib/leaveByNotifications";
 import { setupTripProgressChannel } from "@/lib/liveActivity";
 import { submitUnsureResponse } from "@/lib/tripWebSocket";
 
@@ -28,6 +29,7 @@ export default function RootLayout() {
   useEffect(() => {
     setupBoardingChannel();
     registerBoardingCategory();
+    setupLeaveByChannel();
     setupTripProgressChannel();
 
     const sub = Notifications.addNotificationResponseReceivedListener(

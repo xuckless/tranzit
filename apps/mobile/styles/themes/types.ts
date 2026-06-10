@@ -50,6 +50,8 @@ export interface MapPolylinePaint {
   missed: string;
   destination: string;
   upcoming: string;
+  /** Walking segments (rendered as a thick dotted line on the commute map). */
+  walk: string;
   width: number;
 }
 

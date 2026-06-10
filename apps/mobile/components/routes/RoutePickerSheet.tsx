@@ -201,12 +201,12 @@ const chipStyles = StyleSheet.create({
 
 function RouteCard({
   route,
-  index,
+  isFastest,
   isSelected,
   onSelect,
 }: {
   route: Route;
-  index: number;
+  isFastest: boolean;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -217,7 +217,6 @@ function RouteCard({
   const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
   const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
   const lastArr = transitSteps.at(-1)?.transitDetails?.stopDetails?.arrivalTime;
-  const isFastest = index === 0;
 
   return (
     <TouchableOpacity
@@ -281,10 +280,17 @@ function RouteCard({
 interface Props {
   routes: Route[];
   selectedRoute?: Route | null;
+  /** The earliest-arrival route across ALL fetched routes (not just this list). */
+  fastestRoute?: Route | null;
   onSelectRoute: (route: Route) => void;
 }
 
-export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props) {
+export function RoutePickerSheet({
+  routes,
+  selectedRoute,
+  fastestRoute,
+  onSelectRoute,
+}: Props) {
   const { theme } = useTheme();
   const { colors, typography, semantic, spacing } = theme;
   const styles = makeStyles(theme);
@@ -306,7 +312,7 @@ export function RoutePickerSheet({ routes, selectedRoute, onSelectRoute }: Props
           <RouteCard
             key={i}
             route={route}
-            index={i}
+            isFastest={route === fastestRoute}
             isSelected={route === selectedRoute}
             onSelect={() => onSelectRoute(route)}
           />
@@ -338,14 +344,15 @@ function makeStyles(t: AppTheme) {
       letterSpacing: 0.8,
     },
     list: {
-      gap: spacing.element,
+      gap: spacing.element - 2,
       paddingBottom: 12,
     },
     card: {
       backgroundColor: colors.card,
-      borderRadius: 18,
-      padding: spacing.card,
-      gap: 10,
+      borderRadius: 14,
+      paddingVertical: spacing.element + 2,
+      paddingHorizontal: spacing.card - 4,
+      gap: 6,
       ...shadow.card,
       shadowOpacity: 0.06,
       shadowRadius: 8,

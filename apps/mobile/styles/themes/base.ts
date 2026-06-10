@@ -309,6 +309,7 @@ export const LIGHT_MAP_PAINT: AppMapPaint = {
     missed: "#EF4444",
     destination: "#FFDE00",
     upcoming: "#C1C6D7",
+    walk: "#6B7280",
     width: 5,
   },
   stopMatch: {
@@ -353,6 +354,7 @@ export const DARK_MAP_PAINT: AppMapPaint = {
     missed: "#EF4444",
     destination: "#FFDE00",
     upcoming: "#3A4840",
+    walk: "#9CA3AF",
     width: 5,
   },
   stopMatch: {
