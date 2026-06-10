@@ -6,10 +6,12 @@ import {
   ActivityIndicator,
   ScrollView,
   Dimensions,
-  PanResponder,
-  Animated,
   Keyboard,
 } from "react-native";
+import BottomSheet, {
+  BottomSheetView,
+  BottomSheetScrollView,
+} from "@gorhom/bottom-sheet";
 import {
   Map,
   Camera,
@@ -120,8 +122,13 @@ export default function MapScreen() {
   const { theme } = useTheme();
   const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const sheetAnim = useRef(new Animated.Value(SNAP_COLLAPSED)).current;
-  const lastSnap = useRef(SNAP_COLLAPSED);
+  // gorhom sheet: absolute-height snap points (from the bottom), matching the
+  // geometry of the old Animated height exactly. Index 0 = collapsed.
+  const sheetRef = useRef<BottomSheet>(null);
+  const snapPoints = useMemo(
+    () => [SNAP_COLLAPSED, SNAP_EXPANDED, SNAP_FULL],
+    [],
+  );
   const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
@@ -358,50 +365,19 @@ export default function MapScreen() {
   }, [flyTo]);
 
   // ── Sheet snap ───────────────────────────────────────────────────────────────
-  const snapTo = useCallback(
-    (target: number) => {
-      lastSnap.current = target;
-      setIsExpanded(target >= SNAP_EXPANDED);
-      Animated.spring(sheetAnim, {
-        toValue: target,
-        useNativeDriver: false,
-        bounciness: 3,
-        speed: 14,
-      }).start();
-    },
-    [sheetAnim],
-  );
+  // Same call-site API as the old Animated implementation: callers pass the
+  // pixel constant, we map it to a gorhom snap index. Drag gestures and snap
+  // resolution now run on the UI thread (gesture-handler + reanimated).
+  const snapTo = useCallback((target: number) => {
+    setIsExpanded(target >= SNAP_EXPANDED);
+    const index =
+      target <= SNAP_COLLAPSED ? 0 : target <= SNAP_EXPANDED ? 1 : 2;
+    sheetRef.current?.snapToIndex(index);
+  }, []);
 
-  const panResponder = useRef(
-    PanResponder.create({
-      onStartShouldSetPanResponder: () => true,
-      onMoveShouldSetPanResponder: (_, g) => Math.abs(g.dy) > 4,
-      onPanResponderMove: (_, g) => {
-        const next = Math.max(
-          SNAP_COLLAPSED,
-          Math.min(SNAP_FULL, lastSnap.current - g.dy),
-        );
-        sheetAnim.setValue(next);
-      },
-      onPanResponderRelease: (_, g) => {
-        const projected = lastSnap.current - g.dy;
-        let target: number;
-        if (g.vy > 0.4) {
-          target = lastSnap.current > SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_COLLAPSED;
-        } else if (g.vy < -0.4) {
-          target = lastSnap.current < SNAP_EXPANDED ? SNAP_EXPANDED : SNAP_FULL;
-        } else {
-          const dC = Math.abs(projected - SNAP_COLLAPSED);
-          const dE = Math.abs(projected - SNAP_EXPANDED);
-          const dF = Math.abs(projected - SNAP_FULL);
-          if (dC <= dE && dC <= dF) target = SNAP_COLLAPSED;
-          else if (dE <= dF) target = SNAP_EXPANDED;
-          else target = SNAP_FULL;
-        }
-        snapTo(target);
-      },
-    }),
-  ).current;
+  const handleSheetChange = useCallback((index: number) => {
+    setIsExpanded(index >= 1);
+  }, []);
 
   // ── SearchSheet callbacks ────────────────────────────────────────────────────
   const handleDestinationSelected = useCallback(
@@ -756,14 +732,29 @@ export default function MapScreen() {
       )}
 
       {/* ════════ BOTTOM SHEET ════════ */}
-      <Animated.View style={[styles.sheet, { height: sheetAnim, backgroundColor: colors.card }]}>
-        <View {...panResponder.panHandlers} style={styles.handleArea}>
-          <View style={[styles.handle, { backgroundColor: semantic.handle }]} />
-          <Text style={[styles.handleHint, { color: semantic.handleHint }]}>
-            {isExpanded ? "Nearby Stops" : "Explore"}
-          </Text>
-        </View>
-
+      <BottomSheet
+        ref={sheetRef}
+        index={0}
+        snapPoints={snapPoints}
+        enablePanDownToClose={false}
+        onChange={handleSheetChange}
+        backgroundStyle={[
+          styles.sheetBackground,
+          { backgroundColor: colors.card },
+        ]}
+        style={styles.sheetShadow}
+        handleComponent={() => (
+          <View style={styles.handleArea}>
+            <View
+              style={[styles.handle, { backgroundColor: semantic.handle }]}
+            />
+            <Text style={[styles.handleHint, { color: semantic.handleHint }]}>
+              {isExpanded ? "Nearby Stops" : "Explore"}
+            </Text>
+          </View>
+        )}
+      >
+        <BottomSheetView style={styles.sheetContent}>
         {selectedStop && !isSearchActive && (
           <StopDetailsPanel
             teleride_number={selectedStop.teleride_number}
@@ -961,7 +952,7 @@ export default function MapScreen() {
                 <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Nearby Stops</Text>
               </View>
             </View>
-            <ScrollView
+            <BottomSheetScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
@@ -1008,10 +999,11 @@ export default function MapScreen() {
                   );
                 })
               )}
-            </ScrollView>
+            </BottomSheetScrollView>
           </View>
         )}
-      </Animated.View>
+        </BottomSheetView>
+      </BottomSheet>
 
       <SavePlaceModal
         visible={showSaveModal}
@@ -1079,19 +1071,20 @@ function makeStyles(t: AppTheme) {
       color: semantic.errorBannerText,
     },
 
-    sheet: {
-      position: "absolute",
-      bottom: 0,
-      left: 0,
-      right: 0,
+    sheetBackground: {
       backgroundColor: colors.card,
       borderTopLeftRadius: 28,
       borderTopRightRadius: 28,
+    },
+    sheetShadow: {
       shadowColor: semantic.shadow,
       shadowOffset: { width: 0, height: -6 },
       shadowOpacity: 0.1,
       shadowRadius: 20,
       elevation: 24,
+    },
+    sheetContent: {
+      flex: 1,
     },
     handleArea: { alignItems: "center", paddingTop: 10, paddingBottom: 6 },
     handle: {

@@ -6,7 +6,7 @@ import {
   ActivityIndicator,
   TouchableOpacity,
 } from "react-native";
-import { ScrollView } from "react-native";
+import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
@@ -142,7 +142,7 @@ export function BusDetailsPanel({
         ) : isEmpty ? (
           <Text style={[styles.empty, { color: colors.ink3 }]}>No schedule data</Text>
         ) : (
-          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          <BottomSheetScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
             {tripStops.map((stop) => {
               const telerideNum = parseInt(stop.stop_id, 10);
               const tappable = onStopTap && !isNaN(telerideNum);
@@ -184,7 +184,7 @@ export function BusDetailsPanel({
                 </TouchableOpacity>
               );
             })}
-          </ScrollView>
+          </BottomSheetScrollView>
         )}
       </View>
     </View>
