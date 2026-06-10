@@ -1,12 +1,15 @@
-import React, { useRef, useMemo } from "react";
+import React, { useMemo } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import {
   View,
-  TextInput,
   TouchableOpacity,
   StyleSheet,
   ActivityIndicator,
 } from "react-native";
+// Sheet-aware input: registers with the surrounding BottomSheet so its
+// keyboardBehavior kicks in (raise the sheet above the keyboard on focus).
+// SearchBar renders only inside the map screen's sheet.
+import { BottomSheetTextInput } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import type { AppTheme } from "@/styles/themes";
 
@@ -26,7 +29,6 @@ export const SearchBar: React.FC<Props> = ({
   const { theme } = useTheme();
   const { colors, typography } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const inputRef = useRef<TextInput>(null);
 
   return (
     <View style={styles.container}>
@@ -38,8 +40,7 @@ export const SearchBar: React.FC<Props> = ({
         )}
       </View>
 
-      <TextInput
-        ref={inputRef}
+      <BottomSheetTextInput
         style={styles.input}
         value={value}
         onChangeText={onChangeText}

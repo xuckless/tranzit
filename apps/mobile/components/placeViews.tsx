@@ -7,7 +7,7 @@ import {
   TouchableOpacity,
   Linking,
 } from "react-native";
-import { BottomSheetScrollView as ScrollView } from "@gorhom/bottom-sheet";
+import { ScrollView } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import type { PlaceDetails } from "@/types/places";
 import { useTheme } from "@/contexts/ThemeContext";

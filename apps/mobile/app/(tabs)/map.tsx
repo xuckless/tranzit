@@ -8,10 +8,7 @@ import {
   Dimensions,
   Keyboard,
 } from "react-native";
-import BottomSheet, {
-  BottomSheetView,
-  BottomSheetScrollView,
-} from "@gorhom/bottom-sheet";
+import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import {
   Map,
   Camera,
@@ -379,6 +376,21 @@ export default function MapScreen() {
     setIsExpanded(index >= 1);
   }, []);
 
+  // Stable handle renderer — an inline arrow here would be a new component
+  // type every render, remounting the handle and dropping its pan gesture
+  // mid-drag.
+  const renderSheetHandle = useCallback(
+    () => (
+      <View style={styles.handleArea}>
+        <View style={[styles.handle, { backgroundColor: semantic.handle }]} />
+        <Text style={[styles.handleHint, { color: semantic.handleHint }]}>
+          {isExpanded ? "Nearby Stops" : "Explore"}
+        </Text>
+      </View>
+    ),
+    [styles, semantic, isExpanded],
+  );
+
   // ── SearchSheet callbacks ────────────────────────────────────────────────────
   const handleDestinationSelected = useCallback(
     async (dest: SelectedDestination) => {
@@ -737,22 +749,21 @@ export default function MapScreen() {
         index={0}
         snapPoints={snapPoints}
         enablePanDownToClose={false}
+        // The original PanResponder sheet dragged only from the handle;
+        // keeping content panning off lets every inner list scroll natively
+        // at any snap height (gorhom scrollables otherwise lock until the
+        // sheet reaches its top snap, and only one scrollable can register).
+        enableContentPanningGesture={false}
+        keyboardBehavior="extend"
+        keyboardBlurBehavior="restore"
+        android_keyboardInputMode="adjustResize"
         onChange={handleSheetChange}
         backgroundStyle={[
           styles.sheetBackground,
           { backgroundColor: colors.card },
         ]}
         style={styles.sheetShadow}
-        handleComponent={() => (
-          <View style={styles.handleArea}>
-            <View
-              style={[styles.handle, { backgroundColor: semantic.handle }]}
-            />
-            <Text style={[styles.handleHint, { color: semantic.handleHint }]}>
-              {isExpanded ? "Nearby Stops" : "Explore"}
-            </Text>
-          </View>
-        )}
+        handleComponent={renderSheetHandle}
       >
         <BottomSheetView style={styles.sheetContent}>
         {selectedStop && !isSearchActive && (
@@ -952,7 +963,7 @@ export default function MapScreen() {
                 <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Nearby Stops</Text>
               </View>
             </View>
-            <BottomSheetScrollView
+            <ScrollView
               showsVerticalScrollIndicator={false}
               keyboardShouldPersistTaps="handled"
             >
@@ -999,7 +1010,7 @@ export default function MapScreen() {
                   );
                 })
               )}
-            </BottomSheetScrollView>
+            </ScrollView>
           </View>
         )}
         </BottomSheetView>

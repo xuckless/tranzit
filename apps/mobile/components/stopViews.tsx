@@ -5,8 +5,8 @@ import {
   StyleSheet,
   ActivityIndicator,
   TouchableOpacity,
+  ScrollView,
 } from "react-native";
-import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import { middlewareQuery } from "@/lib/middleware";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
@@ -286,7 +286,7 @@ export function StopDetailsPanel({
         ) : isEmpty ? (
           <Text style={[styles.empty, { color: colors.ink3 }]}>No service data</Text>
         ) : (
-          <BottomSheetScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+          <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
             {upcoming.length > 0 && (
               <>
                 <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Upcoming</Text>
@@ -311,7 +311,7 @@ export function StopDetailsPanel({
                 ))}
               </>
             )}
-          </BottomSheetScrollView>
+          </ScrollView>
         )}
       </View>
     </View>
