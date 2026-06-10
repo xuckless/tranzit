@@ -94,6 +94,15 @@ export function groupRoutes(routes: Route[]): GroupedRoutes {
   return { meta, groups };
 }
 
+/** Total walking distance in metres across all legs/steps. */
+export function routeWalkDistance(r: Route): number {
+  if (r.otpItinerary?.walk_distance_m != null) return r.otpItinerary.walk_distance_m;
+  return (r.legs ?? [])
+    .flatMap((l) => l.steps ?? [])
+    .filter((s) => s.travelMode === "WALK")
+    .reduce((sum, s) => sum + (s.distanceMeters ?? 0), 0);
+}
+
 /** True if any leg of the route rides the CTrain/LRT (used for chip icons). */
 export function routeUsesTrain(r: Route): boolean {
   return transitSteps(r).some((s) => {

@@ -202,11 +202,13 @@ const chipStyles = StyleSheet.create({
 function RouteCard({
   route,
   isFastest,
+  isLeastWalking,
   isSelected,
   onSelect,
 }: {
   route: Route;
   isFastest: boolean;
+  isLeastWalking: boolean;
   isSelected: boolean;
   onSelect: () => void;
 }) {
@@ -233,7 +235,16 @@ function RouteCard({
     >
       {isFastest && (
         <View style={[styles.fastestBadge, { backgroundColor: colors.primaryDim }]}>
-          <Text style={[styles.fastestText, { color: colors.primary }]}>Fastest</Text>
+          <Text style={[styles.fastestText, { color: colors.primary }]}>Earliest Arrival</Text>
+        </View>
+      )}
+
+      {isLeastWalking && (
+        <View style={[styles.leastWalkBadge, { backgroundColor: semantic.primaryChipBlueBg }]}>
+          <FontAwesome5 name="walking" size={10} color={semantic.primaryChipBlue} />
+          <Text style={[styles.leastWalkText, { color: semantic.primaryChipBlue }]}>
+            Least Walking
+          </Text>
         </View>
       )}
 
@@ -282,6 +293,8 @@ interface Props {
   selectedRoute?: Route | null;
   /** The earliest-arrival route across ALL fetched routes (not just this list). */
   fastestRoute?: Route | null;
+  /** The route with the minimum total walking distance across ALL fetched routes. */
+  leastWalkingRoute?: Route | null;
   onSelectRoute: (route: Route) => void;
 }
 
@@ -289,6 +302,7 @@ export function RoutePickerSheet({
   routes,
   selectedRoute,
   fastestRoute,
+  leastWalkingRoute,
   onSelectRoute,
 }: Props) {
   const { theme } = useTheme();
@@ -313,6 +327,7 @@ export function RoutePickerSheet({
             key={i}
             route={route}
             isFastest={route === fastestRoute}
+            isLeastWalking={route === leastWalkingRoute}
             isSelected={route === selectedRoute}
             onSelect={() => onSelectRoute(route)}
           />
@@ -379,6 +394,20 @@ function makeStyles(t: AppTheme) {
     fastestText: {
       ...typography.micro,
       color: colors.primary,
+      letterSpacing: 0.4,
+      textTransform: "uppercase",
+    },
+    leastWalkBadge: {
+      alignSelf: "flex-start",
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 4,
+      paddingHorizontal: 8,
+      paddingVertical: 3,
+      borderRadius: 6,
+    },
+    leastWalkText: {
+      ...typography.micro,
       letterSpacing: 0.4,
       textTransform: "uppercase",
     },

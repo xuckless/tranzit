@@ -32,7 +32,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
-import { groupRoutes, routeUsesTrain } from "@/lib/routeRanking";
+import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
 import type { Route, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
 import type { AppTheme } from "@/styles/themes";
@@ -351,20 +351,41 @@ export default function RouteScreen() {
         return best;
     }, [routes, routeMeta]);
 
+    // Least walking = minimum total walk distance, across all routes.
+    const leastWalkingRoute = useMemo(() => {
+        let best: Route | null = null;
+        for (const r of routes) {
+            if (!best || routeWalkDistance(r) < routeWalkDistance(best)) best = r;
+        }
+        return best;
+    }, [routes]);
+
     const filterChips = useMemo(() => {
         const keys = [...routeGroups.entries()]
-            .map(([key, arr]) => ({
-                key,
-                best: Math.min(...arr.map((r) => routeMeta.get(r)!.arrival)),
-                icon: arr.some(routeUsesTrain)
+            .map(([key, arr]) => {
+                const icon = arr.some(routeUsesTrain)
                     ? "subway"
                     : key === "Walk"
                       ? "walking"
-                      : "bus",
-            }))
+                      : "bus";
+                const bestArrival = Math.min(
+                    ...arr.map((r) => routeMeta.get(r)!.arrival),
+                );
+                const bestRoute =
+                    arr.find((r) => routeMeta.get(r)!.arrival === bestArrival) ??
+                    arr[0];
+                const walkDist =
+                    icon === "walking"
+                        ? fmtWalkDist(routeWalkDistance(bestRoute))
+                        : undefined;
+                return { key, best: bestArrival, icon, walkDist };
+            })
             .sort((a, b) => a.best - b.best)
-            .map(({ key, icon }) => ({ key, icon }));
-        return [{ key: "All", icon: "list" }, ...keys];
+            .map(({ key, icon, walkDist }) => ({ key, icon, walkDist }));
+        return [
+            { key: "All", icon: "list", walkDist: undefined as string | undefined },
+            ...keys,
+        ];
     }, [routeGroups, routeMeta]);
 
     const filteredRoutes = useMemo(() => {
@@ -958,7 +979,7 @@ export default function RouteScreen() {
                                     gap: spacing.element,
                                 }}
                             >
-                                {filterChips.map(({ key, icon }) => {
+                                {filterChips.map(({ key, icon, walkDist }) => {
                                     const isActive = activeFilter === key;
                                     return (
                                         <TouchableOpacity
@@ -991,6 +1012,17 @@ export default function RouteScreen() {
                                             >
                                                 {key}
                                             </Text>
+                                            {walkDist && (
+                                                <Text
+                                                    style={[
+                                                        styles.modeChipDist,
+                                                        isActive &&
+                                                            styles.modeChipDistActive,
+                                                    ]}
+                                                >
+                                                    {walkDist}
+                                                </Text>
+                                            )}
                                         </TouchableOpacity>
                                     );
                                 })}
@@ -1002,6 +1034,7 @@ export default function RouteScreen() {
                                         routes={filteredRoutes}
                                         selectedRoute={selectedRoute}
                                         fastestRoute={overallFastest}
+                                        leastWalkingRoute={leastWalkingRoute}
                                         onSelectRoute={(r) =>
                                             setSelectedRoute(r)
                                         }
@@ -1056,6 +1089,12 @@ export default function RouteScreen() {
             )}
         </View>
     );
+}
+
+// ─── Helpers ─────────────────────────────────────────────────────────────────
+
+function fmtWalkDist(m: number): string {
+    return m < 1000 ? `${Math.round(m)}m` : `${(m / 1000).toFixed(1)}km`;
 }
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
@@ -1175,6 +1214,8 @@ function makeStyles(t: AppTheme) {
             color: colors.ink,
         },
         modeChipTextActive: { color: colors.selected },
+        modeChipDist: { ...typography.caption, color: colors.ink3 },
+        modeChipDistActive: { color: colors.selected },
 
         routeListWrap: { flex: 1, paddingBottom: 80 },
 
