@@ -914,7 +914,7 @@ export default function CommuteScreen() {
     if (leaveByEpoch == null) {
       if (lastScheduledLeaveByRef.current != null) {
         lastScheduledLeaveByRef.current = null;
-        cancelLeaveBy(sessionId);
+        void cancelLeaveBy(sessionId).catch(() => {});
       }
       return;
     }
@@ -923,8 +923,19 @@ export default function CommuteScreen() {
     const prev = lastScheduledLeaveByRef.current;
     if (prev != null && Math.abs(prev - leaveByEpoch) <= 60) return;
     lastScheduledLeaveByRef.current = leaveByEpoch;
-    scheduleLeaveBy(sessionId, boardingStopName ?? "your stop", leaveByEpoch);
+    void scheduleLeaveBy(sessionId, boardingStopName ?? "your stop", leaveByEpoch).catch(() => {});
   }, [sessionId, leaveByEpoch, boardingStopName]);
+
+  // Cancel any pending leave-by notification when the commute screen unmounts
+  // (e.g. user navigates away without pressing End Journey).
+  useEffect(() => {
+    if (!sessionId) return;
+    return () => {
+      if (lastScheduledLeaveByRef.current != null) {
+        void cancelLeaveBy(sessionId).catch(() => {});
+      }
+    };
+  }, [sessionId]);
 
   const stops = useMemo((): CommuteStop[] => {
     const originLabel = originInfo?.label ?? "Your Location";
@@ -984,7 +995,7 @@ export default function CommuteScreen() {
     // changes at each transfer).
     const runs: CommuteStop[][] = [];
     tripState.stops.forEach((s, i) => {
-      if (i === 0 || s.route_id !== tripState.stops[i - 1].route_id) {
+      if (i === 0 || (s.route_id != null && s.route_id !== tripState.stops[i - 1].route_id)) {
         runs.push([serverStops[i]]);
       } else {
         runs[runs.length - 1].push(serverStops[i]);

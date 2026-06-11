@@ -76,14 +76,6 @@ function publishedSnapshot(): VehiclePosition[] {
   return _published;
 }
 
-function sameVehicleArray(a: VehiclePosition[], b: VehiclePosition[]): boolean {
-  if (a.length !== b.length) return false;
-  for (let i = 0; i < a.length; i++) {
-    if (a[i] !== b[i]) return false;
-  }
-  return true;
-}
-
 function filterByRoutes(routeIdSet: Set<string>): VehiclePosition[] {
   if (routeIdSet.size === 0) return [];
   return _snapshot.filter(
@@ -91,15 +83,28 @@ function filterByRoutes(routeIdSet: Set<string>): VehiclePosition[] {
   );
 }
 
+// Single O(n) scan over _snapshot that returns true only when the filtered
+// result would differ from prev — avoids allocating a new array on every tick
+// when no tracked bus moved.
+function routesChanged(routeIdSet: Set<string>, prev: VehiclePosition[]): boolean {
+  if (routeIdSet.size === 0) return prev.length !== 0;
+  let i = 0;
+  for (const v of _snapshot) {
+    if (v.route_id != null && routeIdSet.has(v.route_id)) {
+      if (i >= prev.length || v !== prev[i]) return true;
+      i++;
+    }
+  }
+  return i !== prev.length;
+}
+
 function notifySubscribers(): void {
   const published = publishedSnapshot();
   _subs.forEach((set) => set(published));
   for (const sub of _selectorSubs) {
+    // Check first without allocating; only build the new array when something changed.
+    if (!routesChanged(sub.routeIdSet, sub.last)) continue;
     const filtered = filterByRoutes(sub.routeIdSet);
-    // Vehicle objects are replaced (never mutated) on update, so element-wise
-    // reference equality is a sound "did my routes change" check. Unchanged →
-    // keep the previous array reference so the subscriber's setState bails out.
-    if (sameVehicleArray(filtered, sub.last)) continue;
     sub.last = filtered;
     sub.set(filtered);
   }

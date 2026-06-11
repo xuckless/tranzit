@@ -13,7 +13,6 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { useRouteLiveStops } from "@/lib/routeSSE";
 import type { RouteSSEStop } from "@/lib/routeSSE";
 import type { AppTheme } from "@/styles/themes";
-import { ClassicLight } from "@/styles/themes";
 
 // ─── Helpers (exported so map.tsx can reuse them) ─────────────────────────────
 
@@ -122,14 +121,14 @@ function TransitChipLive({ step }: { step: RouteStep }) {
       ]}
     >
       <Text
-        style={[chipStyles.transitLabel, { color: lineColor }]}
+        style={[chipStyles.transitLabel, typography.badge, { color: lineColor }]}
         numberOfLines={1}
       >
         {nameShort}
       </Text>
       {delay && (
         <Text
-          style={[chipStyles.chipDelay, { color: delay.color }]}
+          style={[chipStyles.chipDelay, typography.chipDelay, { color: delay.color }]}
           numberOfLines={1}
         >
           {delay.label}
@@ -188,11 +187,8 @@ const chipStyles = StyleSheet.create({
     borderWidth: 1.5,
     alignItems: "center",
   },
-  transitLabel: {
-    ...ClassicLight.typography.badge,
-  },
+  transitLabel: {},
   chipDelay: {
-    ...ClassicLight.typography.chipDelay,
     marginTop: 1,
   },
 });

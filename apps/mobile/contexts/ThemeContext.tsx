@@ -11,6 +11,7 @@ import { DEFAULT_THEME_ID, THEMES, getTheme } from "@/styles/themes";
 import type { AppTheme, ThemeId } from "@/styles/themes";
 
 const THEME_ID_KEY = "tranzit_theme_id";
+const LEGACY_DARK_KEY = "tranzit_dark_mode";
 
 interface ThemeContextValue {
   theme: AppTheme;
@@ -30,9 +31,13 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [themeId, setThemeIdState] = useState<ThemeId>(DEFAULT_THEME_ID);
 
   useEffect(() => {
-    SecureStore.getItemAsync(THEME_ID_KEY).then((val) => {
+    SecureStore.getItemAsync(THEME_ID_KEY).then(async (val) => {
       if (val && (THEMES as Record<string, AppTheme>)[val]) {
         setThemeIdState(val as ThemeId);
+      } else {
+        // Migrate from the legacy boolean dark-mode key (pre-theme-system).
+        const legacy = await SecureStore.getItemAsync(LEGACY_DARK_KEY).catch(() => null);
+        if (legacy === "true") setThemeIdState("classic-dark");
       }
     });
   }, []);

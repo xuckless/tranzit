@@ -29,6 +29,7 @@ import { DestinationSuggestionsList } from "@/components/search/DestinationSugge
 import {
     RoutePickerSheet,
     normalizeColor,
+    formatDistance,
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
@@ -184,7 +185,7 @@ export default function RouteScreen() {
             (gpsLocation
                 ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
                 : null);
-        if (!effectiveOrigin || !destination?.placeId) return;
+        if (!effectiveOrigin || !destination) return;
 
         routeAbortRef.current?.abort();
         const ctrl = new AbortController();
@@ -376,7 +377,7 @@ export default function RouteScreen() {
                     arr[0];
                 const walkDist =
                     icon === "walking"
-                        ? fmtWalkDist(routeWalkDistance(bestRoute))
+                        ? formatDistance(routeWalkDistance(bestRoute))
                         : undefined;
                 return { key, best: bestArrival, icon, walkDist };
             })
@@ -837,18 +838,18 @@ export default function RouteScreen() {
                             <TouchableOpacity
                                 style={[
                                     styles.findRoutesBtn,
-                                    !destination?.placeId &&
+                                    !destination &&
                                         styles.findRoutesBtnDisabled,
                                 ]}
                                 onPress={handleFindRoutes}
-                                disabled={!destination?.placeId}
+                                disabled={!destination}
                                 activeOpacity={0.8}
                             >
                                 <Ionicons
                                     name="search"
                                     size={14}
                                     color={
-                                        destination?.placeId
+                                        destination
                                             ? colors.onPrimary
                                             : colors.ink3
                                     }
@@ -856,7 +857,7 @@ export default function RouteScreen() {
                                 <Text
                                     style={[
                                         styles.findRoutesBtnText,
-                                        !destination?.placeId &&
+                                        !destination &&
                                             styles.findRoutesBtnTextDisabled,
                                     ]}
                                 >
@@ -1091,11 +1092,6 @@ export default function RouteScreen() {
     );
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function fmtWalkDist(m: number): string {
-    return m < 1000 ? `${Math.round(m)}m` : `${(m / 1000).toFixed(1)}km`;
-}
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
