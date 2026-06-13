@@ -36,11 +36,10 @@ server side — the client does NOT call those for trip logic.
 
 | Service | Base URL | Who calls it |
 |---------|----------|--------------|
-| **Map Service** (tranzit-route-service) | `https://tranzit-route-service-qsv32inqpq-uc.a.run.app` | Client (direct) |
-| **DB Middleware** (tranzit-db-middleware) | `https://tranzit-db-middleware-qsv32inqpq-uc.a.run.app` | Route Save (server-side); client only for optional live vehicle positions |
-| **Route Save** | *not yet deployed* — dev: `http://localhost:8090` (WS `ws://localhost:8090`) | Client |
+| **Map Service** (tranzit-route-service) | `https://tranzit-route-service-000000000000.us-central1.run.app` | Client (direct) |
+| **DB Middleware** (tranzit-db-middleware) | `https://tranzit-db-middleware-000000000000.us-central1.run.app` | Route Save (server-side); client only for optional live vehicle positions |
+| **Route Save** | `https://tranzit-route-save-000000000000.us-central1.run.app` (WS `wss://…`) — dev: `http://localhost:8090` (WS `ws://localhost:8090`) | Client |
 
-> When Route Save is deployed to Cloud Run it will be `https://…` / `wss://…`.
 > Put all three in client config; never hard-code.
 
 No authentication is required on these services today (Clerk is pending). Treat
@@ -57,7 +56,7 @@ coordinates.
 
 ```http
 GET /autocomplete/json?input=sunalta
-Host: tranzit-route-service-qsv32inqpq-uc.a.run.app
+Host: tranzit-route-service-000000000000.us-central1.run.app
 ```
 ```http
 POST /details
@@ -124,6 +123,67 @@ Content-Type: application/json
 
 Errors: `400` (bad/missing `route` or `destination_place_id`), `422` (route could
 not be resolved to GTFS trips).
+
+### Step 3 (OTP variant) — Start an OpenTripPlanner trip
+
+Map Service exposes a second routing engine, **OpenTripPlanner**, at `POST /route/otp`.
+It plans on the GTFS graph from **coordinates** (no Place ID) and returns concrete
+`trip_id` + entry/exit `stop_id` per leg. Its response is keyed `itineraries` (not
+`routes`) and tagged `"source": "opentrip"`:
+
+```json
+{ "source": "opentrip",
+  "itineraries": [ { "duration_seconds": 1349, "legs": [ … ] }, … ] }
+```
+
+To start a trip from an OTP route, **`POST /trips` with the engine tag and coordinates**
+— *not* the Google `destination_place_id` body:
+
+```http
+POST /trips
+Content-Type: application/json
+
+{
+  "source": "opentrip",                              // REQUIRED — selects the OTP path
+  "route": { /* the chosen raw OTP itinerary, OR the
+                whole {source,itineraries:[…]} envelope */ },
+  "destination": { "lat": 51.0379, "lng": -114.0908 }, // REQUIRED — coords, NOT a place_id
+  "origin": { "lat": 51.0447, "lng": -114.0719 },      // optional
+  "user_id": "…"                                       // optional
+}
+```
+
+Response is the same `201 { session_id, ws_url }`; everything downstream (WebSocket,
+`STATE`, `REROUTE`, `DELETE`) is identical. Reroutes re-fetch via `/route/otp` from the
+`destination` coordinates, which is why coords are required and a Place ID is not used.
+
+> **Send the *raw* route, never a UI-normalized one.** If your client normalizes the
+> OTP `itineraries` into a Google-shaped object for rendering, that adapter typically
+> drops `trip_id`, `from_stop_id`/`to_stop_id`, and stop **coordinates** — exactly what
+> Route Save's OTP path needs. Posting the normalized object (or omitting `source`)
+> sends it down the Google path with no stop coords → `422 no candidate serves
+> entry→exit in order`. Keep the raw itinerary alongside your rendered route and POST
+> that.
+
+**Server-owned alternative — `POST /tranzit-route`.** If the client doesn't pre-pick an
+itinerary, send only coordinates and let Route Save fetch + pick (shortest) itself:
+
+```http
+POST /tranzit-route
+Content-Type: application/json
+
+{ "origin": { "lat": …, "lng": … },
+  "destination": { "lat": …, "lng": … },
+  "num_itineraries": 5 }            // optional; "mode" optional (default walk_transit)
+```
+
+→ `201 { session_id, ws_url, route }` — `route` is the chosen OTP envelope so you can
+render immediately. Use this only when server-side itinerary choice is acceptable (it
+won't necessarily match a specific route the user tapped).
+
+> **Engines at a glance.** Google `/route` → `{routes:[…]}`, needs `destination_place_id`.
+> OTP `/route/otp` → `{source:"opentrip", itineraries:[…]}`, needs `destination` coords.
+> `source` on the `/trips` body discriminates the two; omit it for the Google default.
 
 ### Step 4 — Open the WebSocket (Route Save)
 
@@ -342,11 +402,11 @@ again to start fresh.
 ## 7. Minimal Expo / TypeScript example
 
 ```ts
-const MAP = "https://tranzit-route-service-qsv32inqpq-uc.a.run.app";
+const MAP = "https://tranzit-route-service-000000000000.us-central1.run.app";
 const ROUTE_SAVE = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL!;      // http(s)://…
 const ROUTE_SAVE_WS = ROUTE_SAVE.replace(/^http/, "ws");
 
-// 1–2: directions
+// 1–2: directions (Google engine)
 const dirs = await fetch(`${MAP}/route`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -354,7 +414,7 @@ const dirs = await fetch(`${MAP}/route`, {
 }).then(r => r.json());
 const chosen = dirs.routes[0];            // user-selected alternative
 
-// 3: start the trip
+// 3: start the trip (Google)
 const { session_id, ws_url } = await fetch(`${ROUTE_SAVE}/trips`, {
   method: "POST",
   headers: { "Content-Type": "application/json" },
@@ -364,6 +424,24 @@ const { session_id, ws_url } = await fetch(`${ROUTE_SAVE}/trips`, {
     origin: { lat, lng },
   }),
 }).then(r => r.json());
+
+// 1–3 (OTP variant): fetch /route/otp, keep the RAW chosen itinerary, then POST
+// /trips with source + destination coords (no place_id). Everything after is the same.
+//
+//   const otp = await fetch(`${MAP}/route/otp`, {
+//     method: "POST", headers: { "Content-Type": "application/json" },
+//     body: JSON.stringify({ origin: { lat, lng }, destination: { lat: dLat, lng: dLng } }),
+//   }).then(r => r.json());                       // { source:"opentrip", itineraries:[…] }
+//   const itinerary = otp.itineraries[0];         // user-selected, RAW (keeps trip_id/stop ids)
+//   const { session_id, ws_url } = await fetch(`${ROUTE_SAVE}/trips`, {
+//     method: "POST", headers: { "Content-Type": "application/json" },
+//     body: JSON.stringify({
+//       source: "opentrip",
+//       route: itinerary,                          // raw itinerary OR the whole envelope
+//       destination: { lat: dLat, lng: dLng },     // coords, NOT a place_id
+//       origin: { lat, lng },
+//     }),
+//   }).then(r => r.json());
 
 // 4: live channel
 const ws = new WebSocket(`${ROUTE_SAVE_WS}${ws_url}`);
@@ -447,12 +525,15 @@ function endTrip() {
 | GET | `/search` | `?q=` | places |
 | POST | `/details` | `{ "place_id" }` | place details |
 | GET | `/searchnearby` | `?lat=&lng=` | nearby places |
-| POST | `/route` | `{ origin:{lat,lng}, destination_id }` | `{ routes:[…] }` |
+| POST | `/route` | `{ origin:{lat,lng}, destination_id }` | `{ routes:[…] }` (Google) |
+| POST | `/route/otp` | `{ origin:{lat,lng}, destination:{lat,lng}, mode?, num_itineraries? }` | `{ source:"opentrip", itineraries:[…] }` (OTP) |
 
 ### Route Save
 | Method | Path | Body | Returns |
 |--------|------|------|---------|
-| POST | `/trips` | `{ route, destination_place_id, origin?, user_id? }` | `201 { session_id, ws_url }` |
+| POST | `/trips` (Google) | `{ route, destination_place_id, origin?, user_id? }` | `201 { session_id, ws_url }` |
+| POST | `/trips` (OTP) | `{ source:"opentrip", route, destination:{lat,lng}, origin?, user_id? }` | `201 { session_id, ws_url }` |
+| POST | `/tranzit-route` (OTP, server-fetched) | `{ origin:{lat,lng}, destination:{lat,lng}, num_itineraries?, mode? }` | `201 { session_id, ws_url, route }` |
 | GET (WS) | `/trips/{id}/ws` | — | STATE / REROUTE / NOTIFY stream |
 | DELETE | `/trips/{id}` | — | `204` |
 | GET | `/health` | — | `{ "status": "ok" }` |
