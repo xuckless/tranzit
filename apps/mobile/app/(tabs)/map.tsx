@@ -58,6 +58,13 @@ const CALGARY_MAX_BOUNDS: [number, number, number, number] = [-115.5, 50.147, -1
 
 const MIN_MARKER_ZOOM = 12;
 
+// The imminent-arrival gate narrows ~3k stops to those with a live arrival. On a
+// healthy feed that's hundreds of stops; when the realtime feed is stale/degraded
+// it collapses to a handful (or just the `-1` no-data sentinels), which would
+// silently wipe every dot off the map. Below this many gated stops we treat the
+// feed as untrustworthy and show all ACTIVE stops instead.
+const MIN_GATED_STOPS = 25;
+
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
 interface Coordinate {
@@ -205,11 +212,13 @@ export default function MapScreen() {
         console.warn("[map] stop_time_updates gate failed; showing all active stops", e);
       }
 
-      setTransitStops(
-        scheduled.size === 0
-          ? activeStops
-          : activeStops.filter((s) => scheduled.has(String(s.teleride_number))),
+      // Gate stops by imminent arrival only when the feed looks healthy. A stale
+      // feed returns too few matches (here often just the `-1` sentinels), so we
+      // fall back to all ACTIVE stops rather than wiping the map.
+      const gated = activeStops.filter((s) =>
+        scheduled.has(String(s.teleride_number)),
       );
+      setTransitStops(gated.length < MIN_GATED_STOPS ? activeStops : gated);
     })();
   }, []);
 

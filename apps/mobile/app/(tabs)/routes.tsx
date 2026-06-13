@@ -16,6 +16,12 @@ import {
     Marker,
     type CameraRef,
 } from "@maplibre/maplibre-react-native";
+import BottomSheet, {
+    BottomSheetView,
+    BottomSheetFooter,
+    type BottomSheetFooterProps,
+} from "@gorhom/bottom-sheet";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import AntDesign from "@expo/vector-icons/AntDesign";
@@ -29,12 +35,12 @@ import { DestinationSuggestionsList } from "@/components/search/DestinationSugge
 import {
     RoutePickerSheet,
     normalizeColor,
-    formatDistance,
+    formatDuration,
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
 import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
-import type { Route, SearchSuggestion } from "@/types/places";
+import type { Route, RouteStop, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
 import type { AppTheme } from "@/styles/themes";
 
@@ -56,6 +62,8 @@ export default function RouteScreen() {
     const { colors, typography, semantic, spacing, radii, shadow, mapPaint } =
         theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
+    const insets = useSafeAreaInsets();
+    const sheetSnapPoints = useMemo(() => ["14%", "50%", "90%"], []);
     const {
         destinationId,
         destinationLat,
@@ -280,18 +288,11 @@ export default function RouteScreen() {
     }, [origin, gpsLocation, destination, originLabel, destinationLabel]);
 
     // ── Polyline GeoJSON ──────────────────────────────────────────────────────────
+    // One LineString per *leg* so walking legs can render dotted and transit legs
+    // solid. OTP routes carry per-leg polylines (the active engine); Google routes
+    // fall back to a single route-level transit line.
     const routesGeoJSON = useMemo(() => {
         const features = routes.flatMap((r, i) => {
-            const encoded = r.polyline?.encodedPolyline;
-            if (!encoded) return [];
-            let coords: { latitude: number; longitude: number }[];
-            try {
-                coords = decodePolyline(encoded);
-            } catch {
-                return [];
-            }
-            if (coords.length === 0) return [];
-
             const isSelected = r === selectedRoute;
             const transitStep = (r.legs ?? [])
                 .flatMap((l) => l.steps ?? [])
@@ -303,25 +304,64 @@ export default function RouteScreen() {
                   )
                 : semantic.routePalette[i % semantic.routePalette.length];
 
-            return [
-                {
-                    type: "Feature" as const,
-                    properties: {
-                        color: isSelected
-                            ? lineColor
-                            : semantic.unselectedPolyline,
-                        width: isSelected ? 5 : 3,
-                        isSelected,
-                    },
-                    geometry: {
-                        type: "LineString" as const,
-                        coordinates: coords.map(
-                            (c) =>
-                                [c.longitude, c.latitude] as [number, number],
+            const segments: {
+                coords: [number, number][];
+                isWalk: boolean;
+            }[] = [];
+
+            const legs = r.otpItinerary?.legs;
+            if (legs && legs.length > 0) {
+                for (const leg of legs) {
+                    if (!leg.polyline) continue;
+                    let c: { latitude: number; longitude: number }[];
+                    try {
+                        c = decodePolyline(leg.polyline);
+                    } catch {
+                        continue;
+                    }
+                    if (c.length === 0) continue;
+                    segments.push({
+                        coords: c.map(
+                            (p) =>
+                                [p.longitude, p.latitude] as [number, number],
                         ),
-                    },
+                        isWalk: leg.mode === "WALK",
+                    });
+                }
+            } else {
+                const encoded = r.polyline?.encodedPolyline;
+                if (encoded) {
+                    try {
+                        const c = decodePolyline(encoded);
+                        if (c.length > 0)
+                            segments.push({
+                                coords: c.map(
+                                    (p) =>
+                                        [p.longitude, p.latitude] as [
+                                            number,
+                                            number,
+                                        ],
+                                ),
+                                isWalk: false,
+                            });
+                    } catch {
+                        // ignore undecodable polyline
+                    }
+                }
+            }
+
+            return segments.map((seg) => ({
+                type: "Feature" as const,
+                properties: {
+                    color: lineColor,
+                    isSelected,
+                    isWalk: seg.isWalk,
                 },
-            ];
+                geometry: {
+                    type: "LineString" as const,
+                    coordinates: seg.coords,
+                },
+            }));
         });
 
         return { type: "FeatureCollection" as const, features };
@@ -330,8 +370,41 @@ export default function RouteScreen() {
         selectedRoute,
         theme.colors.primary,
         semantic.routePalette,
-        semantic.unselectedPolyline,
     ]);
+
+    // ── Boarding / exit stop markers (selected route only) ─────────────────────────
+    // The route data carries each transit leg's board + alight stop coordinates,
+    // so no global stop fetch is needed.
+    const stopsGeoJSON = useMemo(() => {
+        const features: {
+            type: "Feature";
+            properties: { name: string };
+            geometry: { type: "Point"; coordinates: [number, number] };
+        }[] = [];
+        const seen = new Set<string>();
+        const add = (stop?: RouteStop) => {
+            const ll = stop?.location?.latLng;
+            if (!ll) return;
+            const key = `${ll.latitude.toFixed(5)},${ll.longitude.toFixed(5)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            features.push({
+                type: "Feature",
+                properties: { name: stop?.name ?? "" },
+                geometry: {
+                    type: "Point",
+                    coordinates: [ll.longitude, ll.latitude],
+                },
+            });
+        };
+        for (const leg of selectedRoute?.legs ?? [])
+            for (const step of leg.steps ?? [])
+                if (step.travelMode === "TRANSIT") {
+                    add(step.transitDetails?.stopDetails?.departureStop);
+                    add(step.transitDetails?.stopDetails?.arrivalStop);
+                }
+        return { type: "FeatureCollection" as const, features };
+    }, [selectedRoute]);
 
     // ── Grouping / ranking ────────────────────────────────────────────────────────
     // Routes are sectioned by the line(s) they ride ("201", "201+30", "Walk"),
@@ -375,16 +448,14 @@ export default function RouteScreen() {
                 const bestRoute =
                     arr.find((r) => routeMeta.get(r)!.arrival === bestArrival) ??
                     arr[0];
-                const walkDist =
-                    icon === "walking"
-                        ? formatDistance(routeWalkDistance(bestRoute))
-                        : undefined;
-                return { key, best: bestArrival, icon, walkDist };
+                // Fastest travel time in this category (replaces the KM badge).
+                const timeLabel = formatDuration(bestRoute.duration);
+                return { key, best: bestArrival, icon, timeLabel };
             })
             .sort((a, b) => a.best - b.best)
-            .map(({ key, icon, walkDist }) => ({ key, icon, walkDist }));
+            .map(({ key, icon, timeLabel }) => ({ key, icon, timeLabel }));
         return [
-            { key: "All", icon: "list", walkDist: undefined as string | undefined },
+            { key: "All", icon: "list", timeLabel: undefined as string | undefined },
             ...keys,
         ];
     }, [routeGroups, routeMeta]);
@@ -514,6 +585,24 @@ export default function RouteScreen() {
         [destinationSearch],
     );
 
+    // Sticky "Current Location" action for the origin search — guarantees the
+    // GPS option is always reachable even after the user has picked a suggestion.
+    const useCurrentLocationOrigin = useCallback(() => {
+        Keyboard.dismiss();
+        setFocusedField(null);
+        originSearch.reset();
+        setOriginLabel("Current Location");
+        setOrigin(
+            gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null,
+        );
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        routeStore.setRoutes([]);
+    }, [gpsLocation, originSearch]);
+
     const dismissSearch = useCallback(() => {
         Keyboard.dismiss();
         setFocusedField(null);
@@ -629,6 +718,58 @@ export default function RouteScreen() {
         router,
     ]);
 
+    // Start Journey lives in the sheet footer so it stays pinned at the sheet's
+    // bottom edge at every snap point.
+    const renderSheetFooter = useCallback(
+        (props: BottomSheetFooterProps) => (
+            <BottomSheetFooter {...props} bottomInset={0}>
+                <View
+                    style={[
+                        styles.footerWrap,
+                        { paddingBottom: insets.bottom > 0 ? 8 : 12 },
+                    ]}
+                >
+                    {startError && (
+                        <Text style={styles.startErrorText}>{startError}</Text>
+                    )}
+                    <TouchableOpacity
+                        style={[
+                            styles.startBtn,
+                            isStarting && styles.startBtnDisabled,
+                        ]}
+                        onPress={handleStart}
+                        disabled={isStarting}
+                        activeOpacity={0.85}
+                    >
+                        {isStarting ? (
+                            <ActivityIndicator
+                                size="small"
+                                color={colors.onPrimary}
+                            />
+                        ) : (
+                            <Ionicons
+                                name="navigate"
+                                size={18}
+                                color={colors.onPrimary}
+                            />
+                        )}
+                        <Text style={styles.startBtnText}>
+                            {isStarting ? "Starting…" : "Start Journey"}
+                        </Text>
+                    </TouchableOpacity>
+                </View>
+            </BottomSheetFooter>
+        ),
+        [
+            styles,
+            insets.bottom,
+            startError,
+            isStarting,
+            handleStart,
+            colors.onPrimary,
+        ],
+    );
+
     // ─── Render ──────────────────────────────────────────────────────────────────
     return (
         <View style={[styles.screen, { backgroundColor: colors.surface }]}>
@@ -648,13 +789,18 @@ export default function RouteScreen() {
                 />
 
                 <GeoJSONSource id="routes-source" data={routesGeoJSON}>
+                    {/* Unselected transit: solid casing under a faded fill. */}
                     <Layer
-                        id="routes-line-selected"
+                        id="routes-unselected-casing"
                         type="line"
-                        filter={["==", ["get", "isSelected"], true]}
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], false],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
                         paint={{
-                            "line-color": ["get", "color"],
-                            "line-width": ["get", "width"],
+                            "line-color": semantic.unselectedPolyline,
+                            "line-width": 6,
                         }}
                         layout={{
                             "line-cap": "round",
@@ -662,17 +808,73 @@ export default function RouteScreen() {
                         }}
                     />
                     <Layer
-                        id="routes-line-unselected"
+                        id="routes-unselected-fill"
                         type="line"
-                        filter={["==", ["get", "isSelected"], false]}
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], false],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
                         paint={{
                             "line-color": ["get", "color"],
-                            "line-width": ["get", "width"],
-                            "line-dasharray": [2, 1.5],
+                            "line-width": 3,
+                            "line-opacity": 0.45,
                         }}
                         layout={{
                             "line-cap": "round",
                             "line-join": "round",
+                        }}
+                    />
+                    {/* Selected transit: solid full-strength line. */}
+                    <Layer
+                        id="routes-selected"
+                        type="line"
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], true],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
+                        paint={{
+                            "line-color": ["get", "color"],
+                            "line-width": 5,
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                    {/* Walking legs: dotted, dimmed when the route isn't selected. */}
+                    <Layer
+                        id="routes-walk"
+                        type="line"
+                        filter={["==", ["get", "isWalk"], true]}
+                        paint={{
+                            "line-color": mapPaint.polyline.walk,
+                            "line-width": 4,
+                            "line-dasharray": [0.4, 1.8],
+                            "line-opacity": [
+                                "case",
+                                ["get", "isSelected"],
+                                1,
+                                0.4,
+                            ],
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                </GeoJSONSource>
+
+                <GeoJSONSource id="route-stops-source" data={stopsGeoJSON}>
+                    <Layer
+                        id="route-stops-circle"
+                        type="circle"
+                        paint={{
+                            "circle-radius": 5,
+                            "circle-color": colors.card,
+                            "circle-stroke-color": colors.primary,
+                            "circle-stroke-width": 2.5,
                         }}
                     />
                 </GeoJSONSource>
@@ -702,6 +904,8 @@ export default function RouteScreen() {
                 )}
             </Map>
 
+            {/* ── Foreground overlay (map stays interactive underneath) ── */}
+            <View style={styles.overlay} pointerEvents="box-none">
             {/* ── Search panel ── */}
             <View
                 style={[styles.searchPanel, { backgroundColor: colors.card }]}
@@ -909,6 +1113,22 @@ export default function RouteScreen() {
                         { paddingHorizontal: spacing.screen },
                     ]}
                 >
+                    {gpsLocation && (
+                        <TouchableOpacity
+                            style={styles.currentLocRow}
+                            onPress={useCurrentLocationOrigin}
+                            activeOpacity={0.7}
+                        >
+                            <AntDesign
+                                name="aim"
+                                size={18}
+                                color={colors.primary}
+                            />
+                            <Text style={styles.currentLocText}>
+                                Current Location
+                            </Text>
+                        </TouchableOpacity>
+                    )}
                     {originSearch.status === "loading" && (
                         <ActivityIndicator
                             style={{ marginTop: 24 }}
@@ -927,9 +1147,9 @@ export default function RouteScreen() {
                     )}
                 </View>
             ) : (
-                <View style={styles.routeArea}>
+                <View style={styles.routeArea} pointerEvents="box-none">
                     {isLoadingRoutes && (
-                        <View style={styles.centerState}>
+                        <View style={styles.centerState} pointerEvents="box-none">
                             <ActivityIndicator
                                 size="large"
                                 color={colors.primary}
@@ -941,7 +1161,7 @@ export default function RouteScreen() {
                     )}
 
                     {!isLoadingRoutes && routeError && (
-                        <View style={styles.centerState}>
+                        <View style={styles.centerState} pointerEvents="box-none">
                             <Ionicons
                                 name="warning-outline"
                                 size={36}
@@ -957,7 +1177,7 @@ export default function RouteScreen() {
                     )}
 
                     {!isLoadingRoutes && !routeError && routes.length === 0 && (
-                        <View style={styles.centerState}>
+                        <View style={styles.centerState} pointerEvents="box-none">
                             <Ionicons
                                 name="navigate-outline"
                                 size={36}
@@ -971,123 +1191,100 @@ export default function RouteScreen() {
                         </View>
                     )}
 
-                    {!isLoadingRoutes && !routeError && routes.length > 0 && (
-                        <>
-                            <HorizontalView
-                                style={{
-                                    paddingHorizontal: spacing.screen,
-                                    paddingVertical: 6,
-                                    gap: spacing.element,
-                                }}
-                            >
-                                {filterChips.map(({ key, icon, walkDist }) => {
-                                    const isActive = activeFilter === key;
-                                    return (
-                                        <TouchableOpacity
-                                            key={key}
-                                            style={[
-                                                styles.modeChip,
-                                                isActive &&
-                                                    styles.modeChipActive,
-                                            ]}
-                                            onPress={() =>
-                                                setActiveFilter(key)
+                </View>
+            )}
+            </View>
+
+            {/* ── Route picker bottom sheet ── */}
+            {!focusedField &&
+                !isLoadingRoutes &&
+                !routeError &&
+                routes.length > 0 && (
+                    <BottomSheet
+                        index={1}
+                        snapPoints={sheetSnapPoints}
+                        enablePanDownToClose={false}
+                        // Let the inner route list scroll natively at any snap
+                        // height (gorhom scrollables otherwise lock until the
+                        // sheet reaches its top snap); the sheet drags from the
+                        // handle. Mirrors the Map screen's sheet.
+                        enableContentPanningGesture={false}
+                        handleIndicatorStyle={{
+                            backgroundColor: colors.ink3,
+                        }}
+                        backgroundStyle={{ backgroundColor: colors.card }}
+                        footerComponent={renderSheetFooter}
+                    >
+                        <BottomSheetView style={styles.sheetContent}>
+                        <HorizontalView
+                            style={{
+                                paddingHorizontal: spacing.screen,
+                                paddingVertical: 6,
+                                gap: spacing.element,
+                            }}
+                        >
+                            {filterChips.map(({ key, icon, timeLabel }) => {
+                                const isActive = activeFilter === key;
+                                return (
+                                    <TouchableOpacity
+                                        key={key}
+                                        style={[
+                                            styles.modeChip,
+                                            isActive && styles.modeChipActive,
+                                        ]}
+                                        onPress={() => setActiveFilter(key)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <FontAwesome5
+                                            name={icon as any}
+                                            size={12}
+                                            color={
+                                                isActive
+                                                    ? colors.selected
+                                                    : colors.ink2
                                             }
-                                            activeOpacity={0.8}
+                                        />
+                                        <Text
+                                            style={[
+                                                styles.modeChipText,
+                                                isActive &&
+                                                    styles.modeChipTextActive,
+                                            ]}
                                         >
-                                            <FontAwesome5
-                                                name={icon as any}
-                                                size={12}
-                                                color={
-                                                    isActive
-                                                        ? colors.selected
-                                                        : colors.ink2
-                                                }
-                                            />
+                                            {key}
+                                        </Text>
+                                        {timeLabel && (
                                             <Text
                                                 style={[
-                                                    styles.modeChipText,
+                                                    styles.modeChipDist,
                                                     isActive &&
-                                                        styles.modeChipTextActive,
+                                                        styles.modeChipDistActive,
                                                 ]}
                                             >
-                                                {key}
+                                                {timeLabel}
                                             </Text>
-                                            {walkDist && (
-                                                <Text
-                                                    style={[
-                                                        styles.modeChipDist,
-                                                        isActive &&
-                                                            styles.modeChipDistActive,
-                                                    ]}
-                                                >
-                                                    {walkDist}
-                                                </Text>
-                                            )}
-                                        </TouchableOpacity>
-                                    );
-                                })}
-                            </HorizontalView>
+                                        )}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </HorizontalView>
 
-                            <View style={styles.routeListWrap}>
-                                {filteredRoutes.length > 0 ? (
-                                    <RoutePickerSheet
-                                        routes={filteredRoutes}
-                                        selectedRoute={selectedRoute}
-                                        fastestRoute={overallFastest}
-                                        leastWalkingRoute={leastWalkingRoute}
-                                        onSelectRoute={(r) =>
-                                            setSelectedRoute(r)
-                                        }
-                                    />
-                                ) : (
-                                    <Text
-                                        style={[
-                                            styles.emptyText,
-                                            { marginTop: 16 },
-                                        ]}
-                                    >
-                                        No {activeFilter} routes available
-                                    </Text>
-                                )}
-                            </View>
-                        </>
-                    )}
-                </View>
-            )}
-
-            {selectedRoute && !focusedField && (
-                <View style={styles.startWrap}>
-                    {startError && (
-                        <Text style={styles.startErrorText}>{startError}</Text>
-                    )}
-                    <TouchableOpacity
-                        style={[
-                            styles.startBtn,
-                            isStarting && styles.startBtnDisabled,
-                        ]}
-                        onPress={handleStart}
-                        disabled={isStarting}
-                        activeOpacity={0.85}
-                    >
-                        {isStarting ? (
-                            <ActivityIndicator
-                                size="small"
-                                color={colors.onPrimary}
+                        {filteredRoutes.length > 0 ? (
+                            <RoutePickerSheet
+                                routes={filteredRoutes}
+                                selectedRoute={selectedRoute}
+                                fastestRoute={overallFastest}
+                                leastWalkingRoute={leastWalkingRoute}
+                                onSelectRoute={(r) => setSelectedRoute(r)}
                             />
                         ) : (
-                            <Ionicons
-                                name="navigate"
-                                size={18}
-                                color={colors.onPrimary}
-                            />
+                            <Text style={[styles.emptyText, { marginTop: 16 }]}>
+                                No {activeFilter} routes available
+                            </Text>
                         )}
-                        <Text style={styles.startBtnText}>
-                            {isStarting ? "Starting…" : "Start Journey"}
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-            )}
+                        </BottomSheetView>
+                    </BottomSheet>
+                )}
         </View>
     );
 }
@@ -1099,7 +1296,8 @@ function makeStyles(t: AppTheme) {
     const { colors, typography, semantic, spacing, radii, shadow } = t;
     return StyleSheet.create({
         screen: { flex: 1, backgroundColor: colors.surface },
-        map: { height: 220 },
+        map: { ...StyleSheet.absoluteFillObject },
+        overlay: { ...StyleSheet.absoluteFillObject },
         originDot: {
             width: 14,
             height: 14,
@@ -1112,7 +1310,7 @@ function makeStyles(t: AppTheme) {
         searchPanel: {
             backgroundColor: colors.card,
             marginHorizontal: spacing.screen,
-            marginTop: -20,
+            marginTop: 10,
             borderRadius: 20,
             paddingHorizontal: spacing.card,
             paddingVertical: spacing.element + 4,
@@ -1167,7 +1365,24 @@ function makeStyles(t: AppTheme) {
         },
         findRoutesBtnTextDisabled: { color: colors.ink2 },
 
-        searchResultsArea: { flex: 1, paddingTop: spacing.element },
+        searchResultsArea: {
+            flex: 1,
+            paddingTop: spacing.element,
+            backgroundColor: colors.surface,
+        },
+        currentLocRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: spacing.element,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.divider,
+            marginBottom: 4,
+        },
+        currentLocText: {
+            ...typography.bodyStrong,
+            color: colors.primary,
+        },
         emptyText: {
             ...typography.body,
             color: colors.ink2,
@@ -1213,18 +1428,13 @@ function makeStyles(t: AppTheme) {
         modeChipDist: { ...typography.caption, color: colors.ink3 },
         modeChipDistActive: { color: colors.selected },
 
-        routeListWrap: { flex: 1, paddingBottom: 80 },
-
-        startWrap: {
-            position: "absolute",
-            bottom: 16,
-            left: spacing.screen,
-            right: spacing.screen,
-            shadowColor: colors.primary,
-            shadowOffset: { width: 0, height: 4 },
-            shadowOpacity: 0.3,
-            shadowRadius: 12,
-            elevation: 8,
+        sheetContent: { flex: 1 },
+        footerWrap: {
+            paddingHorizontal: spacing.screen,
+            paddingTop: 8,
+            backgroundColor: colors.card,
+            borderTopWidth: 1,
+            borderTopColor: colors.divider,
         },
         startBtn: {
             backgroundColor: colors.primary,

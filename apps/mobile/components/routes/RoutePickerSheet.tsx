@@ -1,11 +1,6 @@
 import React from "react";
-import {
-  View,
-  Text,
-  StyleSheet,
-  TouchableOpacity,
-  ScrollView,
-} from "react-native";
+import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import type { Route, RouteStep } from "@/types/places";
@@ -55,12 +50,24 @@ function fmtDelay(
   };
 }
 
-// Collapse consecutive WALK steps into one icon so the chip row stays compact
-function condense(steps: RouteStep[]): RouteStep[] {
-  const out: RouteStep[] = [];
+// A chip is either a walk run (with its summed distance) or a transit step.
+type ChipItem =
+  | { kind: "walk"; meters: number }
+  | { kind: "transit"; step: RouteStep };
+
+// Collapse consecutive WALK steps into one chip, summing their distance so the
+// chip row stays compact while still surfacing how far the rider walks.
+function condense(steps: RouteStep[]): ChipItem[] {
+  const out: ChipItem[] = [];
   for (const step of steps) {
-    if (step.travelMode === "WALK" && out.at(-1)?.travelMode === "WALK") continue;
-    out.push(step);
+    if (step.travelMode === "WALK") {
+      const meters = step.distanceMeters ?? 0;
+      const last = out.at(-1);
+      if (last && last.kind === "walk") last.meters += meters;
+      else out.push({ kind: "walk", meters });
+    } else {
+      out.push({ kind: "transit", step });
+    }
   }
   return out;
 }
@@ -142,22 +149,30 @@ function TransitChipLive({ step }: { step: RouteStep }) {
 
 export function StepChips({ steps }: { steps: RouteStep[] }) {
   const { theme } = useTheme();
-  const { colors, semantic } = theme;
-  const condensed = condense(steps);
+  const { colors, semantic, typography } = theme;
+  const items = condense(steps);
 
   return (
     <View style={chipStyles.row}>
-      {condensed.map((step, i) => (
+      {items.map((item, i) => (
         <React.Fragment key={i}>
-          {step.travelMode === "WALK" ? (
+          {item.kind === "walk" ? (
             <View style={[chipStyles.walkChip, { backgroundColor: semantic.walkChipBg }]}>
               <FontAwesome5 name="walking" size={10} color={colors.ink3} />
+              {item.meters > 0 && (
+                <Text
+                  style={[chipStyles.walkDist, typography.micro, { color: colors.ink3 }]}
+                  numberOfLines={1}
+                >
+                  {formatDistance(item.meters)}
+                </Text>
+              )}
             </View>
           ) : (
-            <TransitChipLive step={step} />
+            <TransitChipLive step={item.step} />
           )}
 
-          {i < condensed.length - 1 && (
+          {i < items.length - 1 && (
             <Ionicons name="chevron-forward" size={10} color={colors.ink3} />
           )}
         </React.Fragment>
@@ -174,12 +189,16 @@ const chipStyles = StyleSheet.create({
     gap: 4,
   },
   walkChip: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    justifyContent: "center",
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+    height: 22,
+    minWidth: 22,
+    borderRadius: 11,
+    paddingHorizontal: 7,
   },
+  walkDist: {},
   transitChip: {
     paddingHorizontal: 8,
     paddingVertical: 3,
@@ -313,9 +332,8 @@ export function RoutePickerSheet({
         </Text>
       </View>
 
-      <ScrollView
+      <BottomSheetScrollView
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
         contentContainerStyle={styles.list}
       >
         {routes.map((route, i) => (
@@ -328,7 +346,7 @@ export function RoutePickerSheet({
             onSelect={() => onSelectRoute(route)}
           />
         ))}
-      </ScrollView>
+      </BottomSheetScrollView>
     </View>
   );
 }
@@ -356,7 +374,7 @@ function makeStyles(t: AppTheme) {
     },
     list: {
       gap: spacing.element - 2,
-      paddingBottom: 12,
+      paddingBottom: 96,
     },
     card: {
       backgroundColor: colors.card,
