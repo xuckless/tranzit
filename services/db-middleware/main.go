@@ -820,6 +820,91 @@ func handleResolveTrip(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// catalogStop is one row of a trip's *scheduled* stop list, sourced from the static
+// GTFS tables (gtfs_stop_times + gtfs_stops). arrival_secs/departure_secs are seconds
+// since service-day midnight (may exceed 86400 for after-midnight trips); the caller
+// converts them to an epoch against the service day.
+type catalogStop struct {
+	StopID        string  `json:"stop_id"`
+	StopSequence  int64   `json:"stop_sequence"`
+	StopName      string  `json:"stop_name"`
+	StopLat       float64 `json:"stop_lat"`
+	StopLng       float64 `json:"stop_lng"`
+	ArrivalSecs   *int64  `json:"arrival_secs"`
+	DepartureSecs *int64  `json:"departure_secs"`
+}
+
+// handleTripStops is GET /api/v1/trip_stops?trip_id=…: the *scheduled* (static GTFS)
+// stop list for one trip, joined to gtfs_stops for coordinates and ordered by
+// stop_sequence. It is the fallback source for consumers (e.g. Route Save) when a trip
+// has no live rows in stop_time_updates — an OTP-planned trip that is not yet in the
+// RT window, or a feed outage. Returns 404 when the trip is unknown to the catalog.
+func handleTripStops(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	tripID := r.URL.Query().Get("trip_id")
+	if tripID == "" {
+		jsonError(w, "trip_id is required", http.StatusBadRequest)
+		return
+	}
+
+	rows, err := db.Query(r.Context(), `
+		SELECT st.stop_id, st.stop_sequence, st.arrival_secs, st.departure_secs,
+		       s.stop_name, s.stop_lat, s.stop_lon
+		FROM gtfs_stop_times st
+		LEFT JOIN gtfs_stops s ON s.stop_id = st.stop_id
+		WHERE st.trip_id = $1
+		ORDER BY st.stop_sequence`,
+		tripID,
+	)
+	if err != nil {
+		log.Printf("handleTripStops: %v", err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	defer rows.Close()
+
+	stops := make([]catalogStop, 0)
+	for rows.Next() {
+		var s catalogStop
+		var name *string
+		var lat, lon *float64
+		if err = rows.Scan(&s.StopID, &s.StopSequence, &s.ArrivalSecs, &s.DepartureSecs, &name, &lat, &lon); err != nil {
+			log.Printf("handleTripStops scan: %v", err)
+			jsonError(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+		if name != nil {
+			s.StopName = *name
+		}
+		if lat != nil {
+			s.StopLat = *lat
+		}
+		if lon != nil {
+			s.StopLng = *lon
+		}
+		stops = append(stops, s)
+	}
+	if err = rows.Err(); err != nil {
+		log.Printf("handleTripStops rows: %v", err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+	if len(stops) == 0 {
+		jsonError(w, "no scheduled stops found for that trip", http.StatusNotFound)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"trip_id": tripID,
+		"count":   len(stops),
+		"data":    stops,
+	})
+}
+
 // ── Query filter helpers ──────────────────────────────────────────────────────
 
 // postgrestOps maps PostgREST operator names to their SQL equivalents.
@@ -942,6 +1027,7 @@ func main() {
 	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
 	mux.HandleFunc("/api/v1/resolve_trip", withCORS(withGzip(handleResolveTrip)))
+	mux.HandleFunc("/api/v1/trip_stops", withCORS(withGzip(handleTripStops)))
 	mux.HandleFunc("/api/v1/", withCORS(withGzip(handleQuery)))
 
 	port := os.Getenv("PORT")
