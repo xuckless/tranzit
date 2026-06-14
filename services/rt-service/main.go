@@ -21,6 +21,7 @@ func main() {
 
 	forceReload := false
 	loadGTFS := false
+	loadGTFSOnly := false
 	for _, arg := range os.Args[1:] {
 		if arg == "--force-reload" {
 			forceReload = true
@@ -28,6 +29,43 @@ func main() {
 		if arg == "--load-gtfs" {
 			loadGTFS = true
 		}
+		if arg == "--load-gtfs-only" {
+			loadGTFSOnly = true
+		}
+	}
+
+	ctx := context.Background()
+
+	// --load-gtfs-only is a safe one-off catalog loader: it populates the gtfs_*
+	// tables and exits, WITHOUT running setupSchema (which drops/recreates the live
+	// RT tables) or starting a second realtime scraper. Use it to (re)load the static
+	// schedule against a shared DB while the deployed rt-service keeps owning RT.
+	if loadGTFSOnly {
+		pool, err := newPool(ctx, dsn)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "pool config: %v\n", err)
+			os.Exit(1)
+		}
+		defer pool.Close()
+		if err := waitForDB(ctx, pool, 5, 3*time.Second); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		hasPostGIS, err := setupGTFSSchema(ctx, pool)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "gtfs schema: %v\n", err)
+			os.Exit(1)
+		}
+		if err := loadGTFSStatic(ctx, pool, hasPostGIS); err != nil {
+			fmt.Fprintf(os.Stderr, "gtfs load: %v\n", err)
+			os.Exit(1)
+		}
+		if err := setupCleanupViews(ctx, pool, hasPostGIS); err != nil {
+			fmt.Fprintf(os.Stderr, "cleanup views: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("GTFS static load complete; RT tables untouched. Exiting.")
+		return
 	}
 
 	// Start the WebSocket server immediately so Cloud Run's startup probe passes
@@ -39,8 +77,6 @@ func main() {
 	hub := newHub()
 	tuFeed := newTripUpdateFeed()
 	startWSServer(hub, tuFeed, "0.0.0.0:"+port)
-
-	ctx := context.Background()
 
 	pool, err := newPool(ctx, dsn)
 	if err != nil {
@@ -90,7 +126,6 @@ func main() {
 			os.Exit(1)
 		}
 	}
-
 
 	// Cancellation synthesis needs the static GTFS schedule. Detect it regardless of whether
 	// --load-gtfs ran this session (it may have been loaded by a previous run). Without it the

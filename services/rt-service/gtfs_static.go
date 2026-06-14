@@ -188,6 +188,13 @@ func loadGTFSStatic(ctx context.Context, pool *pgxpool.Pool, hasPostGIS bool) er
 	}
 	defer conn.Release()
 
+	// Disable the per-statement timeout for this load session: the stop_times COPY is
+	// ~3.7M rows in one statement and trips Supabase's default statement_timeout
+	// (SQLSTATE 57014). Session-scoped SET only affects this connection.
+	if _, err := conn.Exec(ctx, "SET statement_timeout = 0"); err != nil {
+		return fmt.Errorf("disable statement_timeout: %w", err)
+	}
+
 	type spec struct {
 		file    string
 		table   string
