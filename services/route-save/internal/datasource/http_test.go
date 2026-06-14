@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/tranzit-route-save/internal/geo"
 )
@@ -165,6 +166,25 @@ func (m *mockMiddleware) handler() http.Handler {
 			"trip_id": best, "entry_seq": bestEseq, "exit_seq": xseq,
 			"count": len(data), "data": data,
 		})
+	})
+
+	// /api/v1/trip_stops — the scheduled (static GTFS) stop list for a trip, served
+	// from the trip_stops_catalog mock table. 404 when the trip is unknown, mirroring
+	// the real handler.
+	mux.HandleFunc("/api/v1/trip_stops", func(w http.ResponseWriter, r *http.Request) {
+		tripID := r.URL.Query().Get("trip_id")
+		var data []map[string]any
+		for _, row := range m.tables["trip_stops_catalog"] {
+			if fmt.Sprint(row["trip_id"]) == tripID {
+				data = append(data, row)
+			}
+		}
+		if len(data) == 0 {
+			http.Error(w, "no scheduled stops found for that trip", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"trip_id": tripID, "count": len(data), "data": data})
 	})
 
 	mux.HandleFunc("/api/v1/{table}", func(w http.ResponseWriter, r *http.Request) {
@@ -386,5 +406,93 @@ func TestResolveLeg_FallsBackWhenNoCatalogStop(t *testing.T) {
 	}
 	if mock.stuByTrip == 0 {
 		t.Error("generic fallback did not load any trip stops — fallback not taken")
+	}
+}
+
+// scheduledCatalog wires three sequenced scheduled stops for trip "OTP1" with no
+// matching live stop_time_updates rows — the OTP-not-in-RT-window scenario.
+func scheduledCatalog() []map[string]any {
+	return []map[string]any{
+		{"trip_id": "OTP1", "stop_id": "S_entry", "stop_sequence": 1, "stop_name": "Entry",
+			"stop_lat": tEntry.Lat, "stop_lng": tEntry.Lng, "arrival_secs": 36000, "departure_secs": 36000},
+		{"trip_id": "OTP1", "stop_id": "S_mid", "stop_sequence": 2, "stop_name": "Mid",
+			"stop_lat": 51.05, "stop_lng": -114.08, "arrival_secs": 36300, "departure_secs": 36300},
+		{"trip_id": "OTP1", "stop_id": "S_exit", "stop_sequence": 3, "stop_name": "Exit",
+			"stop_lat": tExit.Lat, "stop_lng": tExit.Lng, "arrival_secs": 36600, "departure_secs": 36600},
+	}
+}
+
+// TestTripStops_FallsBackToScheduledCatalog: a trip with no live RT rows builds from
+// the scheduled GTFS catalog instead of returning empty (the 422 root cause). Coords
+// and names come from the join; scheduled seconds-since-midnight become positive,
+// strictly-increasing epochs anchored on one service-day base.
+func TestTripStops_FallsBackToScheduledCatalog(t *testing.T) {
+	src, mock := newTestSource(t)
+	mock.tables["trip_stops_catalog"] = scheduledCatalog()
+
+	stops, err := src.TripStops("OTP1")
+	if err != nil {
+		t.Fatalf("TripStops: %v", err)
+	}
+	if len(stops) != 3 {
+		t.Fatalf("got %d stops, want 3", len(stops))
+	}
+	if stops[0].StopID != "S_entry" || stops[2].StopID != "S_exit" {
+		t.Errorf("stop order = %+v, want entry→mid→exit", stops)
+	}
+	if stops[0].Loc != tEntry {
+		t.Errorf("entry loc = %+v, want %+v (from the join)", stops[0].Loc, tEntry)
+	}
+	if stops[1].Name != "Mid" {
+		t.Errorf("mid name = %q, want Mid", stops[1].Name)
+	}
+	for i := 1; i < len(stops); i++ {
+		if stops[i].ArrivalTime <= stops[i-1].ArrivalTime {
+			t.Errorf("arrival times not increasing at %d: %d then %d", i, stops[i-1].ArrivalTime, stops[i].ArrivalTime)
+		}
+	}
+	if want := serviceDayBase(36000, time.Now()) + 36000; stops[0].ArrivalTime != want {
+		t.Errorf("entry arrival = %d, want base+secs %d", stops[0].ArrivalTime, want)
+	}
+}
+
+// TestLoadLegStopsByTripID_OTPFallback: the OTP fast path windows the scheduled
+// catalog by exact stop_id, proving the fallback flows through LoadLegStopsByTripID.
+func TestLoadLegStopsByTripID_OTPFallback(t *testing.T) {
+	src, mock := newTestSource(t)
+	mock.tables["trip_stops_catalog"] = scheduledCatalog()
+
+	window, err := LoadLegStopsByTripID(src, "OTP1", "S_entry", "S_exit", tEntry, tExit)
+	if err != nil {
+		t.Fatalf("LoadLegStopsByTripID: %v", err)
+	}
+	if len(window) != 3 || window[0].StopID != "S_entry" || window[2].StopID != "S_exit" {
+		t.Errorf("windowed = %+v, want entry→exit inclusive", window)
+	}
+}
+
+// TestTripStops_NoDataAnywhere: empty live RT and an unknown trip in the catalog (404)
+// surfaces an error rather than an empty success.
+func TestTripStops_NoDataAnywhere(t *testing.T) {
+	src, _ := newTestSource(t)
+	if _, err := src.TripStops("UNKNOWN"); err == nil {
+		t.Fatal("expected error when neither RT nor catalog has the trip")
+	}
+}
+
+// TestServiceDayBase_PicksNearestOccurrence: the anchor picks the service-day midnight
+// that lands the scheduled time nearest now — same-day for a daytime stop, the prior
+// service day for an after-midnight (secs > 86400) stop planned just past midnight.
+func TestServiceDayBase_PicksNearestOccurrence(t *testing.T) {
+	loc := calgaryLoc
+
+	now := time.Date(2026, 6, 13, 10, 0, 5, 0, loc) // 10:00:05 local
+	if d := serviceDayBase(36000, now) + 36000 - now.Unix(); d < -10 || d > 10 {
+		t.Errorf("10:00 stop mapped %ds from now, want ~0", d)
+	}
+
+	now2 := time.Date(2026, 6, 13, 0, 30, 0, 0, loc) // 00:30 local
+	if d := serviceDayBase(90000, now2) + 90000 - now2.Unix(); d < -7200 || d > 7200 {
+		t.Errorf("25:00 stop at 00:30 mapped %ds from now, want within ~2h (prior service day)", d)
 	}
 }

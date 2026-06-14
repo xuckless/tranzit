@@ -11,9 +11,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // embed the IANA db so America/Edmonton resolves in a bare container
 
 	"github.com/tranzit-route-save/internal/geo"
 )
+
+// calgaryLoc is Calgary Transit's service timezone, used to anchor scheduled
+// (static GTFS) seconds-since-midnight to an absolute epoch. Falls back to a fixed
+// MST offset if the zone can't be loaded (tzdata is embedded above, so this is belt
+// and suspenders).
+var calgaryLoc = func() *time.Location {
+	if loc, err := time.LoadLocation("America/Edmonton"); err == nil {
+		return loc
+	}
+	return time.FixedZone("MST", -7*3600)
+}()
 
 // HTTPSource is a thin DataSource backed by tranzit-db-middleware's generic
 // table queries. It is secondary to the fixture: it exists so the CLI can run
@@ -304,7 +316,111 @@ func (h *HTTPSource) TripStops(tripID string) ([]Stop, error) {
 		})
 	}
 	sort.Slice(stops, func(i, j int) bool { return stops[i].Sequence < stops[j].Sequence })
+
+	// No usable live RT rows for this trip — an OTP-planned trip not yet in the RT
+	// window, a partial feed, or a feed outage. Fall back to the scheduled GTFS
+	// catalog so the trip can still be built; the 30s rtfeed poll overlays
+	// bus_arrival_time once (if) the trip enters the live feed (§5.3 fallback).
+	if len(stops) == 0 {
+		return h.tripStopsScheduled(tripID)
+	}
 	return stops, nil
+}
+
+// tripStopsScheduled loads a trip's *scheduled* stops from the middleware's static
+// GTFS catalog endpoint (GET /api/v1/trip_stops). Coordinates and names come straight
+// from the join, so this does not depend on the (possibly stale) calgary_transit_stops
+// cache. ArrivalTime/DepartureTime are derived from the schedule (seconds-since-
+// service-midnight → epoch), anchored on a single service-day base so a trip crossing
+// midnight stays monotonic. Returns whatever query returns (incl. 404 → error) when the
+// catalog has no rows for the trip.
+func (h *HTTPSource) tripStopsScheduled(tripID string) ([]Stop, error) {
+	rows, err := h.query("trip_stops", url.Values{"trip_id": {tripID}})
+	if err != nil {
+		return nil, err
+	}
+	if len(rows) == 0 {
+		return nil, fmt.Errorf("trip_stops: trip %q has no scheduled stops", tripID)
+	}
+
+	raws := make([]schedRawStop, 0, len(rows))
+	for _, r := range rows {
+		var rs schedRawStop
+		rs.stop = Stop{
+			StopID:   asString(r["stop_id"]),
+			Name:     asString(r["stop_name"]),
+			Loc:      geo.LatLng{Lat: asFloat64(r["stop_lat"]), Lng: asFloat64(r["stop_lng"])},
+			Sequence: int(asInt64(r["stop_sequence"])),
+		}
+		if v, ok := r["arrival_secs"]; ok && v != nil {
+			rs.arrSecs, rs.haveArr = asInt64(v), true
+		}
+		if v, ok := r["departure_secs"]; ok && v != nil {
+			rs.depSecs, rs.haveDep = asInt64(v), true
+		}
+		raws = append(raws, rs)
+	}
+	sort.Slice(raws, func(i, j int) bool { return raws[i].stop.Sequence < raws[j].stop.Sequence })
+
+	// Anchor the whole trip on one service-day midnight, chosen so the first stop's
+	// scheduled time lands nearest "now" — this absorbs the date boundary and
+	// after-midnight (secs > 86400) trips without per-stop drift.
+	base := serviceDayBase(firstSecs(raws), time.Now())
+
+	stops := make([]Stop, 0, len(raws))
+	for _, rs := range raws {
+		if rs.haveArr {
+			rs.stop.ArrivalTime = base + rs.arrSecs
+		}
+		if rs.haveDep {
+			rs.stop.DepartureTime = base + rs.depSecs
+		}
+		stops = append(stops, rs.stop)
+	}
+	return stops, nil
+}
+
+// schedRawStop is a scheduled-catalog row before its seconds-since-midnight times
+// are anchored to an absolute epoch.
+type schedRawStop struct {
+	stop    Stop
+	arrSecs int64
+	depSecs int64
+	haveArr bool
+	haveDep bool
+}
+
+// firstSecs returns the scheduled seconds-since-midnight of the earliest stop that
+// carries one (raws is sequence-sorted), or 0 when none do.
+func firstSecs(raws []schedRawStop) int64 {
+	for _, rs := range raws {
+		if rs.haveArr {
+			return rs.arrSecs
+		}
+		if rs.haveDep {
+			return rs.depSecs
+		}
+	}
+	return 0
+}
+
+// serviceDayBase returns the epoch of the Calgary service-day midnight that makes
+// (base + secs) nearest to now, considering the previous, current and next local day.
+func serviceDayBase(secs int64, now time.Time) int64 {
+	local := now.In(calgaryLoc)
+	midnight := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, calgaryLoc).Unix()
+	best := midnight
+	bestDiff := int64(math.MaxInt64)
+	for _, base := range []int64{midnight - 86400, midnight, midnight + 86400} {
+		diff := (base + secs) - now.Unix()
+		if diff < 0 {
+			diff = -diff
+		}
+		if diff < bestDiff {
+			bestDiff, best = diff, base
+		}
+	}
+	return best
 }
 
 // loadStopGeo bulk-loads the static stop catalog once.
@@ -373,6 +489,18 @@ func asInt64(v any) int64 {
 	case string:
 		n, _ := strconv.ParseInt(t, 10, 64)
 		return n
+	default:
+		return 0
+	}
+}
+
+func asFloat64(v any) float64 {
+	switch t := v.(type) {
+	case float64:
+		return t
+	case string:
+		f, _ := strconv.ParseFloat(t, 64)
+		return f
 	default:
 		return 0
 	}
