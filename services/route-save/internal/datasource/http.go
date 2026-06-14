@@ -322,19 +322,19 @@ func (h *HTTPSource) TripStops(tripID string) ([]Stop, error) {
 	// catalog so the trip can still be built; the 30s rtfeed poll overlays
 	// bus_arrival_time once (if) the trip enters the live feed (§5.3 fallback).
 	if len(stops) == 0 {
-		return h.tripStopsScheduled(tripID)
+		return h.TripStopsScheduled(tripID)
 	}
 	return stops, nil
 }
 
-// tripStopsScheduled loads a trip's *scheduled* stops from the middleware's static
+// TripStopsScheduled loads a trip's *scheduled* stops from the middleware's static
 // GTFS catalog endpoint (GET /api/v1/trip_stops). Coordinates and names come straight
 // from the join, so this does not depend on the (possibly stale) calgary_transit_stops
 // cache. ArrivalTime/DepartureTime are derived from the schedule (seconds-since-
 // service-midnight → epoch), anchored on a single service-day base so a trip crossing
 // midnight stays monotonic. Returns whatever query returns (incl. 404 → error) when the
 // catalog has no rows for the trip.
-func (h *HTTPSource) tripStopsScheduled(tripID string) ([]Stop, error) {
+func (h *HTTPSource) TripStopsScheduled(tripID string) ([]Stop, error) {
 	rows, err := h.query("trip_stops", url.Values{"trip_id": {tripID}})
 	if err != nil {
 		return nil, err

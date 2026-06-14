@@ -471,6 +471,34 @@ func TestLoadLegStopsByTripID_OTPFallback(t *testing.T) {
 	}
 }
 
+// TestLoadLegStopsByTripID_PartialRTRecoversFromCatalog: live RT carries only a
+// prefix of the trip (the exit stop is missing — the common LRT "partial coverage"
+// case), so RT windowing fails; the OTP path must recover by windowing the complete
+// scheduled catalog instead of 422'ing with "exit stop not found".
+func TestLoadLegStopsByTripID_PartialRTRecoversFromCatalog(t *testing.T) {
+	src, mock := newTestSource(t)
+	// Live RT for OTP1 carries only the entry (seq 1); the exit (seq 3) is missing —
+	// the LRT partial-coverage case. S_entry is in the geo catalog so it survives.
+	mock.tables["stop_time_updates"] = append(mock.tables["stop_time_updates"],
+		map[string]any{"trip_id": "OTP1", "stop_id": "S_entry", "stop_sequence": 1, "departure_time": int64(1000), "arrival_time": nil},
+	)
+	// Full scheduled catalog has all three stops incl. the exit.
+	mock.tables["trip_stops_catalog"] = scheduledCatalog()
+
+	// Sanity: RT alone returns the partial list (so the catalog fallback is what saves it).
+	if rt, err := src.TripStops("OTP1"); err != nil || len(rt) != 1 {
+		t.Fatalf("TripStops RT = %d stops (err %v), want 1 (partial, exit missing)", len(rt), err)
+	}
+
+	window, err := LoadLegStopsByTripID(src, "OTP1", "S_entry", "S_exit", tEntry, tExit)
+	if err != nil {
+		t.Fatalf("LoadLegStopsByTripID: %v", err)
+	}
+	if len(window) != 3 || window[0].StopID != "S_entry" || window[2].StopID != "S_exit" {
+		t.Errorf("windowed = %+v, want full entry→exit from catalog", window)
+	}
+}
+
 // TestTripStops_NoDataAnywhere: empty live RT and an unknown trip in the catalog (404)
 // surfaces an error rather than an empty success.
 func TestTripStops_NoDataAnywhere(t *testing.T) {

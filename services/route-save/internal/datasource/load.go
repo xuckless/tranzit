@@ -53,17 +53,48 @@ func LoadLegStops(ds DataSource, tripID string, entry, exit geo.LatLng) ([]Stop,
 	return FilterLegStops(stops, tripID, entry, exit)
 }
 
+// scheduledStopLoader is implemented by data sources that can serve a trip's full
+// *scheduled* (static GTFS) stop list. The OTP fast path uses it to recover when live
+// RT coverage is incomplete (see LoadLegStopsByTripID).
+type scheduledStopLoader interface {
+	TripStopsScheduled(tripID string) ([]Stop, error)
+}
+
 // LoadLegStopsByTripID is the OTP fast path: OpenTripPlanner already resolved the
 // concrete trip_id and entry/exit stop_ids, so there is no candidate ranking (§5.2)
 // to do — load the trip's stops and window them. It prefers exact stop_id matching
 // (entryID/exitID, the GTFS ids from OTP) and falls back to coordinate matching when
 // the ids don't line up with the catalog (feed-prefix / id-scheme drift), so the OTP
 // path degrades gracefully instead of failing the build.
+//
+// Live RT coverage is frequently *partial* for a known trip (especially LRT: the feed
+// may carry only a handful of a 25-stop run), so the entry/exit can be absent from the
+// loaded rows even though the trip exists — the build would 422 with "exit stop not
+// found". When windowing the RT rows fails, retry against the complete scheduled
+// catalog (TripStopsScheduled) before giving up; RT ETAs are overlaid later by the 30s
+// poll. Only on a genuine no-match does the original (RT-based) error surface.
 func LoadLegStopsByTripID(ds DataSource, tripID, entryID, exitID string, entry, exit geo.LatLng) ([]Stop, error) {
 	stops, err := ds.TripStops(tripID)
 	if err != nil {
 		return nil, fmt.Errorf("load leg stops: trip %q: %w", tripID, err)
 	}
+	if window, err := windowLegByIDOrCoord(stops, tripID, entryID, exitID, entry, exit); err == nil {
+		return window, nil
+	}
+	if sched, ok := ds.(scheduledStopLoader); ok {
+		if cat, cerr := sched.TripStopsScheduled(tripID); cerr == nil && len(cat) > 0 {
+			if window, werr := windowLegByIDOrCoord(cat, tripID, entryID, exitID, entry, exit); werr == nil {
+				return window, nil
+			}
+		}
+	}
+	// Neither RT nor catalog windows — return the original RT-based error for diagnostics.
+	return windowLegByIDOrCoord(stops, tripID, entryID, exitID, entry, exit)
+}
+
+// windowLegByIDOrCoord windows a loaded stop list to the inclusive entry→exit range,
+// preferring exact stop_id matching and falling back to coordinate matching.
+func windowLegByIDOrCoord(stops []Stop, tripID, entryID, exitID string, entry, exit geo.LatLng) ([]Stop, error) {
 	if window, err := FilterLegStopsByID(stops, tripID, entryID, exitID); err == nil {
 		return window, nil
 	}
