@@ -127,6 +127,23 @@ export default function RootLayout() {
           ),
         }}
       />
+      <Tabs.Screen
+        name="planner"
+        options={{
+          title: "Planner",
+          tabBarIcon: ({ color, focused }) => (
+            <View
+              style={[styles.tabIconWrap, focused && styles.tabIconWrapActive]}
+            >
+              <Ionicons
+                name={focused ? "calendar" : "calendar-outline"}
+                size={22}
+                color={color}
+              />
+            </View>
+          ),
+        }}
+      />
       <Tabs.Screen name="report" options={{ href: null }} />
       <Tabs.Screen
         name="commute"

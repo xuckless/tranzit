@@ -623,6 +623,12 @@ export default function RouteScreen() {
         router.navigate("/(tabs)/map" as never);
     }, [originSearch, destinationSearch, gpsLocation, router]);
 
+    // TODO(trip-planner): add a secondary "Leave Later" action alongside Start
+    // Journey in the sheet footer. Instead of POSTing /trips and navigating to
+    // Commute immediately, it should stash the selected route/origin/destination
+    // (routeStore) and route the user into the Trip Planner / Add Trip flow
+    // (router.push("/add-trip")) so the trip can be scheduled with a leave-by
+    // reminder rather than started now.
     const handleStart = useCallback(async () => {
         const effectiveOrigin =
             origin ??
