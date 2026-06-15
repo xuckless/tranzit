@@ -3,7 +3,6 @@ import {
   View,
   Text,
   StyleSheet,
-  ScrollView,
   TouchableOpacity,
   Animated,
 } from "react-native";
@@ -16,6 +15,12 @@ import {
   Images,
   type CameraRef,
 } from "@maplibre/maplibre-react-native";
+import BottomSheet, {
+  BottomSheetScrollView,
+  BottomSheetFooter,
+  type BottomSheetFooterProps,
+} from "@gorhom/bottom-sheet";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useVehiclesForRoutes, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
 import { useTripWebSocket } from "@/lib/tripWebSocket";
 import { Ionicons } from "@expo/vector-icons";
@@ -617,6 +622,8 @@ export default function CommuteScreen() {
   const { theme } = useTheme();
   const { colors, typography, semantic, spacing, radii, shadow, mapPaint } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
+  const sheetSnapPoints = useMemo(() => ["14%", "50%", "90%"], []);
   const [reportSelected, setReportSelected] = useState<string | null>(null);
   const [reportSeverity, setReportSeverity] = useState(1);
   const [reportSent, setReportSent] = useState(false);
@@ -1356,11 +1363,6 @@ export default function CommuteScreen() {
     return active?.step ?? transitSteps[0] ?? null;
   }, [route, stops]);
 
-  const co2Saved = useMemo(() => {
-    if (!route?.distanceMeters) return null;
-    return ((route.distanceMeters / 1000) * 0.16).toFixed(1);
-  }, [route]);
-
   const activeTransitName =
     stops.find((s) => s.status === "current" || s.status === "unsure")
       ?.transitName ||
@@ -1450,6 +1452,33 @@ export default function CommuteScreen() {
     routeStore.clearJourney();
     router.navigate("/(tabs)/routes" as never);
   }, [disconnect, sessionId, router]);
+
+  const renderSheetFooter = useCallback(
+    (props: BottomSheetFooterProps) => (
+      <BottomSheetFooter {...props} bottomInset={0}>
+        <View
+          style={[
+            styles.footerWrap,
+            { paddingBottom: insets.bottom > 0 ? 8 : 12 },
+          ]}
+        >
+          <TouchableOpacity
+            style={styles.exitBtn}
+            onPress={handleExit}
+            activeOpacity={0.85}
+          >
+            <Ionicons
+              name="stop-circle-outline"
+              size={20}
+              color={colors.onPrimary}
+            />
+            <Text style={styles.exitBtnText}>End Journey</Text>
+          </TouchableOpacity>
+        </View>
+      </BottomSheetFooter>
+    ),
+    [styles, insets.bottom, handleExit, colors.onPrimary],
+  );
 
   if (!route) {
     return (
@@ -1557,19 +1586,13 @@ export default function CommuteScreen() {
         </View>
       )}
 
-      <ScrollView
-        style={styles.container}
-        showsVerticalScrollIndicator={false}
-        contentContainerStyle={{ paddingBottom: 100 }}
+      <Map
+        style={styles.map}
+        mapStyle={mapPaint.baseStyle}
+        compass={false}
+        logo={false}
+        attribution={true}
       >
-        <View style={styles.mapContainer}>
-          <Map
-            style={styles.map}
-            mapStyle={mapPaint.baseStyle}
-            compass={false}
-            logo={false}
-            attribution={true}
-          >
             <Camera
               ref={cameraRef}
               initialViewState={{ center: CALGARY_CENTER, zoom: 13 }}
@@ -1708,172 +1731,116 @@ export default function CommuteScreen() {
                 }}
               />
             </GeoJSONSource>
-          </Map>
+      </Map>
 
-          <View style={styles.liveBadge}>
-            <View
-              style={[
-                styles.liveBadgeDot,
-                !isConnected && styles.liveBadgeDotOffline,
-              ]}
-            />
-            <Text style={styles.liveBadgeText}>
-              {isConnected ? "LIVE" : "CONNECTING"}
-            </Text>
-          </View>
-        </View>
+      <View style={styles.liveBadge}>
+        <View
+          style={[
+            styles.liveBadgeDot,
+            !isConnected && styles.liveBadgeDotOffline,
+          ]}
+        />
+        <Text style={styles.liveBadgeText}>
+          {isConnected ? "LIVE" : "CONNECTING"}
+        </Text>
+      </View>
 
-        {/* ── Hero Section ── */}
-        <View style={[styles.hero, { backgroundColor: colors.surface }]}>
-          {(boardingStep || co2Saved != null) && (
-            <View style={styles.heroBadgeRow}>
-              {boardingStep ? (
-                <View style={styles.lineBadge}>
-                  <Ionicons
-                    name="bus-outline"
-                    size={13}
-                    color={colors.primaryInk}
-                  />
-                  <Text style={styles.lineBadgeText}>
-                    {boardingStep.transitDetails?.transitLine?.nameShort ||
+      <BottomSheet
+        index={2}
+        snapPoints={sheetSnapPoints}
+        enablePanDownToClose={false}
+        enableContentPanningGesture={false}
+        handleIndicatorStyle={{ backgroundColor: colors.ink3 }}
+        backgroundStyle={{ backgroundColor: colors.card }}
+        footerComponent={renderSheetFooter}
+      >
+        <BottomSheetScrollView
+          showsVerticalScrollIndicator={false}
+          contentContainerStyle={{ paddingBottom: 120 }}
+        >
+          {/* ── Hero Section ── */}
+          <View style={styles.hero}>
+            <View style={styles.heroHeaderRow}>
+              <Text style={styles.heroRouteTitle} numberOfLines={1}>
+                {boardingStep
+                  ? `Route ${
+                      boardingStep.transitDetails?.transitLine?.nameShort ||
                       boardingStep.transitDetails?.transitLine?.name ||
-                      "Transit"}
-                    {boardingStep.transitDetails?.headsign
-                      ? ` · ${boardingStep.transitDetails.headsign}`
-                      : ""}
-                  </Text>
-                </View>
-              ) : (
-                <View />
-              )}
-              {co2Saved != null ? (
-                <View style={styles.heroCo2Row}>
-                  <MaterialCommunityIcons
-                    name="leaf"
-                    size={14}
-                    color={colors.primaryInk}
-                  />
-                  <Text style={styles.heroCo2Text}>
-                    {co2Saved} kg CO₂ saved
-                  </Text>
-                </View>
-              ) : (
-                <View />
-              )}
-            </View>
-          )}
-
-          {!boardingConfirmed && busArrivesInMin != null && boardingStopName ? (
-            <>
-              {/* Pre-boarding: the bus's arrival at the BOARDING stop. */}
-              <View style={styles.heroEtaLabelRow}>
-                <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
-                  Boarding{" "}
-                  <Text
-                    style={[styles.heroNextStopName, { color: colors.ink }]}
-                  >
-                    {activeTransitName}
-                  </Text>
-                </Text>
-                <View
-                  style={[
-                    styles.heroSpeedBadge,
-                    { backgroundColor: colors.surface },
-                  ]}
-                >
-                  <Ionicons
-                    name="speedometer-outline"
-                    size={15}
-                    color={colors.ink3}
-                  />
-                  <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
-                    {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
-                  </Text>
-                </View>
-              </View>
-
-              <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
-                from{" "}
-                <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
-                  {boardingStopName}
-                </Text>
+                      "Transit"
+                    }${
+                      boardingStep.transitDetails?.headsign
+                        ? ` · ${boardingStep.transitDetails.headsign}`
+                        : ""
+                    }`
+                  : "Your journey"}
               </Text>
-
-              <View style={styles.heroArrivalRow}>
-                <Text style={[styles.heroEtaNum, { color: colors.text }]}>
-                  <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
-                    arrives in{" "}
-                  </Text>
-                  {busArrivesInMin}
-                  <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
-                    {" "}
-                    min
-                  </Text>
+              <View style={styles.heroSpeedBadge}>
+                <Ionicons
+                  name="speedometer-outline"
+                  size={14}
+                  color={colors.ink3}
+                />
+                <Text style={styles.heroSpeedText}>
+                  {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
                 </Text>
+              </View>
+            </View>
+
+            <View style={styles.heroDivider} />
+
+            {!boardingConfirmed &&
+            busArrivesInMin != null &&
+            boardingStopName ? (
+              <>
+                {/* Pre-boarding: the bus's arrival at the BOARDING stop. */}
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Arrives</Text>
+                  <Text style={styles.infoValueStrong}>
+                    {busArrivesInMin} min
+                  </Text>
+                </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Board at</Text>
+                  <Text style={styles.infoValue} numberOfLines={1}>
+                    {boardingStopName}
+                  </Text>
+                </View>
                 {leaveByEpoch != null && formatEta(leaveByEpoch) !== "" && (
-                  <View
-                    style={[
-                      styles.leaveByChip,
-                      { backgroundColor: colors.primaryDim },
-                    ]}
-                  >
-                    <Ionicons name="walk" size={13} color={colors.primaryInk} />
-                    <Text
-                      style={[
-                        styles.leaveByChipText,
-                        { color: colors.primaryInk },
-                      ]}
-                    >
-                      Leave by {formatEta(leaveByEpoch)}
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Leave by</Text>
+                    <Text style={styles.infoValue}>
+                      {formatEta(leaveByEpoch)}
                     </Text>
                   </View>
                 )}
-              </View>
-            </>
-          ) : (
-            <>
-              {/* On board (or walk-only route): the next stop ahead. */}
-              <View style={styles.heroEtaLabelRow}>
-                <Text style={[styles.heroEtaLabel, { color: colors.ink }]}>
-                  {heroNextStop?.timeRemaining != null
-                    ? "Next stop in"
-                    : "Arriving in"}
-                </Text>
-                <View
-                  style={[
-                    styles.heroSpeedBadge,
-                    { backgroundColor: colors.surface },
-                  ]}
-                >
-                  <Ionicons
-                    name="speedometer-outline"
-                    size={15}
-                    color={colors.ink3}
-                  />
-                  <Text style={[styles.heroSpeedText, { color: colors.ink2 }]}>
-                    {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
+              </>
+            ) : (
+              <>
+                {/* On board (or walk-only route): the next stop ahead. */}
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>
+                    {heroNextStop?.timeRemaining != null
+                      ? "Next stop"
+                      : "Arriving"}
+                  </Text>
+                  <Text style={styles.infoValueStrong}>
+                    {heroNextStop?.timeRemaining != null
+                      ? Math.max(0, Math.round(heroNextStop.timeRemaining / 60))
+                      : (destinationEtaMinutes ?? "--")}{" "}
+                    min
                   </Text>
                 </View>
-              </View>
-              <Text style={[styles.heroEtaNum, { color: colors.text }]}>
-                {heroNextStop?.timeRemaining != null
-                  ? Math.max(0, Math.round(heroNextStop.timeRemaining / 60))
-                  : (destinationEtaMinutes ?? "--")}
-                <Text style={[styles.heroEtaUnit, { color: colors.ink2 }]}>
-                  {" "}
-                  min
-                </Text>
-              </Text>
-
-              <Text style={[styles.heroNextStop, { color: colors.ink2 }]}>
-                Next stop:{" "}
-                <Text style={[styles.heroNextStopName, { color: colors.ink }]}>
-                  {heroNextStop?.name ?? destinationInfo?.label ?? "Destination"}
-                </Text>
-              </Text>
-            </>
-          )}
-        </View>
+                <View style={styles.infoRow}>
+                  <Text style={styles.infoLabel}>Next</Text>
+                  <Text style={styles.infoValue} numberOfLines={1}>
+                    {heroNextStop?.name ??
+                      destinationInfo?.label ??
+                      "Destination"}
+                  </Text>
+                </View>
+              </>
+            )}
+          </View>
 
         <View style={[styles.content]}>
           <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
@@ -2198,23 +2165,8 @@ export default function CommuteScreen() {
             </TouchableOpacity>
           </View>
         </View>
-      </ScrollView>
-
-      <View
-        style={[
-          styles.exitBar,
-          { backgroundColor: colors.surface, borderTopColor: colors.divider },
-        ]}
-      >
-        <TouchableOpacity
-          style={styles.exitBtn}
-          onPress={handleExit}
-          activeOpacity={0.85}
-        >
-          <Ionicons name="stop-circle-outline" size={20} color={colors.onPrimary} />
-          <Text style={styles.exitBtnText}>End Journey</Text>
-        </TouchableOpacity>
-      </View>
+        </BottomSheetScrollView>
+      </BottomSheet>
     </View>
   );
 }
@@ -2331,11 +2283,6 @@ function makeStyles(t: AppTheme) {
     },
 
     // ── Map ──
-    mapContainer: {
-      height: 240,
-      backgroundColor: colors.muted,
-      position: "relative",
-    },
     map: { ...StyleSheet.absoluteFillObject },
     liveBadge: {
       position: "absolute",
@@ -2366,88 +2313,51 @@ function makeStyles(t: AppTheme) {
     // ── Hero ──
     hero: {
       paddingHorizontal: spacing.screen,
-      paddingTop: 22,
-      paddingBottom: 18,
-      backgroundColor: colors.surface,
+      paddingTop: 6,
+      paddingBottom: 16,
     },
-    heroBadgeRow: {
-      flexDirection: "row",
-      justifyContent: "space-between",
-      alignItems: "center",
-      marginBottom: 10,
-    },
-    lineBadge: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 6,
-      backgroundColor: colors.primaryDim,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: radii.pill,
-      alignSelf: "flex-start",
-    },
-    lineBadgeText: {
-      ...typography.badgeLg,
-      color: colors.primaryInk,
-    },
-    heroCo2Row: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 5,
-      backgroundColor: colors.primaryDim,
-      paddingHorizontal: 10,
-      paddingVertical: 4,
-      borderRadius: radii.pill,
-      alignSelf: "flex-start",
-    },
-    heroCo2Text: {
-      ...typography.captionStrong,
-      color: colors.primaryInk,
-    },
-    heroEtaLabelRow: {
+    heroHeaderRow: {
       flexDirection: "row",
       alignItems: "center",
       justifyContent: "space-between",
+      gap: 12,
     },
-    heroEtaLabel: {
-      ...typography.subtitle,
-      color: colors.ink2,
-      lineHeight: 22,
+    heroRouteTitle: {
+      ...typography.subtitleStrong,
+      color: colors.ink,
+      flex: 1,
     },
     heroSpeedBadge: { flexDirection: "row", alignItems: "center", gap: 5 },
-    heroSpeedText: { ...typography.bodyStrong, color: colors.ink2 },
-    heroEtaNum: {
-      ...typography.hero,
-      color: colors.ink,
-      marginBottom: 6,
+    heroSpeedText: { ...typography.captionStrong, color: colors.ink3 },
+    heroDivider: {
+      height: 1,
+      backgroundColor: colors.divider,
+      marginTop: 12,
+      marginBottom: 4,
     },
-    heroEtaUnit: { ...typography.heroUnit },
-    heroNextStop: {
-      ...typography.subtitle,
-      color: colors.ink2,
-      lineHeight: 24,
-    },
-    heroNextStopName: { fontWeight: "700", color: colors.ink },
-    heroArrivalRow: {
+    infoRow: {
       flexDirection: "row",
-      alignItems: "center",
+      alignItems: "baseline",
       justifyContent: "space-between",
-      gap: 10,
-      flexWrap: "wrap",
+      gap: 12,
+      paddingVertical: 8,
     },
-    leaveByChip: {
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 5,
-      backgroundColor: colors.primaryDim,
-      paddingHorizontal: 12,
-      paddingVertical: 6,
-      borderRadius: radii.pill,
-      alignSelf: "center",
+    infoLabel: {
+      ...typography.body,
+      color: colors.ink2,
     },
-    leaveByChipText: {
-      ...typography.captionStrong,
-      color: colors.primaryInk,
+    infoValue: {
+      ...typography.bodyStrong,
+      color: colors.ink,
+      flex: 1,
+      textAlign: "right",
+    },
+    infoValueStrong: {
+      ...typography.title,
+      fontWeight: "800",
+      color: colors.primary,
+      flex: 1,
+      textAlign: "right",
     },
 
     // ── Journey summary card ──
@@ -2917,18 +2827,12 @@ function makeStyles(t: AppTheme) {
     },
 
     // ── Exit bar ──
-    exitBar: {
-      backgroundColor: colors.surface,
+    footerWrap: {
       paddingHorizontal: spacing.screen,
-      paddingTop: 12,
-      paddingBottom: 16,
+      paddingTop: 8,
+      backgroundColor: colors.card,
       borderTopWidth: 1,
       borderTopColor: colors.divider,
-      shadowColor: semantic.shadow,
-      shadowOffset: { width: 0, height: -2 },
-      shadowOpacity: 0.06,
-      shadowRadius: 6,
-      elevation: 8,
     },
     exitBtn: {
       backgroundColor: colors.tertiary,
