@@ -21,6 +21,7 @@ import BottomSheet, {
   type BottomSheetFooterProps,
 } from "@gorhom/bottom-sheet";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { MarqueeText } from "@/components/MarqueeText";
 import { useVehiclesForRoutes, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
 import { useTripWebSocket } from "@/lib/tripWebSocket";
 import { Ionicons } from "@expo/vector-icons";
@@ -1841,19 +1842,24 @@ export default function CommuteScreen() {
           {/* ── Hero Section ── */}
           <View style={styles.hero}>
             <View style={styles.heroHeaderRow}>
-              <Text style={styles.heroRouteTitle} numberOfLines={1}>
-                {boardingStep
-                  ? `Route ${
-                      boardingStep.transitDetails?.transitLine?.nameShort ||
-                      boardingStep.transitDetails?.transitLine?.name ||
-                      "Transit"
-                    }${
-                      boardingStep.transitDetails?.headsign
-                        ? ` · ${boardingStep.transitDetails.headsign}`
-                        : ""
-                    }`
-                  : "Your journey"}
-              </Text>
+              <MarqueeText
+                containerStyle={styles.heroRouteTitleBox}
+                style={[styles.heroRouteTitle, { color: colors.ink }]}
+                align="left"
+                text={
+                  boardingStep
+                    ? `Route ${
+                        boardingStep.transitDetails?.transitLine?.nameShort ||
+                        boardingStep.transitDetails?.transitLine?.name ||
+                        "Transit"
+                      }${
+                        boardingStep.transitDetails?.headsign
+                          ? ` · ${boardingStep.transitDetails.headsign}`
+                          : ""
+                      }`
+                    : "Your journey"
+                }
+              />
               <View style={styles.heroSpeedBadge}>
                 <Ionicons
                   name="speedometer-outline"
@@ -1881,9 +1887,12 @@ export default function CommuteScreen() {
                 </View>
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>Board at</Text>
-                  <Text style={styles.infoValue} numberOfLines={1}>
-                    {boardingStopName}
-                  </Text>
+                  <MarqueeText
+                    containerStyle={styles.infoValueBox}
+                    style={styles.infoValue}
+                    align="right"
+                    text={boardingStopName ?? ""}
+                  />
                 </View>
                 {leaveByEpoch != null && formatEta(leaveByEpoch) !== "" && (
                   <View style={styles.infoRow}>
@@ -1912,11 +1921,16 @@ export default function CommuteScreen() {
                 </View>
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>Next</Text>
-                  <Text style={styles.infoValue} numberOfLines={1}>
-                    {heroNextStop?.name ??
+                  <MarqueeText
+                    containerStyle={styles.infoValueBox}
+                    style={styles.infoValue}
+                    align="right"
+                    text={
+                      heroNextStop?.name ??
                       destinationInfo?.label ??
-                      "Destination"}
-                  </Text>
+                      "Destination"
+                    }
+                  />
                 </View>
               </>
             )}
@@ -1925,12 +1939,12 @@ export default function CommuteScreen() {
         <View style={[styles.content]}>
           <View style={[styles.journeyRail, { backgroundColor: colors.card }]}>
             <View style={styles.railHeaderRow}>
-              <Text
+              <MarqueeText
+                containerStyle={styles.railDestinationBox}
                 style={[styles.railDestination, { color: colors.ink }]}
-                numberOfLines={1}
-              >
-                To: {destinationInfo?.label ?? "Destination"}
-              </Text>
+                align="left"
+                text={`To: ${destinationInfo?.label ?? "Destination"}`}
+              />
               <View
                 style={[styles.arrivalBadge, { backgroundColor: colors.surface2 }]}
               >
@@ -2419,8 +2433,8 @@ function makeStyles(t: AppTheme) {
     heroRouteTitle: {
       ...typography.subtitleStrong,
       color: colors.ink,
-      flex: 1,
     },
+    heroRouteTitleBox: { flex: 1 },
     heroSpeedBadge: { flexDirection: "row", alignItems: "center", gap: 5 },
     heroSpeedText: { ...typography.captionStrong, color: colors.ink3 },
     heroDivider: {
@@ -2443,9 +2457,9 @@ function makeStyles(t: AppTheme) {
     infoValue: {
       ...typography.bodyStrong,
       color: colors.ink,
-      flex: 1,
       textAlign: "right",
     },
+    infoValueBox: { flex: 1 },
     infoValueStrong: {
       ...typography.title,
       fontWeight: "800",
@@ -2470,8 +2484,8 @@ function makeStyles(t: AppTheme) {
     railDestination: {
       ...typography.metaLg,
       color: colors.ink,
-      flex: 1,
     },
+    railDestinationBox: { flex: 1 },
     arrivalBadge: {
       backgroundColor: colors.surface2,
       borderRadius: radii.pill,
