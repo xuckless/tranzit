@@ -1309,34 +1309,6 @@ export default function CommuteScreen() {
     });
   }, [tripState, route]);
 
-  const progressLabels = useMemo(() => {
-    if (!route) return ["Walking", "Riding"];
-    const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
-    const labels: string[] = [];
-    for (const step of allSteps) {
-      const label =
-        step.travelMode === "WALK"
-          ? "Walk"
-          : step.transitDetails?.transitLine?.nameShort ||
-            step.transitDetails?.transitLine?.name ||
-            "Transit";
-      if (labels[labels.length - 1] !== label) labels.push(label);
-    }
-    return labels.length > 0 ? labels : ["Walking", "Riding"];
-  }, [route]);
-
-  const completedStopCount = useMemo(
-    () => stops.filter((s) => s.status === "departed").length,
-    [stops],
-  );
-
-  const completedProgressSteps = useMemo(() => {
-    return Math.floor(
-      (completedStopCount / Math.max(1, stops.length - 1)) *
-        progressLabels.length,
-    );
-  }, [completedStopCount, stops.length, progressLabels.length]);
-
   const serverStopTotal = tripState?.stops?.length ?? 0;
   const serverStopCompleted = useMemo(
     () =>
@@ -1345,6 +1317,62 @@ export default function CommuteScreen() {
   );
   const progressFillPct =
     serverStopTotal > 1 ? serverStopCompleted / (serverStopTotal - 1) : 0;
+
+  // Ordered legs of the whole trip (consecutive walks merged), weighted by
+  // duration so the rail segments size proportionally. Drives the journey rail.
+  type JourneySeg = {
+    mode: "WALK" | "TRANSIT";
+    icon: "walk" | "bus" | "train";
+    label: string;
+    weightSecs: number;
+    line?: string;
+    headsign?: string;
+  };
+  const journeySegments = useMemo<JourneySeg[]>(() => {
+    if (!route) return [];
+    const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
+    const segs: JourneySeg[] = [];
+    for (const step of allSteps) {
+      const secs =
+        parseDurationSecs(step.duration ?? step.staticDuration ?? "") ?? 0;
+      if (step.travelMode === "WALK") {
+        const last = segs[segs.length - 1];
+        if (last && last.mode === "WALK") last.weightSecs += secs;
+        else
+          segs.push({ mode: "WALK", icon: "walk", label: "Walk", weightSecs: secs });
+      } else {
+        const line =
+          step.transitDetails?.transitLine?.nameShort ||
+          step.transitDetails?.transitLine?.name ||
+          "Transit";
+        const nameBlob = `${step.transitDetails?.transitLine?.name ?? ""} ${
+          step.transitDetails?.transitLine?.nameShort ?? ""
+        }`;
+        segs.push({
+          mode: "TRANSIT",
+          icon: /ctrain/i.test(nameBlob) ? "train" : "bus",
+          label: line,
+          weightSecs: secs,
+          line,
+          headsign: step.transitDetails?.headsign,
+        });
+      }
+    }
+    // Floor each weight so zero-duration legs still claim rail width.
+    return segs.map((s) => ({ ...s, weightSecs: Math.max(s.weightSecs, 1) }));
+  }, [route]);
+
+  // Checkpoint positions along the rail: one node at each leg's start (carrying
+  // that leg's mode icon), placed by cumulative duration fraction.
+  const railNodes = useMemo(() => {
+    const total = journeySegments.reduce((a, s) => a + s.weightSecs, 0) || 1;
+    let acc = 0;
+    return journeySegments.map((seg) => {
+      const frac = acc / total;
+      acc += seg.weightSecs;
+      return { frac, icon: seg.icon };
+    });
+  }, [journeySegments]);
 
   const boardingStep = useMemo(() => {
     if (!route) return null;
@@ -1376,6 +1404,58 @@ export default function CommuteScreen() {
       stops.find((s) => s.status === "upcoming"),
     [stops],
   );
+
+  // One-line "what to do now" caption for the journey rail. Kept deliberately
+  // non-redundant with the hero rows (which already state "Board at <stop>").
+  const activeInstruction = useMemo((): {
+    icon: "walk" | "bus" | "train";
+    mode: "WALK" | "TRANSIT";
+    text: string;
+  } => {
+    const boardingIcon: "bus" | "train" = /ctrain/i.test(
+      boardingStep?.transitDetails?.transitLine?.name ?? "",
+    )
+      ? "train"
+      : "bus";
+    const line =
+      boardingStep?.transitDetails?.transitLine?.nameShort ||
+      boardingStep?.transitDetails?.transitLine?.name ||
+      activeTransitName;
+    const headsign = boardingStep?.transitDetails?.headsign;
+
+    if (boardingStep && !boardingConfirmed) {
+      return {
+        icon: boardingIcon,
+        mode: "TRANSIT",
+        text: headsign ? `Board ${line} → ${headsign}` : `Board ${line}`,
+      };
+    }
+    if (boardingStep && boardingConfirmed && heroNextStop?.mode !== "WALK") {
+      return {
+        icon: boardingIcon,
+        mode: "TRANSIT",
+        text: heroNextStop?.name
+          ? `Ride ${activeTransitName} · next ${heroNextStop.name}`
+          : `Ride ${activeTransitName}`,
+      };
+    }
+    const target =
+      heroNextStop?.name?.replace(/^(Transfer · )?walk to /i, "") ??
+      destinationInfo?.label ??
+      "destination";
+    const dist = heroNextStop?.walkInfo?.distance;
+    return {
+      icon: "walk",
+      mode: "WALK",
+      text: dist ? `Walk ${dist} to ${target}` : `Walk to ${target}`,
+    };
+  }, [
+    boardingStep,
+    boardingConfirmed,
+    heroNextStop,
+    activeTransitName,
+    destinationInfo,
+  ]);
 
   const hasFlag = useMemo(
     () =>
@@ -1843,13 +1923,10 @@ export default function CommuteScreen() {
           </View>
 
         <View style={[styles.content]}>
-          <View style={[styles.journeyCard, { backgroundColor: colors.card }]}>
-            <View style={styles.journeyCardTop}>
+          <View style={[styles.journeyRail, { backgroundColor: colors.card }]}>
+            <View style={styles.railHeaderRow}>
               <Text
-                style={[
-                  styles.journeyDestination,
-                  { color: colors.ink, flex: 1, marginRight: 10 },
-                ]}
+                style={[styles.railDestination, { color: colors.ink }]}
                 numberOfLines={1}
               >
                 To: {destinationInfo?.label ?? "Destination"}
@@ -1858,60 +1935,109 @@ export default function CommuteScreen() {
                 style={[styles.arrivalBadge, { backgroundColor: colors.surface2 }]}
               >
                 <Text style={[styles.arrivalBadgeText, { color: colors.primary }]}>
-                  ETA: {arrivalTime ?? "--:--"}
+                  ETA {arrivalTime ?? "--:--"}
                 </Text>
               </View>
             </View>
 
-            <View
-              style={[
-                styles.progressBarTrack,
-                { backgroundColor: colors.surface2 },
-              ]}
-            >
-              <View
-                style={[
-                  styles.progressBarFill,
-                  { width: `${progressFillPct * 100}%` as any },
-                ]}
-              />
-              {progressFillPct > 0 && progressFillPct < 1 && (
+            <View style={[styles.heroDivider, { backgroundColor: colors.divider }]} />
+
+            {/* Gamified leg rail: checkpoints light green as you advance. */}
+            <View style={styles.railTrack}>
+              <View style={styles.railInner}>
+                <View
+                  style={[styles.railBarBase, { backgroundColor: colors.surface2 }]}
+                />
                 <View
                   style={[
-                    styles.progressThumb,
-                    { left: `${progressFillPct * 100}%` as any },
+                    styles.railBarFill,
+                    {
+                      backgroundColor: colors.primary,
+                      width: `${Math.min(1, Math.max(0, progressFillPct)) * 100}%` as any,
+                    },
                   ]}
                 />
-              )}
-              {serverStopTotal > 1 &&
-                Array.from({ length: serverStopTotal }).map((_, i) => (
-                  <View
-                    key={i}
-                    style={[
-                      styles.progressTick,
-                      { left: `${(i / (serverStopTotal - 1)) * 100}%` as any },
-                      i < serverStopCompleted
-                        ? styles.progressTickDone
-                        : undefined,
-                    ]}
-                  />
-                ))}
-            </View>
-
-            <View style={styles.progressLabels}>
-              {progressLabels.map((label, i) => (
-                <Text
-                  key={i}
+                {railNodes.map((n, i) => {
+                  const done = n.frac <= progressFillPct + 0.001;
+                  return (
+                    <View
+                      key={i}
+                      style={[
+                        styles.railNode,
+                        {
+                          left: `${n.frac * 100}%` as any,
+                          backgroundColor: done ? colors.primary : colors.card,
+                          borderColor: done ? colors.primary : colors.divider,
+                        },
+                      ]}
+                    >
+                      <Ionicons
+                        name={n.icon}
+                        size={11}
+                        color={done ? colors.onPrimary : colors.ink3}
+                      />
+                    </View>
+                  );
+                })}
+                <View
                   style={[
-                    styles.progressLabel,
-                    i < completedProgressSteps && {
-                      color: colors.primary,
+                    styles.railNode,
+                    {
+                      left: "100%" as any,
+                      backgroundColor:
+                        progressFillPct >= 0.999 ? colors.primary : colors.card,
+                      borderColor:
+                        progressFillPct >= 0.999 ? colors.primary : colors.divider,
                     },
                   ]}
                 >
-                  {label}
-                </Text>
-              ))}
+                  <Ionicons
+                    name="flag"
+                    size={10}
+                    color={
+                      progressFillPct >= 0.999 ? colors.onPrimary : colors.ink3
+                    }
+                  />
+                </View>
+                {progressFillPct > 0.001 && progressFillPct < 0.999 && (
+                  <View
+                    style={[
+                      styles.progressPuck,
+                      {
+                        left: `${progressFillPct * 100}%` as any,
+                        backgroundColor: colors.primary,
+                        borderColor: colors.onPrimary,
+                      },
+                    ]}
+                  />
+                )}
+              </View>
+            </View>
+
+            <View style={styles.instructionRow}>
+              <Ionicons
+                name={activeInstruction.icon}
+                size={16}
+                color={
+                  activeInstruction.mode === "TRANSIT"
+                    ? colors.primary
+                    : colors.ink
+                }
+              />
+              <Text
+                style={[
+                  styles.instructionText,
+                  {
+                    color:
+                      activeInstruction.mode === "TRANSIT"
+                        ? colors.primary
+                        : colors.ink,
+                  },
+                ]}
+                numberOfLines={2}
+              >
+                {activeInstruction.text}
+              </Text>
             </View>
           </View>
 
@@ -1962,38 +2088,6 @@ export default function CommuteScreen() {
               })}
             </View>
           </View>
-
-          {boardingStep && (
-            <View style={styles.boardingCard}>
-              <View style={styles.boardingIcon}>
-                <Ionicons
-                  name={
-                    boardingStep.transitDetails?.transitLine?.name
-                      ?.toLowerCase()
-                      .includes("ctrain") ||
-                    boardingStep.transitDetails?.transitLine?.nameShort
-                      ?.toLowerCase()
-                      .includes("ctrain")
-                      ? "train"
-                      : "bus"
-                  }
-                  size={28}
-                  color={colors.primary}
-                />
-              </View>
-              <View style={styles.boardingContent}>
-                <Text style={styles.boardingCategory}>
-                  BOARDING INSTRUCTION
-                </Text>
-                <Text style={styles.boardingTitle}>
-                  {`Board the ${boardingStep.transitDetails?.transitLine?.name || "Transit"}\ntowards ${boardingStep.transitDetails?.headsign || "destination"}`}
-                </Text>
-                <Text style={styles.boardingTip}>
-                  {`From: ${boardingStep.transitDetails?.stopDetails?.departureStop?.name || "current stop"}`}
-                </Text>
-              </View>
-            </View>
-          )}
 
           <View
             style={[
@@ -2360,24 +2454,23 @@ function makeStyles(t: AppTheme) {
       textAlign: "right",
     },
 
-    // ── Journey summary card ──
-    journeyCard: {
+    // ── Journey rail card (combined journey + boarding) ──
+    journeyRail: {
       backgroundColor: colors.card,
       borderRadius: radii.card,
-      borderLeftWidth: 5,
-      borderLeftColor: colors.secondary,
       padding: spacing.card,
       ...shadow.card,
     },
-    journeyCardTop: {
+    railHeaderRow: {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      marginBottom: 18,
+      gap: 10,
     },
-    journeyDestination: {
+    railDestination: {
       ...typography.metaLg,
       color: colors.ink,
+      flex: 1,
     },
     arrivalBadge: {
       backgroundColor: colors.surface2,
@@ -2389,52 +2482,68 @@ function makeStyles(t: AppTheme) {
       ...typography.arrival,
       color: colors.primary,
     },
-    progressBarTrack: {
-      height: 10,
-      backgroundColor: colors.surface2,
-      borderRadius: radii.pill,
-      position: "relative",
+    railTrack: {
+      height: 40,
       justifyContent: "center",
-      marginBottom: 8,
-      overflow: "visible",
+      paddingHorizontal: 12,
+      marginTop: 12,
+      marginBottom: 4,
     },
-    progressBarFill: {
-      height: 10,
-      backgroundColor: colors.primary,
-      borderRadius: radii.pill,
+    railInner: {
+      position: "relative",
+      height: 22,
+      justifyContent: "center",
+    },
+    railBarBase: {
       position: "absolute",
       left: 0,
+      right: 0,
+      top: 8,
+      height: 6,
+      borderRadius: 3,
     },
-    progressTick: {
+    railBarFill: {
       position: "absolute",
-      width: 2,
+      left: 0,
+      top: 8,
+      height: 6,
+      borderRadius: 3,
+    },
+    railNode: {
+      position: "absolute",
+      top: 0,
+      marginLeft: -11,
+      width: 22,
+      height: 22,
+      borderRadius: 11,
+      borderWidth: 2,
+      alignItems: "center",
+      justifyContent: "center",
+    },
+    progressPuck: {
+      position: "absolute",
+      top: 4,
+      marginLeft: -7,
+      width: 14,
       height: 14,
-      marginLeft: -1,
-      backgroundColor: colors.surface,
-      borderRadius: 1,
-    },
-    progressTickDone: { backgroundColor: colors.primary },
-    progressThumb: {
-      position: "absolute",
-      marginLeft: -9,
-      width: 18,
-      height: 18,
-      borderRadius: 9,
-      backgroundColor: colors.primary,
-      borderWidth: 4,
-      borderColor: colors.onPrimary,
-      zIndex: 1,
+      borderRadius: 7,
+      borderWidth: 3,
+      zIndex: 2,
       shadowColor: semantic.shadow,
       shadowOffset: { width: 0, height: 1 },
-      shadowOpacity: 0.15,
+      shadowOpacity: 0.18,
       shadowRadius: 2,
       elevation: 3,
     },
-    progressLabels: { flexDirection: "row", justifyContent: "space-between" },
-    progressLabel: {
+    instructionRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 8,
+      marginTop: 6,
+    },
+    instructionText: {
+      ...typography.bodyStrong,
       flex: 1,
-      ...typography.captionStrong,
-      color: colors.ink2,
     },
 
     // ── Timeline card ──
@@ -2622,48 +2731,6 @@ function makeStyles(t: AppTheme) {
       letterSpacing: 0.2,
     },
     stopTimeDelta: { ...typography.monoBody, fontWeight: "600" },
-
-    // ── Boarding card ──
-    boardingCard: {
-      backgroundColor: colors.primary,
-      borderRadius: radii.card,
-      padding: spacing.card + 8,
-      flexDirection: "row",
-      alignItems: "center",
-      gap: 16,
-      shadowColor: colors.primaryInk,
-      shadowOffset: { width: 0, height: 4 },
-      shadowOpacity: 0.2,
-      shadowRadius: 12,
-      elevation: 6,
-    },
-    boardingIcon: {
-      width: 64,
-      height: 64,
-      borderRadius: 16,
-      backgroundColor: colors.onPrimary,
-      justifyContent: "center",
-      alignItems: "center",
-      flexShrink: 0,
-    },
-    boardingContent: { flex: 1, gap: 4 },
-    boardingCategory: {
-      ...typography.badge,
-      color: semantic.offWhite,
-      letterSpacing: 0.6,
-      textTransform: "uppercase",
-    },
-    boardingTitle: {
-      ...typography.title,
-      color: colors.onPrimary,
-      lineHeight: 26,
-    },
-    boardingTip: {
-      ...typography.subtitle,
-      color: semantic.offWhiteStrong,
-      lineHeight: 22,
-      marginTop: 2,
-    },
 
     // ── Community card ──
     communityCard: {
