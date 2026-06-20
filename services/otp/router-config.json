@@ -12,7 +12,7 @@
       "feedId": "CT",
       "frequencySec": 30,
       "fuzzyTripMatching": true,
-      "url": "https://data.calgary.ca/download/gs4m-mdc2/application%2Foctet-stream"
+      "url": "https://tranzit-rt-service-000000000000.us-central1.run.app/gtfs-rt/trip-updates"
     },
     {
       "type": "vehicle-positions",
