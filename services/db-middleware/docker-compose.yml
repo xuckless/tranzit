@@ -39,6 +39,8 @@ services:
     environment:
       - PORT=8080
       - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
+      # tranzit-user-db over the tailnet (private). Empty → /api/v1/user/ is disabled.
+      - TRANZIT_USER_DB_CONNECTION_STRING=${TRANZIT_USER_DB_CONNECTION_STRING:-}
     restart: unless-stopped
 
 volumes:

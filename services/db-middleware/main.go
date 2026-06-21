@@ -1019,6 +1019,10 @@ func main() {
 	}
 	go startVehiclePoller(context.Background())
 
+	// Stand up the second (tailnet) database for user data. Non-fatal: if it's
+	// unset/unreachable, only /api/v1/user/ is affected — Supabase routes are not.
+	initUserDB(context.Background())
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	// Exact matches take precedence over the /api/v1/ prefix catch-all.
@@ -1028,6 +1032,9 @@ func main() {
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
 	mux.HandleFunc("/api/v1/resolve_trip", withCORS(withGzip(handleResolveTrip)))
 	mux.HandleFunc("/api/v1/trip_stops", withCORS(withGzip(handleTripStops)))
+	// User-data DB (tailnet) — GET reads + POST upserts. More specific prefix than
+	// /api/v1/, so it takes precedence in the mux.
+	mux.HandleFunc("/api/v1/user/", withCORSWrite(withGzip(handleUserData)))
 	mux.HandleFunc("/api/v1/", withCORS(withGzip(handleQuery)))
 
 	port := os.Getenv("PORT")

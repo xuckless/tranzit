@@ -105,4 +105,46 @@ Security notes
 - Filter values always passed as $N parameters (no SQL injection via value)
 - Column list cached after first use per table
 
+────────────────────────────────────────────────────────────────────────────────
+User database — /api/v1/user/  (tranzit-user-db, private on the tailnet)
+
+A SECOND, independent Postgres (the tailnet tranzit-user-db) holding the 12 user-data
+tables. It is fully separate from the Supabase routes above: its own pool, its own
+whitelist, no shared cache. Configured via TRANZIT_USER_DB_CONNECTION_STRING; if that
+is unset/unreachable these routes return 503 and the rest of the service is unaffected.
+
+┌────────┬──────────────────────────┬────────────────────────────────────────────┐
+│ Method │           Path           │                Description                 │
+├────────┼──────────────────────────┼────────────────────────────────────────────┤
+│ GET    │ /api/v1/user/            │ List the user tables                       │
+│ GET    │ /api/v1/user/{table}     │ Query a user table (same filters as above) │
+│ POST   │ /api/v1/user/{table}     │ Upsert one row or an array of rows         │
+└────────┴──────────────────────────┴────────────────────────────────────────────┘
+
+Tables: user_info, user_defined_default_categories, user_defined_default_themes,
+user_defined_events, cached_pre_routes, posts, saved_addresses, user_themes,
+user_history, user_calendar, user_posts, user_friendships
+
+GET supports the same query params as the Supabase tables: limit, offset, order_by,
+order, {column}=value (incl. gte./in.(…) operators) and or=(…). Reads are NOT cached
+(user data is mutable). Response shape: { table, count, limit, offset, data:[…] }.
+
+POST body is a single JSON object or an array of objects:
+  curl -X POST .../api/v1/user/user_info \
+    -d '{"user_id":"u1","username":"alice","name":"Alice"}'
+  curl -X POST .../api/v1/user/user_history \
+    -d '[{"user_id":"u1","bus_number":"3"},{"user_id":"u1","bus_number":"7"}]'
+
+  - Writes are INSERT … ON CONFLICT (pk) DO UPDATE (upsert): supplying a full primary
+    key updates the existing row; a brand-new key inserts.
+  - Tables with a DB-generated identity PK (user_history, user_calendar, user_friendships)
+    omit the PK — it is generated and returned in the response.
+  - GENERATED ALWAYS / identity columns are ignored if supplied; unknown columns → 400.
+  - All rows in one request run in a single transaction (all-or-nothing).
+  - Response: { table, count, data:[…RETURNING * rows…] }.
+
+Write-path safety: table + columns validated against the whitelist and the live schema;
+every value bound as a $N parameter cast to its column type (no SQL injection). NOTE:
+these write endpoints are UNAUTHENTICATED, matching the existing open GET endpoints.
+
 Fill in SUPABASE_DIRECT_CONNECTION_STRING in .env (the same DSN the scraper uses) and run with go run . or go build && ./tranzit-db-middleware.
