@@ -27,6 +27,10 @@ services:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - net_admin
+    networks:
+      tranzit-net:
+        aliases:
+          - tranzit-db-middleware.tailnet-example.ts.net
     restart: unless-stopped
 
   app:
@@ -44,3 +48,9 @@ services:
 
 volumes:
   tailscale-state:
+
+# Shared bridge so co-located services reach each other directly by their
+# MagicDNS name (registered as a network alias) — independent of the tailnet.
+networks:
+  tranzit-net:
+    external: true
