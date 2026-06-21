@@ -1,0 +1,19 @@
+# Local redeploy on the self-hosted runner (fedora). Replaces the old Cloud Run
+# deploy. Rebuilds ONLY the otp container (--no-deps otp) so the tailscale sidecar
+# is never recreated — the node identity, IP, MagicDNS name and Funnel stay stable.
+name: local-redeploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  redeploy:
+    runs-on: [self-hosted, fedora]
+    steps:
+      - name: Rebuild app container only (reuse existing tailscale sidecar)
+        run: |
+          cd services/otp
+          git pull --ff-only
+          docker compose up -d --build --no-deps otp
