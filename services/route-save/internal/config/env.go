@@ -16,8 +16,8 @@ type Endpoints struct {
 // Tailnet MagicDNS URLs of the sibling services (local Docker nodes). Route Save
 // connects to these by default; set MIDDLEWARE_URL / ROUTE_SERVICE_URL to override.
 const (
-	defaultMiddlewareURL   = "http://tranzit-db-middleware.tailnet-example.ts.net:8080"
-	defaultRouteServiceURL = "http://tranzit-route-service.tailnet-example.ts.net:8080"
+	defaultMiddlewareURL   = "https://tranzit-db-middleware.tailnet-example.ts.net"
+	defaultRouteServiceURL = "https://tranzit-route-service.tailnet-example.ts.net"
 )
 
 // LoadEndpoints reads endpoint config from the environment, applying defaults.
