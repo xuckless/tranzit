@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import type { PlacesSearchResponse, SearchSuggestion } from "../types/places";
 
 const BASE_URL =
-  "https://tranzit-route-service-000000000000.us-central1.run.app";
+  "https://tranzit-route-service.tailnet-example.ts.net";
 
 // /search fires quickly for near-instant business results
 const INSTANT_MS = 150;

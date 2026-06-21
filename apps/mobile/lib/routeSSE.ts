@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import EventSource from "react-native-sse";
 
 const MIDDLEWARE_BASE =
-  "https://tranzit-db-middleware-000000000000.us-central1.run.app";
+  "https://tranzit-db-middleware.tailnet-example.ts.net";
 
 export interface RouteSSEStop {
   route_id: string;

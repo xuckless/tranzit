@@ -3,7 +3,7 @@ import EventSource from "react-native-sse";
 import type { VehiclePosition } from "@/types/database";
 
 const SSE_URL =
-  "https://tranzit-db-middleware-000000000000.us-central1.run.app/api/v1/vehicle_positions";
+  "https://tranzit-db-middleware.tailnet-example.ts.net/api/v1/vehicle_positions";
 
 // ─── Module-level connection state ────────────────────────────────────────────
 // Single shared EventSource across all subscribers. The pool/slot pattern is

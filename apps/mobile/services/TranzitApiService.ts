@@ -13,7 +13,7 @@ import { parseRouteResponse } from "@/lib/routeParser";
 const BASE_URL =
   process.env.EXPO_PUBLIC_USE_LOCAL === "true"
     ? "http://localhost:3100"
-    : "https://tranzit-route-service-000000000000.us-central1.run.app";
+    : "https://tranzit-route-service.tailnet-example.ts.net";
 
 export const TranzitApiService = {
   async searchPlaces(

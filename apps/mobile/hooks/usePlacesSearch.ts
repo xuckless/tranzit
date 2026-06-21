@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import type { PlaceResult, PlacesSearchResponse } from "../types/places";
 
 const BASE_URL =
-  "https://tranzit-route-service-000000000000.us-central1.run.app";
+  "https://tranzit-route-service.tailnet-example.ts.net";
 const DEBOUNCE_MS = 350;
 
 interface UserLocation {

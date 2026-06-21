@@ -1,5 +1,5 @@
 const MIDDLEWARE_BASE =
-  "https://tranzit-db-middleware-000000000000.us-central1.run.app";
+  "https://tranzit-db-middleware.tailnet-example.ts.net";
 
 interface Envelope<T> {
   table: string;

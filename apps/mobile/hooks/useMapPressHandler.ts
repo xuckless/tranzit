@@ -2,7 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import { LatLng } from "react-native-maps";
 
 const BASE_URL =
-  "https://tranzit-route-service-000000000000.us-central1.run.app";
+  "https://tranzit-route-service.tailnet-example.ts.net";
 
 export type PressedLocation = {
   coordinate: LatLng;
