@@ -1,35 +1,19 @@
-name: Deploy to Cloud Run
+# Local redeploy on the self-hosted runner (fedora). Replaces the old Cloud Run
+# deploy. Rebuilds ONLY the app container (--no-deps app) so the tailscale sidecar
+# is never recreated — the node identity, IP, MagicDNS name and Funnel stay stable.
+name: local-redeploy
 
 on:
   push:
     branches: [main]
-
-permissions:
-  contents: read
-  id-token: write
+  workflow_dispatch:
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
+  redeploy:
+    runs-on: [self-hosted, fedora]
     steps:
-      - uses: actions/checkout@v4
-
-      - id: auth
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
-          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-
-      - name: Deploy to Cloud Run
+      - name: Rebuild app container only (reuse existing tailscale sidecar)
         run: |
-          gcloud run deploy tranzit-rt-service \
-            --source . \
-            --region us-central1 \
-            --platform managed \
-            --project tranzit-example-project \
-            --allow-unauthenticated \
-            --min-instances 1 \
-            --timeout 3600 \
-            --set-env-vars "SUPABASE_DIRECT_CONNECTION_STRING=${{ secrets.SUPABASE_DIRECT_CONNECTION_STRING }},APP_TOKEN=${{ secrets.APP_TOKEN }}"
+          cd services/rt-service
+          git pull --ff-only
+          docker compose up -d --build --no-deps app

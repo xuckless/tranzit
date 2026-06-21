@@ -1,0 +1,47 @@
+# Runs tranzit-rt-service in Docker and joins it to the tailnet as a dedicated node
+# "tranzit-rt-service" (MagicDNS: tranzit-rt-service.tailnet-example.ts.net).
+#
+# Pattern mirrors tranzit-otp: the tailscale sidecar owns the network namespace and
+# the app container shares it (network_mode: service:tailscale), so the app's :8765
+# (WS feed + /gtfs-rt/trip-updates) is reachable at the node's tailnet address from
+# any peer — notably tranzit-otp, which polls /gtfs-rt/trip-updates.
+#
+# This service is tailnet-private (no Funnel) — only OTP consumes it, over the tailnet.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-rt-service-ts
+    hostname: tranzit-rt-service
+    environment:
+      - TS_HOSTNAME=tranzit-rt-service
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tranzit-rt-service
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    environment:
+      - PORT=8765
+      - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
+      - APP_TOKEN=${APP_TOKEN:-}
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
