@@ -13,17 +13,16 @@ type Endpoints struct {
 	RouteServiceURL string
 }
 
-// Live Cloud Run URLs of the sibling services. Route Save connects to these by
-// default; set MIDDLEWARE_URL / ROUTE_SERVICE_URL to override (e.g. for local
-// instances).
+// Tailnet MagicDNS URLs of the sibling services (local Docker nodes). Route Save
+// connects to these by default; set MIDDLEWARE_URL / ROUTE_SERVICE_URL to override.
 const (
-	defaultMiddlewareURL   = "https://tranzit-db-middleware-000000000000.us-central1.run.app"
-	defaultRouteServiceURL = "https://tranzit-route-service-000000000000.us-central1.run.app"
+	defaultMiddlewareURL   = "http://tranzit-db-middleware.tailnet-example.ts.net:8080"
+	defaultRouteServiceURL = "http://tranzit-route-service.tailnet-example.ts.net:8080"
 )
 
 // LoadEndpoints reads endpoint config from the environment, applying defaults.
 // PORT may be either ":8090" or "8090"; a bare port is prefixed with ":".
-// MIDDLEWARE_URL and ROUTE_SERVICE_URL default to the live Cloud Run instances.
+// MIDDLEWARE_URL and ROUTE_SERVICE_URL default to the sibling tailnet nodes.
 func LoadEndpoints() Endpoints {
 	return Endpoints{
 		ServerAddr:      normalizeAddr(getenv("PORT", "8090")),
