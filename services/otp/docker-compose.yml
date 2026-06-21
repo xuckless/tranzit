@@ -17,14 +17,21 @@ services:
     environment:
       - TS_HOSTNAME=tranzit-otp
       - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
       - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
       - TS_EXTRA_ARGS=--accept-dns=false
     volumes:
       - tailscale-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
     devices:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - net_admin
+    networks:
+      tranzit-net:
+        aliases:
+          - tranzit-otp.tailnet-example.ts.net
     ports:
       # Local testing convenience — OTP also reachable at http://127.0.0.1:8080
       - "127.0.0.1:8080:8080"
@@ -44,3 +51,9 @@ services:
 
 volumes:
   tailscale-state:
+
+# Shared bridge so co-located services reach each other directly by their
+# MagicDNS name (registered as a network alias) — independent of the tailnet.
+networks:
+  tranzit-net:
+    external: true

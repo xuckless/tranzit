@@ -12,7 +12,7 @@
       "feedId": "CT",
       "frequencySec": 30,
       "fuzzyTripMatching": true,
-      "url": "https://tranzit-rt-service-000000000000.us-central1.run.app/gtfs-rt/trip-updates"
+      "url": "https://tranzit-rt-service.tailnet-example.ts.net/gtfs-rt/trip-updates"
     },
     {
       "type": "vehicle-positions",
