@@ -39,6 +39,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
+import { ROUTE_SAVE_URL } from "@/lib/config";
 import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
 import type { Route, RouteStop, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
@@ -647,9 +648,6 @@ export default function RouteScreen() {
         setStartError(null);
 
         try {
-            const routeSaveUrl = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL;
-            if (!routeSaveUrl) throw new Error("ROUTE_SAVE_URL not configured");
-
             const body = isOTP
                 ? {
                       source: "opentrip",
@@ -676,7 +674,7 @@ export default function RouteScreen() {
                       },
                   };
 
-            const resp = await fetch(`${routeSaveUrl}/trips`, {
+            const resp = await fetch(`${ROUTE_SAVE_URL}/trips`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(body),

@@ -54,8 +54,8 @@ import type {
   TripSnapshotMsg,
 } from "@/types/trip";
 import type { AppTheme, PastelKey } from "@/styles/themes";
+import { ROUTE_SAVE_URL } from "@/lib/config";
 
-const ROUTE_SAVE_URL = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
 const CALGARY_CENTER: [number, number] = [-114.0719, 51.0447];
 const MIN_MARKER_ZOOM = 12;
 

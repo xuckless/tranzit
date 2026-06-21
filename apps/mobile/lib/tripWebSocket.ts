@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { TripStateMsg, TripRerouteMsg, TripNotifyMsg, ServerStopStatus } from "@/types/trip";
+import { ROUTE_SAVE_URL } from "@/lib/config";
 
-const ROUTE_SAVE_HTTP = process.env.EXPO_PUBLIC_ROUTE_SAVE_URL ?? "";
-const ROUTE_SAVE_WS = ROUTE_SAVE_HTTP.replace(/^http/, "ws");
+const ROUTE_SAVE_WS = ROUTE_SAVE_URL.replace(/^http/, "ws");
 
 const STATUS_PRIORITY: Record<ServerStopStatus, number> = {
   ACTIVE: 4, UNSURE: 3, EXPECTED: 2, MISSED: 1, COMPLETED: 0,
