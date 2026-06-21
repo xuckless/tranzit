@@ -1,42 +1,19 @@
-name: Deploy to Cloud Run
+# Local redeploy on the self-hosted runner (fedora). Replaces the old Cloud Run
+# deploy. Rebuilds ONLY the app container (--no-deps app) so the tailscale sidecar
+# is never recreated — the node identity, IP, MagicDNS name and Funnel stay stable.
+name: local-redeploy
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-
+  redeploy:
+    runs-on: [self-hosted, fedora]
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Authenticate to Google Cloud
-        uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: github-actions-deploy@tranzit-example-project.iam.gserviceaccount.com
-
-      - name: Set up Cloud SDK
-        uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ secrets.GCP_PROJECT_ID }}
-
-      - name: Deploy to Cloud Run
+      - name: Rebuild app container only (reuse existing tailscale sidecar)
         run: |
-          gcloud run deploy tranzit-db-middleware \
-            --source . \
-            --region us-central1 \
-            --platform managed \
-            --allow-unauthenticated \
-            --min-instances 1 \
-            --max-instances 1 \
-            --timeout 60 \
-            --project ${{ secrets.GCP_PROJECT_ID }} \
-            --set-env-vars SUPABASE_DIRECT_CONNECTION_STRING="${{ secrets.SUPABASE_CONNECTION_STRING }}"
+          cd services/db-middleware
+          git pull --ff-only
+          docker compose up -d --build --no-deps app

@@ -1,0 +1,46 @@
+# Runs tranzit-db-middleware in Docker and joins it to the tailnet as a dedicated
+# node "tranzit-db-middleware" (MagicDNS: tranzit-db-middleware.tailnet-example.ts.net).
+#
+# Pattern mirrors tranzit-otp: the tailscale sidecar owns the network namespace and
+# the app container shares it (network_mode: service:tailscale), so the app's :8080
+# is reachable at the node's tailnet address from any peer. Funnel (TS_SERVE_CONFIG)
+# additionally exposes it publicly over HTTPS for the mobile frontend.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-db-middleware-ts
+    hostname: tranzit-db-middleware
+    environment:
+      - TS_HOSTNAME=tranzit-db-middleware
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tranzit-db-middleware
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    environment:
+      - PORT=8080
+      - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
