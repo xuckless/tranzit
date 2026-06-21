@@ -23,7 +23,7 @@ import requests
 # Config
 # ---------------------------------------------------------------------------
 
-CLOUD = "https://tranzit-route-service-000000000000.us-central1.run.app"
+CLOUD = "https://tranzit-route-service.tailnet-example.ts.net"
 ORIGIN = {"lat": 51.0447, "lng": -114.0719}  # downtown Calgary (8 Ave & Centre St)
 
 # Destinations: give place_id if already known, otherwise a search query.
