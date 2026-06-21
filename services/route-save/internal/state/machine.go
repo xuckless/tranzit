@@ -92,11 +92,7 @@ func (m *Machine) FreshUserFix() (geo.LatLng, bool) { return m.freshUserFix() }
 func (m *Machine) OnTick() bool {
 	active := m.ts.ActiveStop()
 	if active == nil {
-		if m.ts.OverallStatus != trip.StatusCompleted {
-			m.ts.OverallStatus = trip.StatusCompleted
-			return true
-		}
-		return false
+		return m.tickStopless()
 	}
 
 	beforeIdx := m.ts.CurrentStopIndex
@@ -112,6 +108,26 @@ func (m *Machine) OnTick() bool {
 	m.evaluate(m.ts.CurrentStopIndex)
 
 	return beforeIdx != m.ts.CurrentStopIndex || !sameStatuses(beforeStatus, m.statuses())
+}
+
+// tickStopless handles a tick when there is no active stop. Two cases: a walk-only
+// trip (no stops at all) completes on arrival at the destination — within
+// config.ArrivalRadiusM of a fresh fix — and stays ACTIVE while still walking; a
+// normal trip that simply ran out of stops completes immediately.
+func (m *Machine) tickStopless() bool {
+	if m.ts.OverallStatus == trip.StatusCompleted {
+		return false
+	}
+	if len(m.ts.Stops) == 0 { // walk-only
+		if loc, ok := m.freshUserFix(); ok &&
+			geo.HaversineM(loc, m.ts.Destination) <= config.ArrivalRadiusM {
+			m.ts.OverallStatus = trip.StatusCompleted
+			return true
+		}
+		return false // still walking
+	}
+	m.ts.OverallStatus = trip.StatusCompleted // normal trip finished
+	return true
 }
 
 // evaluate applies §7.3 to the stop at idx (assumed to be the active stop).

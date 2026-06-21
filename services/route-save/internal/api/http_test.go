@@ -128,6 +128,67 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 	waitFor(t, 2*time.Second, func() bool { return mgr.Count() == 0 })
 }
 
+// TestStart_WalkOnlyRoute: a route with no transit steps (pure walk) is accepted
+// (201, not 422) and exports a STATE with no stops and one walk leg.
+func TestStart_WalkOnlyRoute(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	walkRoute := json.RawMessage(`{"distanceMeters":500,"duration":"600s","legs":[{"steps":[{"travelMode":"WALK"}]}]}`)
+	body, _ := json.Marshal(map[string]any{
+		"route":                walkRoute,
+		"destination_place_id": "place-xyz",
+	})
+
+	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("POST /trips: %v", err)
+	}
+	if resp.StatusCode != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 for walk-only route", resp.StatusCode)
+	}
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	resp.Body.Close()
+	if start.SessionID == "" || mgr.Count() != 1 {
+		t.Fatalf("session not started (id=%q count=%d)", start.SessionID, mgr.Count())
+	}
+
+	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + start.WSURL
+	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("ws dial: %v", err)
+	}
+	defer conn.Close()
+
+	conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_, raw, err := conn.ReadMessage()
+	if err != nil {
+		t.Fatalf("read STATE: %v", err)
+	}
+	var frame struct {
+		Type  string     `json:"type"`
+		Stops []struct{} `json:"stops"`
+		Legs  []struct {
+			Mode string `json:"mode"`
+		} `json:"legs"`
+	}
+	if err := json.Unmarshal(raw, &frame); err != nil {
+		t.Fatalf("unmarshal STATE: %v", err)
+	}
+	if frame.Type != "STATE" {
+		t.Errorf("first frame type = %q, want STATE", frame.Type)
+	}
+	if len(frame.Stops) != 0 {
+		t.Errorf("STATE stops = %d, want 0 for walk-only", len(frame.Stops))
+	}
+	if len(frame.Legs) != 1 || frame.Legs[0].Mode != "WALK" {
+		t.Errorf("STATE legs = %+v, want one WALK leg", frame.Legs)
+	}
+}
+
 func TestStart_RejectsMissingDestination(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	defer srv.Close()

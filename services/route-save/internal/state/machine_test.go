@@ -33,6 +33,45 @@ func makeTrip(busArrival int64) *trip.TripState {
 	}
 }
 
+// TestWalkOnly_CompletesOnArrival: a stop-less (walk-only) trip stays ACTIVE while
+// the rider is away from the destination and flips to COMPLETED once a fresh fix
+// lands within ArrivalRadiusM. With no fix at all it must not auto-complete.
+func TestWalkOnly_CompletesOnArrival(t *testing.T) {
+	dest := geo.LatLng{Lat: 51.050, Lng: -114.07}
+	ts := &trip.TripState{
+		SessionID:     "s",
+		Destination:   dest,
+		Legs:          []trip.Leg{{LegIndex: 0, Mode: trip.ModeWalk, WalkTo: dest}},
+		OverallStatus: trip.StatusActive,
+	}
+	clk := &FakeClock{T: 1000}
+	m := New(ts, clk, Hooks{})
+
+	// No fix: must not complete.
+	if m.OnTick() || ts.OverallStatus == trip.StatusCompleted {
+		t.Fatalf("walk-only completed with no fix: status = %s", ts.OverallStatus)
+	}
+
+	// Fresh fix far from destination (~111m north): still walking.
+	setFix(m, 51.051, -114.07)
+	if m.OnTick() || ts.OverallStatus == trip.StatusCompleted {
+		t.Fatalf("walk-only completed while far from dest: status = %s", ts.OverallStatus)
+	}
+
+	// Fresh fix essentially at the destination: completes.
+	setFix(m, 51.050, -114.07)
+	if !m.OnTick() {
+		t.Fatal("OnTick: want change=true on arrival completion")
+	}
+	if ts.OverallStatus != trip.StatusCompleted {
+		t.Fatalf("status = %s, want COMPLETED on arrival", ts.OverallStatus)
+	}
+	// Idempotent: a further tick reports no change.
+	if m.OnTick() {
+		t.Error("OnTick after completion reported a change")
+	}
+}
+
 type recorder struct{ missed, unsure []int }
 
 func (r *recorder) hooks() Hooks {

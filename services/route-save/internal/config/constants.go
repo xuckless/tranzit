@@ -40,6 +40,9 @@ const (
 	BoardingRadiusM = 20.0
 	// RerouteRearmRadiusM: on-bus reroute re-fetch distance (metres) (§9.1).
 	RerouteRearmRadiusM = 50.0
+	// ArrivalRadiusM: a walk-only trip (no stops) completes when the rider's fresh
+	// fix comes within this distance (metres) of the destination. Tune in testing.
+	ArrivalRadiusM = 30.0
 
 	// ResolveDepartureGraceS bounds how far in the past a candidate run's boarding
 	// time may be and still be eligible during trip resolution (§5.2). A run whose

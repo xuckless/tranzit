@@ -28,6 +28,7 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		OverallStatus:    StatusExpected,
 	}
 
+	hasBusLeg := false
 	for li, pl := range route.Legs {
 		leg := Leg{
 			LegIndex:  li,
@@ -37,6 +38,7 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 		}
 
 		if pl.Mode == directions.ModeBus {
+			hasBusLeg = true
 			// Load the entry→exit stop window (§5). On the OTP path the concrete
 			// trip_id and entry/exit stop_ids are already known (graph-resolved), so
 			// skip resolution (§5.2) and window directly; on the Google path resolve
@@ -101,7 +103,13 @@ func BuildTrip(sessionID string, origin, dest geo.LatLng, route directions.Route
 	}
 
 	if len(ts.Stops) == 0 {
-		return nil, fmt.Errorf("build trip: route produced no bus stops")
+		if hasBusLeg {
+			// A bus leg that loaded no stops is a real failure, not a walk-only trip.
+			return nil, fmt.Errorf("build trip: route produced no bus stops")
+		}
+		// Walk-only route: nothing to track. The client renders the walk legs; the
+		// state machine completes the trip on arrival at the destination (OnTick).
+		ts.OverallStatus = StatusActive
 	}
 	return ts, nil
 }

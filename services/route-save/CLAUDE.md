@@ -461,6 +461,7 @@ RT enrichment is what makes the static Google directions responsive — it is th
 | `MISSED_RADIUS_M` | 50 | Beyond this at trigger → MISSED |
 | `BOARDING_RADIUS_M` | 20 | Within this at trigger → ACTIVE (widened from 5m for GPS accuracy; tune in testing) |
 | `REROUTE_REARM_RADIUS_M` | 50 | On-bus reroute re-fetch distance |
+| `ArrivalRadiusM` | 30 | Walk-only trip (no stops) completes when a fresh fix is within this of the destination (as-built) |
 | `ResolveDepartureGraceS` | 120 | Resolution past-floor: a candidate run whose boarding time is older than `now − this` has departed and is excluded (as-built) |
 | `WSPongWaitS` | 60 | WS read deadline; no pong/frame within this tears the socket down (as-built) |
 | `WSPingIntervalS` | 25 | WS keepalive ping cadence; `< WSPongWaitS` (as-built) |
@@ -635,6 +636,17 @@ goroutine. Verified with `go test -race`.
   build-time `now` floor (`ResolveDepartureGraceS`) and `ResolveTrip`/`FilterLegStops`
   semantics — so correctness/degradation is graceful when pointed at an older middleware.
   The generic scan's per-candidate `TripStops` stays parallelized (`maxResolveConcurrency=16`).
+- **Walk-only routes accepted (as-built).** A route with no bus legs (pure walk,
+  origin→destination) used to 422 at `POST /trips` / `POST /tranzit-route` on
+  `BuildTrip`'s `len(Stops)==0` guard. `BuildTrip` now allows zero stops **only when
+  no bus leg was present** (a bus leg that loads no stops is still a hard failure),
+  marking the stop-less trip `ACTIVE`. There is nothing transit to track, so RT
+  polling no-ops (no `trip_id`s) and reroute never fires (no FETCHED stops); the
+  client renders the walk legs from the STATE `legs[]` (`walk_from`/`walk_to`). The
+  state machine (`tickStopless`) holds the trip `ACTIVE` while walking and flips it
+  to `COMPLETED` once a fresh GPS fix lands within `ArrivalRadiusM` (30m) of the
+  destination — rather than the old behaviour of marking any stop-less trip COMPLETED
+  on tick 1. Covers both the Google and OTP paths (both go through `BuildTrip`).
 - **§5.4 classification resolved.** Only the **boarding stop of each bus leg is
   FETCHED**; every other loaded stop (ride-through + exit/handoff) is **TRANSFER**
   (exempt from MISSED while ON_BUS). This matches §3's definition of FETCHED and

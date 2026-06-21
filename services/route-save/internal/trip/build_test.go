@@ -89,6 +89,59 @@ func TestBuildTrip_ClassifiesAndStructures(t *testing.T) {
 	}
 }
 
+// TestBuildTrip_WalkOnly: a route with no bus legs builds a stop-less trip that is
+// accepted (not rejected) and marked ACTIVE for rendering, with the single walk leg
+// running origin→destination.
+func TestBuildTrip_WalkOnly(t *testing.T) {
+	origin := geo.LatLng{Lat: 51.045, Lng: -114.07}
+	dest := geo.LatLng{Lat: 51.050, Lng: -114.08}
+
+	f := datasource.NewFixture()
+	route := directions.Route{Legs: []directions.ParsedLeg{
+		{Mode: directions.ModeWalk},
+	}}
+
+	ts, err := BuildTrip("sess", origin, dest, route, f, 0)
+	if err != nil {
+		t.Fatalf("BuildTrip walk-only: %v", err)
+	}
+	if len(ts.Stops) != 0 {
+		t.Fatalf("stops = %d, want 0", len(ts.Stops))
+	}
+	if ts.OverallStatus != StatusActive {
+		t.Errorf("overall = %s, want ACTIVE", ts.OverallStatus)
+	}
+	if len(ts.Legs) != 1 || ts.Legs[0].Mode != ModeWalk {
+		t.Fatalf("legs = %+v, want one walk leg", ts.Legs)
+	}
+	if ts.Legs[0].WalkFrom != origin || ts.Legs[0].WalkTo != dest {
+		t.Errorf("walk endpoints = %+v→%+v, want %+v→%+v",
+			ts.Legs[0].WalkFrom, ts.Legs[0].WalkTo, origin, dest)
+	}
+}
+
+// TestBuildTrip_BusLegNoStopsErrors: a bus leg that loads no stops is still a hard
+// failure — it must not be mistaken for a walk-only trip.
+func TestBuildTrip_BusLegNoStopsErrors(t *testing.T) {
+	entry := geo.LatLng{Lat: 51.045, Lng: -114.07}
+	exit := geo.LatLng{Lat: 51.055, Lng: -114.09}
+
+	f := datasource.NewFixture()
+	// Trip "T" resolves but carries no stops.
+	f.StopsByTrip["T"] = []datasource.Stop{}
+	f.TripsByRoute["2"] = []datasource.TripCandidate{{TripID: "T", Stops: []datasource.Stop{}}}
+
+	route := directions.Route{Legs: []directions.ParsedLeg{
+		{Mode: directions.ModeBus, RouteID: "2",
+			Entry: &directions.StopEndpoint{Name: "Entry", Loc: entry, TimeEpoch: 100},
+			Exit:  &directions.StopEndpoint{Name: "Exit", Loc: exit, TimeEpoch: 300}},
+	}}
+
+	if _, err := BuildTrip("sess", entry, exit, route, f, 0); err == nil {
+		t.Fatal("BuildTrip: want error for bus leg with no stops, got nil")
+	}
+}
+
 // TestBuildTrip_WalkEndpointsMultiLeg exercises endpoint derivation with distinct
 // coordinates and a transfer walk between two buses: walk → bus1 → walk → bus2 →
 // walk. The middle walk must chain bus1's exit to bus2's entry.
