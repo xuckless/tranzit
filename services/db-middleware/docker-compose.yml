@@ -31,6 +31,10 @@ services:
       tranzit-net:
         aliases:
           - tranzit-db-middleware.tailnet-example.ts.net
+    ports:
+      # Published on fedora's tailnet interface so the mobile app (on the tailnet)
+      # reaches it over plain HTTP — cert-free alternative to Funnel.
+      - "100.74.12.78:18080:8080"
     restart: unless-stopped
 
   app:
