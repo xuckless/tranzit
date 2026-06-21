@@ -35,6 +35,10 @@ services:
       tranzit-net:
         aliases:
           - tranzit-route-service.tailnet-example.ts.net
+    ports:
+      # Published on fedora's tailnet interface so the mobile app (on the tailnet)
+      # reaches it over plain HTTP — cert-free alternative to Funnel.
+      - "100.74.12.78:18081:8080"
     restart: unless-stopped
 
   app:
@@ -48,8 +52,8 @@ services:
     environment:
       - PORT=8080
       - GMAPS_API_KEY=${GMAPS_API_KEY:-}
-      - OTP_BASE_URL=http://tranzit-otp.tailnet-example.ts.net:8080
-      - MIDDLEWARE_BASE_URL=http://tranzit-db-middleware.tailnet-example.ts.net:8080
+      - OTP_BASE_URL=https://tranzit-otp.tailnet-example.ts.net
+      - MIDDLEWARE_BASE_URL=https://tranzit-db-middleware.tailnet-example.ts.net
     restart: unless-stopped
 
 volumes:
