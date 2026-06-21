@@ -1,10 +1,9 @@
-# Runs tranzit-db-middleware in Docker and joins it to the tailnet as a dedicated
-# node "tranzit-db-middleware" (MagicDNS: tranzit-db-middleware.tailnet-example.ts.net).
+# Runs tranzit-db-middleware in Docker, joins it to the tailnet, and exposes it
+# publicly over HTTPS via Tailscale Funnel at https://tranzit-db-middleware.tailnet-example.ts.net
 #
-# Pattern mirrors tranzit-otp: the tailscale sidecar owns the network namespace and
-# the app container shares it (network_mode: service:tailscale), so the app's :8080
-# is reachable at the node's tailnet address from any peer. Funnel (TS_SERVE_CONFIG)
-# additionally exposes it publicly over HTTPS for the mobile frontend.
+# The tailscale sidecar owns the network namespace; the app shares it
+# (network_mode: service:tailscale). Funnel (TS_SERVE_CONFIG) publishes :8080 to the
+# internet. Sibling services and the frontend all reach it via the public Funnel URL.
 #
 # Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
 
@@ -27,14 +26,6 @@ services:
       - /dev/net/tun:/dev/net/tun
     cap_add:
       - net_admin
-    networks:
-      tranzit-net:
-        aliases:
-          - tranzit-db-middleware.tailnet-example.ts.net
-    ports:
-      # Published on fedora's tailnet interface so the mobile app (on the tailnet)
-      # reaches it over plain HTTP — cert-free alternative to Funnel.
-      - "100.74.12.78:18080:8080"
     restart: unless-stopped
 
   app:
@@ -52,9 +43,3 @@ services:
 
 volumes:
   tailscale-state:
-
-# Shared bridge so co-located services reach each other directly by their
-# MagicDNS name (registered as a network alias) — independent of the tailnet.
-networks:
-  tranzit-net:
-    external: true
