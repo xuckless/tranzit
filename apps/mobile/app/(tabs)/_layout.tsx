@@ -1,8 +1,9 @@
-import { Tabs, useRouter } from "expo-router";
+import { Tabs, useRouter, Redirect } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useAuth } from "@clerk/expo";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { AppTheme } from "@/styles/themes";
@@ -59,6 +60,13 @@ export default function RootLayout() {
   const { theme } = useTheme();
   const { colors, typography, semantic, radii, spacing } = theme;
   const styles = makeStyles(theme);
+
+  // Hard auth gate: no tab is reachable until Clerk reports a session. Also
+  // covers the top-level settings/add-trip stack routes, which are only
+  // navigable from within the tabs.
+  const { isLoaded, isSignedIn } = useAuth();
+  if (!isLoaded) return null;
+  if (!isSignedIn) return <Redirect href="/(auth)/sign-in" />;
 
   return (
     <Tabs

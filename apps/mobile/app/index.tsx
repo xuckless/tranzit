@@ -1,6 +1,13 @@
-// import { Text, View } from "react-native";
 import { Redirect } from "expo-router";
+import { useAuth } from "@clerk/expo";
 
 export default function Index() {
-  return <Redirect href="/(tabs)/map" />;
+  const { isLoaded, isSignedIn } = useAuth();
+
+  // Wait for Clerk to restore the cached session before deciding where to go.
+  if (!isLoaded) return null;
+
+  return (
+    <Redirect href={isSignedIn ? "/(tabs)/map" : "/(auth)/sign-in"} />
+  );
 }

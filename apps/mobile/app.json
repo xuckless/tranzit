@@ -59,8 +59,15 @@
       "expo-secure-store",
       "expo-sqlite",
       "@maplibre/maplibre-react-native",
-      ["expo-live-activity", { "enablePushNotifications": false }],
-      "expo-notifications"
+      [
+        "expo-live-activity",
+        {
+          "enablePushNotifications": false
+        }
+      ],
+      "expo-notifications",
+      "@clerk/expo",
+      "expo-web-browser"
     ],
     "experiments": {
       "typedRoutes": true,
