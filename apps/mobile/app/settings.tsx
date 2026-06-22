@@ -13,6 +13,8 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { THEMES, THEME_IDS } from "@/styles/themes";
 import type { AppTheme, ThemeId } from "@/styles/themes";
 import { router } from "expo-router";
+import { ConnectedAccounts } from "@/components/auth/ConnectedAccounts";
+import { TwoFactorSetup } from "@/components/auth/TwoFactorSetup";
 
 export default function SettingsScreen() {
   const { theme, themeId, setThemeId } = useTheme();
@@ -155,7 +157,17 @@ export default function SettingsScreen() {
           </View>
         </View>
 
-        <TouchableOpacity style={styles.settingItem}>
+        <Text style={[styles.sectionTitle, styles.subSectionTitle]}>
+          Two-factor authentication
+        </Text>
+        <TwoFactorSetup />
+
+        <Text style={[styles.sectionTitle, styles.subSectionTitle]}>
+          Connected accounts
+        </Text>
+        <ConnectedAccounts />
+
+        <TouchableOpacity style={[styles.settingItem, styles.settingItemSpaced]}>
           <Ionicons
             name="help-circle-outline"
             size={22}
@@ -231,6 +243,12 @@ function makeStyles(t: AppTheme) {
       marginBottom: 10,
       textTransform: "uppercase",
       letterSpacing: 0.8,
+    },
+    subSectionTitle: {
+      marginTop: spacing.element,
+    },
+    settingItemSpaced: {
+      marginTop: spacing.card,
     },
     themeGroup: {
       gap: spacing.element,

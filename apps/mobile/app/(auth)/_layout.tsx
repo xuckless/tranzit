@@ -1,5 +1,6 @@
 import { Redirect, Stack } from "expo-router";
 import { useAuth } from "@clerk/expo";
+import { useAuthBypass } from "@/lib/devAuthBypass";
 
 /**
  * Auth group: only reachable while signed-out. Once Clerk reports a session,
@@ -8,9 +9,11 @@ import { useAuth } from "@clerk/expo";
  */
 export default function AuthLayout() {
   const { isLoaded, isSignedIn } = useAuth();
+  const bypass = useAuthBypass();
 
   if (!isLoaded) return null;
-  if (isSignedIn) return <Redirect href="/(tabs)/map" />;
+  // Funnel through the index gate so there is a single redirect authority.
+  if (isSignedIn || bypass) return <Redirect href="/" />;
 
   return <Stack screenOptions={{ headerShown: false }} />;
 }

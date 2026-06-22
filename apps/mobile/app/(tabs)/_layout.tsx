@@ -4,6 +4,7 @@ import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "@clerk/expo";
+import { useAuthBypass } from "@/lib/devAuthBypass";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import type { AppTheme } from "@/styles/themes";
@@ -65,8 +66,9 @@ export default function RootLayout() {
   // covers the top-level settings/add-trip stack routes, which are only
   // navigable from within the tabs.
   const { isLoaded, isSignedIn } = useAuth();
+  const bypass = useAuthBypass();
   if (!isLoaded) return null;
-  if (!isSignedIn) return <Redirect href="/(auth)/sign-in" />;
+  if (!isSignedIn && !bypass) return <Redirect href="/(auth)/sign-in" />;
 
   return (
     <Tabs

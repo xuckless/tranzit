@@ -9,8 +9,10 @@ import {
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useSSO } from "@clerk/expo";
 import * as AuthSession from "expo-auth-session";
+import { router } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
+import { authDebug, authDebugResult, authDebugError } from "@/lib/authDebug";
 
 type Provider = "google" | "apple";
 
@@ -21,8 +23,8 @@ const STRATEGY = {
 
 /**
  * Google / Apple OAuth via Clerk's hosted SSO flow (`useSSO` → expo-web-browser).
- * On success `setActive` flips the Clerk session, and the `(auth)/_layout` guard
- * redirects into the app — no manual navigation needed here.
+ * On success `setActive` flips the Clerk session and we route to `/` (the index
+ * gate forwards into the app); the `(auth)/_layout` guard is the safety net.
  */
 export function SocialButtons() {
   const { theme } = useTheme();
@@ -34,19 +36,40 @@ export function SocialButtons() {
   const onPress = useCallback(
     async (provider: Provider) => {
       if (pending) return;
+      const redirectUrl = AuthSession.makeRedirectUri();
+      authDebug(`SSO ${provider} startSSOFlow()`, {
+        strategy: STRATEGY[provider],
+        redirectUrl,
+      });
       setPending(provider);
       try {
-        const { createdSessionId, setActive } = await startSSOFlow({
+        const ssoResult = await startSSOFlow({
           strategy: STRATEGY[provider],
-          redirectUrl: AuthSession.makeRedirectUri(),
+          redirectUrl,
+        });
+        const { createdSessionId, setActive } = ssoResult;
+        authDebugResult(`SSO ${provider} startSSOFlow result`, ssoResult, {
+          hasCreatedSessionId: !!createdSessionId,
+          hasSetActive: !!setActive,
         });
         if (createdSessionId && setActive) {
+          authDebug(`SSO ${provider} → activating session`, createdSessionId);
           await setActive({ session: createdSessionId });
+          // Leave the auth stack explicitly; index.tsx forwards to the app.
+          router.replace("/");
+        } else {
+          authDebug(
+            `SSO ${provider} → NO session created (guard skipped, goes nowhere)`,
+            {
+              hasCreatedSessionId: !!createdSessionId,
+              hasSetActive: !!setActive,
+            },
+          );
         }
       } catch (err) {
         // User-cancelled or provider error — surface in console, leave the
         // screen as-is so they can retry.
-        console.warn(`[auth] ${provider} SSO failed`, err);
+        authDebugError(`SSO ${provider} startSSOFlow`, err);
       } finally {
         setPending(null);
       }

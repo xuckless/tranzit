@@ -5,13 +5,21 @@
 export function authErrorMessage(error: unknown): string {
   if (!error) return "";
   const e = error as {
-    errors?: { longMessage?: string; message?: string }[];
+    errors?: { code?: string; longMessage?: string; message?: string }[];
     message?: string;
   };
-  return (
+  const msg =
     e.errors?.[0]?.longMessage ??
     e.errors?.[0]?.message ??
     e.message ??
-    "Something went wrong. Please try again."
-  );
+    "Something went wrong. Please try again.";
+  // TEMPORARY [auth-debug]: see what raw error collapses to a user string.
+  if (__DEV__) {
+    console.warn("[auth-debug] authErrorMessage()", {
+      collapsedTo: msg,
+      errorsCount: e.errors?.length,
+      firstCode: e.errors?.[0]?.code,
+    });
+  }
+  return msg;
 }
