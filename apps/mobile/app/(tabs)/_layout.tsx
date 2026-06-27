@@ -3,7 +3,7 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import { useNavigation } from "@react-navigation/native";
-import { useAuth } from "@clerk/expo";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAuthBypass } from "@/lib/devAuthBypass";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -62,7 +62,7 @@ export default function RootLayout() {
   const { colors, typography, semantic, radii, spacing } = theme;
   const styles = makeStyles(theme);
 
-  // Hard auth gate: no tab is reachable until Clerk reports a session. Also
+  // Hard auth gate: no tab is reachable until Supabase reports a session. Also
   // covers the top-level settings/add-trip stack routes, which are only
   // navigable from within the tabs.
   const { isLoaded, isSignedIn } = useAuth();

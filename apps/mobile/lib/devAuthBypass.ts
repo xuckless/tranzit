@@ -2,8 +2,8 @@ import { useSyncExternalStore } from "react";
 
 /**
  * DEV-ONLY auth bypass. Lets the "Skip login (debug)" button drop you into the
- * app without a Clerk session, by making the route guards treat you as signed in.
- * In-memory only (resets on reload). Remove before shipping.
+ * app without a Supabase session, by making the route guards treat you as signed
+ * in. In-memory only (resets on reload). Remove before shipping.
  */
 let bypassed = false;
 const listeners = new Set<() => void>();

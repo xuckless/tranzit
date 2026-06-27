@@ -1,39 +1,41 @@
 import { useEffect, useRef } from "react";
-import { useAuth, useUser } from "@clerk/expo";
+import { useAuth } from "@/contexts/AuthContext";
 import { middlewareUpsert } from "@/lib/middleware";
 
 /**
- * Mirrors the signed-in Clerk user into our user-database (`user_info`) so the
+ * Mirrors the signed-in Supabase user into our user-database (`user_info`) so the
  * rest of the app (saved addresses, history, planner) can key off a stable
- * `user_id`. Best-effort: the user DB may be unreachable (503) — failures are
- * logged and never block the UI. The Clerk session token is NOT persisted here;
- * it lives only in expo-secure-store via Clerk's tokenCache.
+ * `user_id` (the Supabase UUID). Best-effort: the user DB may be unreachable
+ * (503) — failures are logged and never block the UI. The session itself lives in
+ * expo-secure-store via the Supabase client's storage adapter, not here.
  *
- * Renders nothing. Mounted once inside ClerkProvider in the root layout.
+ * Renders nothing. Mounted once inside AuthProvider in the root layout.
  */
 export function UserSync() {
-  const { isLoaded, isSignedIn } = useAuth();
-  const { user } = useUser();
+  const { isLoaded, isSignedIn, user } = useAuth();
   // Avoid re-posting the same identity snapshot on every render.
   const lastSynced = useRef<string | null>(null);
 
   useEffect(() => {
     if (!isLoaded || !isSignedIn || !user) return;
 
-    const email = user.primaryEmailAddress?.emailAddress ?? null;
-    const name =
-      user.fullName ??
-      [user.firstName, user.lastName].filter(Boolean).join(" ") ??
-      null;
+    const meta = user.user_metadata ?? {};
+    const email = user.email ?? null;
+    const name = meta.full_name ?? meta.name ?? null;
+    const avatar = meta.avatar_url ?? meta.picture ?? null;
     // username is UNIQUE NOT NULL in user_info — always provide something stable.
-    const username = user.username ?? email?.split("@")[0] ?? user.id;
+    const username =
+      meta.user_name ??
+      meta.preferred_username ??
+      email?.split("@")[0] ??
+      user.id;
 
     const row = {
       user_id: user.id,
       username,
       email,
       name: name || null,
-      avatar: user.imageUrl ?? null,
+      avatar: avatar || null,
       is_guest: false,
     };
 
@@ -54,7 +56,7 @@ export function UserSync() {
     return () => {
       cancelled = true;
     };
-  }, [isLoaded, isSignedIn, user?.id, user?.updatedAt]);
+  }, [isLoaded, isSignedIn, user]);
 
   return null;
 }

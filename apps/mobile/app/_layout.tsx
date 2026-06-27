@@ -1,9 +1,8 @@
 import { useEffect } from "react";
 import { Stack } from "expo-router";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { ClerkProvider } from "@clerk/expo";
-import { tokenCache } from "@clerk/expo/token-cache";
 import * as WebBrowser from "expo-web-browser";
+import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { UserSync } from "@/components/auth/UserSync";
 import * as Notifications from "expo-notifications";
@@ -18,15 +17,8 @@ import { setupLeaveByChannel } from "@/lib/leaveByNotifications";
 import { setupTripProgressChannel } from "@/lib/liveActivity";
 import { submitUnsureResponse } from "@/lib/tripWebSocket";
 
-// Required so the OAuth/SSO web-browser redirect resolves back into the app.
+// Required so the OAuth web-browser redirect resolves back into the app.
 WebBrowser.maybeCompleteAuthSession();
-
-const publishableKey = process.env.EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY!;
-if (!publishableKey) {
-  throw new Error(
-    "Add EXPO_PUBLIC_CLERK_PUBLISHABLE_KEY to your .env.local (copy it from the Clerk dashboard).",
-  );
-}
 
 // Notification handlers
 Notifications.setNotificationHandler({
@@ -77,12 +69,12 @@ export default function RootLayout() {
 
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
-      <ClerkProvider publishableKey={publishableKey} tokenCache={tokenCache}>
+      <AuthProvider>
         <ThemeProvider>
           <UserSync />
           <Stack screenOptions={{ headerShown: false }} />
         </ThemeProvider>
-      </ClerkProvider>
+      </AuthProvider>
     </GestureHandlerRootView>
   );
 }

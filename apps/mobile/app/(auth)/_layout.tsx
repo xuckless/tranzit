@@ -1,9 +1,9 @@
 import { Redirect, Stack } from "expo-router";
-import { useAuth } from "@clerk/expo";
+import { useAuth } from "@/contexts/AuthContext";
 import { useAuthBypass } from "@/lib/devAuthBypass";
 
 /**
- * Auth group: only reachable while signed-out. Once Clerk reports a session,
+ * Auth group: only reachable while signed-out. Once Supabase reports a session,
  * bounce into the app. The complementary guard in `(tabs)/_layout.tsx` keeps
  * signed-out users out of the app.
  */

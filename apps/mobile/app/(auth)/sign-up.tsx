@@ -1,139 +1,68 @@
-import { useEffect, useState } from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { useState } from "react";
+import { View, Text } from "react-native";
 import { Link, router } from "expo-router";
-import { useSignUp } from "@clerk/expo/legacy";
+import { makeRedirectUri } from "expo-auth-session";
 import { useTheme } from "@/contexts/ThemeContext";
 import { makeAuthStyles } from "@/components/auth/authStyles";
 import { AuthScaffold } from "@/components/auth/AuthScaffold";
 import { AuthField } from "@/components/auth/AuthField";
 import { PasswordField } from "@/components/auth/PasswordField";
-import { OtpField } from "@/components/auth/OtpField";
 import { AuthButton } from "@/components/auth/AuthButton";
 import { SocialButtons } from "@/components/auth/SocialButtons";
 import { authErrorMessage } from "@/components/auth/authError";
-import { authDebug, authDebugResult, authDebugError } from "@/lib/authDebug";
-
-const RESEND_COOLDOWN = 30; // seconds
+import { supabase } from "@/lib/supabase";
 
 export default function SignUpScreen() {
   const { theme } = useTheme();
   const styles = makeAuthStyles(theme);
-  const { isLoaded, signUp, setActive } = useSignUp();
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [code, setCode] = useState("");
-  const [pendingVerification, setPendingVerification] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
-  const [resendIn, setResendIn] = useState(0);
-
-  // Resend cooldown ticker.
-  useEffect(() => {
-    if (resendIn <= 0) return;
-    const t = setInterval(() => setResendIn((s) => (s > 0 ? s - 1 : 0)), 1000);
-    return () => clearInterval(t);
-  }, [resendIn]);
 
   const onSubmit = async () => {
-    authDebug("signUp onSubmit()", {
-      isLoaded,
-      loading,
-      hasSignUp: !!signUp,
-      hasSetActive: !!setActive,
-      email: email.trim(),
-      passwordLength: password.length,
-    });
-    if (!isLoaded || loading) return;
+    if (loading) return;
     setError("");
     setLoading(true);
     try {
-      const created = await signUp.create({
-        emailAddress: email.trim(),
+      const { data, error: signUpError } = await supabase.auth.signUp({
+        email: email.trim(),
         password,
+        options: { emailRedirectTo: makeRedirectUri() },
       });
-      authDebugResult("signUp.create() result", created);
-      const prepared = await signUp.prepareEmailAddressVerification({
-        strategy: "email_code",
-      });
-      authDebugResult("prepareEmailAddressVerification() result", prepared);
-      setPendingVerification(true);
-      setResendIn(RESEND_COOLDOWN);
-    } catch (err) {
-      authDebugError("signUp onSubmit / create|prepare", err);
-      setError(authErrorMessage(err));
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const onVerify = async () => {
-    authDebug("signUp onVerify()", { hasSetActive: !!setActive });
-    if (!isLoaded || loading) return;
-    setError("");
-    setLoading(true);
-    try {
-      const result = await signUp.attemptEmailAddressVerification({
-        code: code.trim(),
-      });
-      authDebugResult("attemptEmailAddressVerification() result", result, {
-        hasSetActive: !!setActive,
-      });
-      if (result.status === "complete" && result.createdSessionId && setActive) {
-        await setActive({ session: result.createdSessionId });
-        router.replace("/");
-      } else {
-        authDebug("signUp onVerify → not complete/activatable", {
-          status: result.status,
-          hasCreatedSessionId: !!result.createdSessionId,
-          hasSetActive: !!setActive,
-        });
-        setError("That code didn't complete sign up. Please try again.");
+      if (signUpError) {
+        setError(authErrorMessage(signUpError));
+        return;
       }
+      // With confirmations off, Supabase returns a live session immediately.
+      if (data.session) {
+        router.replace("/");
+        return;
+      }
+      setSubmitted(true);
     } catch (err) {
-      authDebugError("signUp onVerify / attemptEmailAddressVerification", err);
       setError(authErrorMessage(err));
     } finally {
       setLoading(false);
     }
   };
 
-  const onResend = async () => {
-    authDebug("signUp onResend()");
-    if (!isLoaded || resendIn > 0) return;
-    setError("");
-    try {
-      await signUp.prepareEmailAddressVerification({ strategy: "email_code" });
-      setResendIn(RESEND_COOLDOWN);
-    } catch (err) {
-      authDebugError("signUp onResend / prepareEmailAddressVerification", err);
-      setError(authErrorMessage(err));
-    }
-  };
-
-  if (pendingVerification) {
+  if (submitted) {
     return (
       <AuthScaffold
         title="Check your email"
-        subtitle={`Enter the code we sent to ${email.trim()}`}
+        subtitle={`We sent a confirmation link to ${email.trim()}. Tap it to finish creating your account, then sign in.`}
         onBack={() => {
-          setPendingVerification(false);
+          setSubmitted(false);
           setError("");
-          setCode("");
         }}
       >
-        <OtpField value={code} onChangeText={setCode} />
-        {error ? <Text style={styles.error}>{error}</Text> : null}
-        <AuthButton label="Verify" onPress={onVerify} loading={loading} />
-        <TouchableOpacity
-          style={styles.linkBtn}
-          onPress={onResend}
-          disabled={resendIn > 0}
-        >
-          <Text style={resendIn > 0 ? styles.linkTextMuted : styles.linkText}>
-            {resendIn > 0 ? `Resend code in ${resendIn}s` : "Resend code"}
-          </Text>
-        </TouchableOpacity>
+        <AuthButton
+          label="Back to sign in"
+          onPress={() => router.replace("/(auth)/sign-in")}
+        />
       </AuthScaffold>
     );
   }

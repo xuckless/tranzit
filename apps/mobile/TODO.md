@@ -153,3 +153,39 @@ the subsection would be ALL 201, 30, 17 - all of them indivually sorted with asc
 
 Bug fixes:
 When i pull up a route, then type destination again, the old route still pollutes the screen. Make it so, that if new values are entered into the origin or destination field, the existing page should be cleared allowing user to press find routes wihtout being confused.
+
+
+
+
+========================================================================
+Deferred auth (later pass — descoped from the Clerk → Supabase migration)
+========================================================================
+
+The Clerk → Supabase Auth migration shipped only the four in-scope sign-in
+methods (email+password, Google, Microsoft/Azure, Apple) via web OAuth. The
+following were intentionally left out and should be picked up later:
+
+Frontend
+- MFA / 2FA (TOTP): reimplement `components/auth/TwoFactorSetup.tsx` (currently a
+  null stub) on `supabase.auth.mfa.*` (enroll / challenge / verify), and re-add
+  the second-factor step to the sign-in flow + the Settings row.
+- Connected accounts: reimplement `components/auth/ConnectedAccounts.tsx`
+  (currently a null stub) on `supabase.auth.linkIdentity` / `unlinkIdentity`,
+  including the Google Calendar read-only scope, and re-add the Settings row.
+- Native social sign-in (better UX than the current web OAuth): Apple via
+  `expo-apple-authentication` + `signInWithIdToken({ provider: 'apple' })`, and
+  Google via `@react-native-google-signin/google-signin` +
+  `signInWithIdToken({ provider: 'google' })`. Both add native deps/config plugins
+  and need a dev-client rebuild + provider client IDs.
+- Passkeys / WebAuthn.
+- Username-based login and phone (SMS) auth.
+
+Backend (`tranzit-db-middleware` — services/db-middleware)
+- Attach `Authorization: Bearer <session.access_token>` to the per-user requests
+  in `lib/middleware.ts` (and, if wanted, the SSE/WS paths), once the server
+  verifies it. Today the `/api/v1/user/*` routes are unauthenticated.
+- Verify the Supabase JWT locally against Supabase's JWKS (ES256) in `userdb.go`
+  before trusting `user_id`. No shared secret — fetch + cache
+  `${SUPABASE_URL}/auth/v1/.well-known/jwks.json`.
+- Optional: migrate existing `user_info` rows + FK children from old Clerk ids to
+  Supabase UUIDs (one-off data remap; the column already accepts the UUID string).

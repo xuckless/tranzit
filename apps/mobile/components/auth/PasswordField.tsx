@@ -6,8 +6,8 @@ import { makeAuthStyles } from "@/components/auth/authStyles";
 
 /**
  * Lightweight, dependency-free password strength estimate for UI guidance only.
- * Clerk enforces the real zxcvbn policy server-side (min strength 2); this just
- * nudges the user. Returns null for empty input.
+ * Supabase enforces the real password policy server-side (min length / strength
+ * per project settings); this just nudges the user. Returns null for empty input.
  */
 type Strength = { label: string; level: "weak" | "fair" | "strong" };
 

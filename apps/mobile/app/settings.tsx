@@ -8,13 +8,11 @@ import {
   Switch,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
-import { useUser, useClerk } from "@clerk/expo";
+import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { THEMES, THEME_IDS } from "@/styles/themes";
 import type { AppTheme, ThemeId } from "@/styles/themes";
 import { router } from "expo-router";
-import { ConnectedAccounts } from "@/components/auth/ConnectedAccounts";
-import { TwoFactorSetup } from "@/components/auth/TwoFactorSetup";
 
 export default function SettingsScreen() {
   const { theme, themeId, setThemeId } = useTheme();
@@ -22,11 +20,11 @@ export default function SettingsScreen() {
   const styles = makeStyles(theme);
   const isDark = theme.isDark;
 
-  const { user } = useUser();
-  const { signOut } = useClerk();
-  const displayName =
-    user?.fullName ?? user?.primaryEmailAddress?.emailAddress ?? "Profile";
-  const displayEmail = user?.primaryEmailAddress?.emailAddress;
+  const { user, signOut } = useAuth();
+  const meta = user?.user_metadata ?? {};
+  const displayName = meta.full_name ?? meta.name ?? user?.email ?? "Profile";
+  const displayEmail = user?.email;
+  const avatarUrl: string | null = meta.avatar_url ?? meta.picture ?? null;
 
   return (
     <ScrollView style={styles.container}>
@@ -138,8 +136,8 @@ export default function SettingsScreen() {
         <Text style={styles.sectionTitle}>Account</Text>
 
         <View style={styles.profileRow}>
-          {user?.imageUrl ? (
-            <Image source={{ uri: user.imageUrl }} style={styles.avatar} />
+          {avatarUrl ? (
+            <Image source={{ uri: avatarUrl }} style={styles.avatar} />
           ) : (
             <View style={[styles.avatar, styles.avatarFallback]}>
               <Ionicons name="person" size={20} color={colors.onPrimary} />
@@ -156,16 +154,6 @@ export default function SettingsScreen() {
             ) : null}
           </View>
         </View>
-
-        <Text style={[styles.sectionTitle, styles.subSectionTitle]}>
-          Two-factor authentication
-        </Text>
-        <TwoFactorSetup />
-
-        <Text style={[styles.sectionTitle, styles.subSectionTitle]}>
-          Connected accounts
-        </Text>
-        <ConnectedAccounts />
 
         <TouchableOpacity style={[styles.settingItem, styles.settingItemSpaced]}>
           <Ionicons
