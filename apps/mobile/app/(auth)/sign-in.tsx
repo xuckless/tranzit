@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { View, Text, TouchableOpacity } from "react-native";
+import { ActivityIndicator, View, Text, TouchableOpacity } from "react-native";
 import { Link, router } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import { makeAuthStyles } from "@/components/auth/authStyles";
@@ -9,7 +9,6 @@ import { PasswordField } from "@/components/auth/PasswordField";
 import { AuthButton } from "@/components/auth/AuthButton";
 import { SocialButtons } from "@/components/auth/SocialButtons";
 import { authErrorMessage } from "@/components/auth/authError";
-import { setAuthBypass } from "@/lib/devAuthBypass";
 import { supabase } from "@/lib/supabase";
 
 export default function SignInScreen() {
@@ -20,6 +19,7 @@ export default function SignInScreen() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
+  const [guestLoading, setGuestLoading] = useState(false);
 
   const onSignIn = async () => {
     if (loading) return;
@@ -43,21 +43,28 @@ export default function SignInScreen() {
     }
   };
 
+  const onGuest = async () => {
+    if (loading || guestLoading) return;
+    setError("");
+    setGuestLoading(true);
+    try {
+      // Anonymous sign-in must be enabled in the Supabase dashboard. Creates a
+      // real user.id + session; UserSync mirrors it into user_info (is_guest=true).
+      const { error: anonError } = await supabase.auth.signInAnonymously();
+      if (anonError) {
+        setError(authErrorMessage(anonError));
+        return;
+      }
+      router.replace("/");
+    } catch (err) {
+      setError(authErrorMessage(err));
+    } finally {
+      setGuestLoading(false);
+    }
+  };
+
   return (
     <AuthScaffold title="Welcome back" subtitle="Sign in to continue to Tranzit">
-      {__DEV__ ? (
-        <TouchableOpacity
-          style={[styles.primaryBtn, { backgroundColor: theme.colors.danger }]}
-          onPress={() => {
-            setAuthBypass(true);
-            router.replace("/(tabs)/map");
-          }}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.primaryBtnText}>Skip login (debug)</Text>
-        </TouchableOpacity>
-      ) : null}
-
       <AuthField
         label="Email"
         value={email}
@@ -94,6 +101,19 @@ export default function SignInScreen() {
       </View>
 
       <SocialButtons />
+
+      <TouchableOpacity
+        style={styles.secondaryBtn}
+        onPress={onGuest}
+        disabled={loading || guestLoading}
+        activeOpacity={0.85}
+      >
+        {guestLoading ? (
+          <ActivityIndicator color={theme.colors.ink} />
+        ) : (
+          <Text style={styles.secondaryBtnText}>Continue as guest</Text>
+        )}
+      </TouchableOpacity>
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Don&apos;t have an account? </Text>

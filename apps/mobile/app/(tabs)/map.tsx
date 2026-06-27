@@ -39,7 +39,7 @@ import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { PlaceDetails } from "@/types/places";
 import { useQuickAccess } from "@/hooks/useSavedPlaces";
-import type { QuickAccessPlace } from "@/lib/db";
+import type { SavedPlace } from "@/lib/savedPlaces";
 import {
   SavePlaceModal,
   type PreselectedPlace,
@@ -908,14 +908,15 @@ export default function MapScreen() {
               showsHorizontalScrollIndicator={false}
               contentContainerStyle={styles.quickRow}
             >
-              {quickAccessPlaces.map((item: QuickAccessPlace) => {
+              {quickAccessPlaces.map((item: SavedPlace) => {
                 const { icon, color } = quickIcon(item.categoryName, theme);
                 return (
                   <TouchableOpacity
-                    key={`${item.categoryId}-${item.googlePlaceId}`}
+                    key={item.categoryCode}
                     style={styles.quickChip}
                     activeOpacity={0.8}
                     onPress={() => {
+                      if (item.latitude == null || item.longitude == null) return;
                       const coord = {
                         latitude: item.latitude,
                         longitude: item.longitude,
@@ -925,10 +926,10 @@ export default function MapScreen() {
                       router.navigate({
                         pathname: "/(tabs)/routes",
                         params: {
-                          destinationId: item.googlePlaceId,
+                          destinationId: item.googlePlaceId ?? "",
                           destinationLat: String(item.latitude),
                           destinationLng: String(item.longitude),
-                          destinationName: item.label ?? item.address,
+                          destinationName: item.categoryName,
                         },
                       } as never);
                     }}

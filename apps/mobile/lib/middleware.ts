@@ -68,7 +68,47 @@ export async function middlewareUpsert<T>(
     body: JSON.stringify(body),
     ...(signal ? { signal } : {}),
   });
-  if (!res.ok) throw new Error(`[middleware] POST user/${table} → ${res.status}`);
+  if (!res.ok) {
+    // Surface the server's reason (503 user-DB-down, 400 constraint reject, …)
+    // so best-effort callers can log something diagnosable instead of a bare code.
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `[middleware] POST user/${table} → ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+    );
+  }
   const json: UpsertEnvelope<T> = await res.json();
   return json.data;
+}
+
+interface DeleteEnvelope {
+  table: string;
+  deleted: number;
+}
+
+/**
+ * Delete rows from a user table via `DELETE /api/v1/user/{table}?<filters>`. The
+ * middleware refuses unfiltered deletes, so `params` must scope the rows (at least
+ * `user_id`). Best-effort like the other user-DB calls — never block the UI on it.
+ */
+export async function middlewareUserDelete(
+  table: string,
+  params: Record<string, string | number> = {},
+  signal?: AbortSignal,
+): Promise<number> {
+  const url = new URL(`${USER_BASE}/${table}`);
+  for (const [k, v] of Object.entries(params)) {
+    url.searchParams.set(k, String(v));
+  }
+  const res = await fetch(url.toString(), {
+    method: "DELETE",
+    ...(signal ? { signal } : {}),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(
+      `[middleware] DELETE user/${table} → ${res.status}${detail ? `: ${detail.slice(0, 300)}` : ""}`,
+    );
+  }
+  const json: DeleteEnvelope = await res.json();
+  return json.deleted;
 }

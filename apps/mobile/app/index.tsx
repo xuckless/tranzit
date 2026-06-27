@@ -1,10 +1,8 @@
 import { Redirect } from "expo-router";
 import { useAuth } from "@/contexts/AuthContext";
-import { useAuthBypass } from "@/lib/devAuthBypass";
 
 export default function Index() {
   const { isLoaded, isSignedIn, recoveryMode } = useAuth();
-  const bypass = useAuthBypass();
 
   // Wait for Supabase to restore the cached session before deciding where to go.
   if (!isLoaded) return null;
@@ -14,6 +12,6 @@ export default function Index() {
   if (recoveryMode) return <Redirect href="/reset-password" />;
 
   return (
-    <Redirect href={isSignedIn || bypass ? "/(tabs)/map" : "/(auth)/sign-in"} />
+    <Redirect href={isSignedIn ? "/(tabs)/map" : "/(auth)/sign-in"} />
   );
 }

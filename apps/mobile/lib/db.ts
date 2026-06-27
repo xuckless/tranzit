@@ -1,31 +1,24 @@
 import * as SQLite from "expo-sqlite";
 import type { CalgaryTransitStop } from "@/types/database";
 
-// ─── Public Types ─────────────────────────────────────────────────────────────
+// ─── Saved-place mirror types ──────────────────────────────────────────────────
+// Local SQLite mirror of the user DB saved places (one address per category).
+// `pending = 1` marks a row written locally but not yet confirmed in the user DB
+// (offline / 503); the orchestrator's outbox retries those. Scoped by user_id so
+// multiple identities (incl. an anonymous guest) on one device never collide.
 
-export interface SavedPlace {
-  googlePlaceId: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  label: string | null;
-  isDefault: boolean;
-}
-
-export interface CategoryWithPlaces {
-  id: number;
-  catName: string;
-  places: SavedPlace[];
-}
-
-export interface QuickAccessPlace {
-  categoryId: number;
-  categoryName: string;
-  googlePlaceId: string;
-  address: string;
-  latitude: number;
-  longitude: number;
-  label: string | null;
+export interface SavedPlaceMirrorRow {
+  user_id: string;
+  category_code: string;
+  category_name: string;
+  category_icon: string;
+  full_formatted_address: string;
+  city: string | null;
+  country: string | null;
+  lat: number | null;
+  lng: number | null;
+  google_place_id: string | null;
+  pending: number;
 }
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
@@ -49,38 +42,33 @@ async function _openDb(): Promise<SQLite.SQLiteDatabase> {
 }
 
 async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
+  // Saved places now live in the user DB; SQLite only mirrors them for offline
+  // reads. Drop the legacy normalized tables (a place could belong to many
+  // categories with a per-category default) — incompatible with the new
+  // one-address-per-category model, so we start fresh.
   await db.execAsync(`
-    CREATE TABLE IF NOT EXISTS Category (
-      Id      INTEGER PRIMARY KEY AUTOINCREMENT,
-      catName TEXT    NOT NULL
-    );
+    DROP TABLE IF EXISTS category_places;
+    DROP TABLE IF EXISTS Places;
+    DROP TABLE IF EXISTS Category;
 
-    CREATE TABLE IF NOT EXISTS Places (
-      GooglePlaceId TEXT PRIMARY KEY,
-      Address       TEXT NOT NULL,
-      Latitude      REAL NOT NULL,
-      Longitude     REAL NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS category_places (
-      categoryID   INTEGER NOT NULL,
-      PlaceID      TEXT    NOT NULL,
-      categoryName TEXT    NOT NULL,
-      label        TEXT,
-      is_default   INTEGER NOT NULL DEFAULT 0 CHECK (is_default IN (0, 1)),
-      PRIMARY KEY (categoryID, PlaceID),
-      FOREIGN KEY (categoryID) REFERENCES Category (Id) ON DELETE CASCADE ON UPDATE CASCADE,
-      FOREIGN KEY (PlaceID)    REFERENCES Places (GooglePlaceId) ON DELETE CASCADE ON UPDATE CASCADE
+    CREATE TABLE IF NOT EXISTS saved_place_cache (
+      user_id                TEXT NOT NULL,
+      category_code          TEXT NOT NULL,
+      category_name          TEXT NOT NULL,
+      category_icon          TEXT NOT NULL,
+      full_formatted_address TEXT NOT NULL,
+      city                   TEXT,
+      country                TEXT,
+      lat                    REAL,
+      lng                    REAL,
+      google_place_id        TEXT,
+      pending                INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+      PRIMARY KEY (user_id, category_code)
     );
   `);
-
-  // Partial unique index: at most one is_default=1 row per category.
-  // Must be a separate exec — SQLite doesn't support CREATE INDEX inside a
-  // multi-statement string that also contains CREATE TABLE.
   await db.execAsync(`
-    CREATE UNIQUE INDEX IF NOT EXISTS uq_one_default_per_category
-      ON category_places (categoryID)
-      WHERE is_default = 1
+    CREATE INDEX IF NOT EXISTS idx_saved_place_user
+      ON saved_place_cache (user_id)
   `);
 
   await db.execAsync(`
@@ -99,178 +87,133 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
 }
 
-// ─── Reads ────────────────────────────────────────────────────────────────────
+// ─── Saved-place mirror (offline cache of the user DB) ──────────────────────────
 
-export async function getAllCategories(): Promise<
-  Array<{ id: number; catName: string }>
-> {
+const SAVED_COLS = `user_id, category_code, category_name, category_icon,
+            full_formatted_address, city, country, lat, lng, google_place_id, pending`;
+
+export async function mirrorReadSavedPlaces(
+  userId: string
+): Promise<SavedPlaceMirrorRow[]> {
   const db = await getDb();
-  return db.getAllAsync<{ id: number; catName: string }>(
-    "SELECT Id as id, catName FROM Category ORDER BY catName ASC"
+  return db.getAllAsync<SavedPlaceMirrorRow>(
+    `SELECT ${SAVED_COLS} FROM saved_place_cache
+      WHERE user_id = ? ORDER BY category_name ASC`,
+    userId
   );
 }
 
-type RawPlaceRow = {
-  categoryId: number;
-  catName: string;
-  googlePlaceId: string | null;
-  address: string | null;
-  latitude: number | null;
-  longitude: number | null;
-  label: string | null;
-  isDefault: number | null;
-};
-
-export async function getSavedPlacesGrouped(): Promise<CategoryWithPlaces[]> {
+export async function mirrorReadPending(
+  userId: string
+): Promise<SavedPlaceMirrorRow[]> {
   const db = await getDb();
-  const rows = await db.getAllAsync<RawPlaceRow>(`
-    SELECT
-      c.Id            AS categoryId,
-      c.catName,
-      p.GooglePlaceId AS googlePlaceId,
-      p.Address       AS address,
-      p.Latitude      AS latitude,
-      p.Longitude     AS longitude,
-      cp.label,
-      cp.is_default   AS isDefault
-    FROM Category c
-    LEFT JOIN category_places cp ON cp.categoryID = c.Id
-    LEFT JOIN Places p           ON p.GooglePlaceId = cp.PlaceID
-    ORDER BY c.Id, cp.is_default DESC, cp.label ASC
-  `);
-
-  const map = new Map<number, CategoryWithPlaces>();
-  for (const row of rows) {
-    if (!map.has(row.categoryId)) {
-      map.set(row.categoryId, {
-        id: row.categoryId,
-        catName: row.catName,
-        places: [],
-      });
-    }
-    if (row.googlePlaceId != null) {
-      map.get(row.categoryId)!.places.push({
-        googlePlaceId: row.googlePlaceId,
-        address: row.address!,
-        latitude: row.latitude!,
-        longitude: row.longitude!,
-        label: row.label,
-        isDefault: row.isDefault === 1,
-      });
-    }
-  }
-  return Array.from(map.values());
-}
-
-export async function getDefaultPlaces(): Promise<QuickAccessPlace[]> {
-  const db = await getDb();
-  return db.getAllAsync<QuickAccessPlace>(`
-    SELECT
-      c.Id            AS categoryId,
-      cp.categoryName,
-      cp.label,
-      p.GooglePlaceId AS googlePlaceId,
-      p.Address       AS address,
-      p.Latitude      AS latitude,
-      p.Longitude     AS longitude
-    FROM category_places cp
-    JOIN Category c ON c.Id = cp.categoryID
-    JOIN Places p   ON p.GooglePlaceId = cp.PlaceID
-    WHERE cp.is_default = 1
-    ORDER BY c.Id
-  `);
-}
-
-// ─── Writes ───────────────────────────────────────────────────────────────────
-
-export async function setDefaultPlace(
-  categoryId: number,
-  placeId: string
-): Promise<void> {
-  const db = await getDb();
-  await db.withExclusiveTransactionAsync(async (txn) => {
-    await txn.runAsync(
-      "UPDATE category_places SET is_default = 0 WHERE categoryID = ?",
-      categoryId
-    );
-    await txn.runAsync(
-      "UPDATE category_places SET is_default = 1 WHERE categoryID = ? AND PlaceID = ?",
-      categoryId,
-      placeId
-    );
-  });
-}
-
-export async function insertCategory(catName: string): Promise<number> {
-  const db = await getDb();
-  const result = await db.runAsync(
-    "INSERT INTO Category (catName) VALUES (?)",
-    catName
+  return db.getAllAsync<SavedPlaceMirrorRow>(
+    `SELECT ${SAVED_COLS} FROM saved_place_cache
+      WHERE user_id = ? AND pending = 1`,
+    userId
   );
-  return result.lastInsertRowId;
 }
 
-export async function upsertPlace(
-  googlePlaceId: string,
-  address: string,
-  latitude: number,
-  longitude: number
+export async function mirrorUpsertSavedPlace(
+  row: SavedPlaceMirrorRow
 ): Promise<void> {
   const db = await getDb();
   await db.runAsync(
-    `INSERT INTO Places (GooglePlaceId, Address, Latitude, Longitude)
-     VALUES (?, ?, ?, ?)
-     ON CONFLICT(GooglePlaceId) DO UPDATE SET
-       Address   = excluded.Address,
-       Latitude  = excluded.Latitude,
-       Longitude = excluded.Longitude`,
-    googlePlaceId,
-    address,
-    latitude,
-    longitude
+    `INSERT INTO saved_place_cache
+       (user_id, category_code, category_name, category_icon,
+        full_formatted_address, city, country, lat, lng, google_place_id, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, category_code) DO UPDATE SET
+       category_name          = excluded.category_name,
+       category_icon          = excluded.category_icon,
+       full_formatted_address = excluded.full_formatted_address,
+       city                   = excluded.city,
+       country                = excluded.country,
+       lat                    = excluded.lat,
+       lng                    = excluded.lng,
+       google_place_id        = excluded.google_place_id,
+       pending                = excluded.pending`,
+    row.user_id,
+    row.category_code,
+    row.category_name,
+    row.category_icon,
+    row.full_formatted_address,
+    row.city,
+    row.country,
+    row.lat,
+    row.lng,
+    row.google_place_id,
+    row.pending
   );
 }
 
-export async function linkPlaceToCategory(
-  categoryId: number,
-  categoryName: string,
-  placeId: string,
-  label: string | null,
-  isDefault: boolean
+export async function mirrorClearPending(
+  userId: string,
+  categoryCode: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE saved_place_cache SET pending = 0 WHERE user_id = ? AND category_code = ?",
+    userId,
+    categoryCode
+  );
+}
+
+export async function mirrorDeleteSavedPlace(
+  userId: string,
+  categoryCode: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "DELETE FROM saved_place_cache WHERE user_id = ? AND category_code = ?",
+    userId,
+    categoryCode
+  );
+}
+
+/**
+ * Replace the mirror for a user with the authoritative remote rows, but never
+ * clobber rows still pending a remote write (offline saves stay until pushed).
+ */
+export async function mirrorReplaceAll(
+  userId: string,
+  rows: SavedPlaceMirrorRow[]
 ): Promise<void> {
   const db = await getDb();
   await db.withExclusiveTransactionAsync(async (txn) => {
-    if (isDefault) {
+    await txn.runAsync(
+      "DELETE FROM saved_place_cache WHERE user_id = ? AND pending = 0",
+      userId
+    );
+    for (const r of rows) {
       await txn.runAsync(
-        "UPDATE category_places SET is_default = 0 WHERE categoryID = ?",
-        categoryId
+        `INSERT INTO saved_place_cache
+           (user_id, category_code, category_name, category_icon,
+            full_formatted_address, city, country, lat, lng, google_place_id, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+         ON CONFLICT(user_id, category_code) DO UPDATE SET
+           category_name          = excluded.category_name,
+           category_icon          = excluded.category_icon,
+           full_formatted_address = excluded.full_formatted_address,
+           city                   = excluded.city,
+           country                = excluded.country,
+           lat                    = excluded.lat,
+           lng                    = excluded.lng,
+           google_place_id        = excluded.google_place_id,
+           pending                = 0`,
+        r.user_id,
+        r.category_code,
+        r.category_name,
+        r.category_icon,
+        r.full_formatted_address,
+        r.city,
+        r.country,
+        r.lat,
+        r.lng,
+        r.google_place_id
       );
     }
-    await txn.runAsync(
-      `INSERT INTO category_places (categoryID, PlaceID, categoryName, label, is_default)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(categoryID, PlaceID) DO UPDATE SET
-         label      = excluded.label,
-         is_default = excluded.is_default`,
-      categoryId,
-      placeId,
-      categoryName,
-      label,
-      isDefault ? 1 : 0
-    );
   });
-}
-
-export async function removePlaceFromCategory(
-  categoryId: number,
-  placeId: string
-): Promise<void> {
-  const db = await getDb();
-  await db.runAsync(
-    "DELETE FROM category_places WHERE categoryID = ? AND PlaceID = ?",
-    categoryId,
-    placeId
-  );
 }
 
 // ─── Transit Stops Cache ──────────────────────────────────────────────────────

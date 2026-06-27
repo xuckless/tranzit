@@ -104,6 +104,21 @@ export function makeAuthStyles(t: AppTheme) {
       ...typography.buttonLg,
       color: colors.onPrimary,
     },
+    // Outlined secondary action (e.g. "Continue as guest").
+    secondaryBtn: {
+      height: 50,
+      borderRadius: radii.button,
+      backgroundColor: "transparent",
+      borderWidth: 1,
+      borderColor: colors.border,
+      justifyContent: "center",
+      alignItems: "center",
+      marginTop: 12,
+    },
+    secondaryBtnText: {
+      ...typography.buttonLg,
+      color: colors.ink,
+    },
     // Inline text button (e.g. "Forgot password?", "Resend code", "Use backup code").
     linkBtn: {
       alignSelf: "flex-start",

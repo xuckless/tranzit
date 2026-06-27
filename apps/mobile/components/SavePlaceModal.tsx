@@ -7,7 +7,6 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
-  Switch,
   Text,
   TextInput,
   TouchableOpacity,
@@ -16,14 +15,14 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useAuth } from "@/contexts/AuthContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { AutocompletePrediction } from "@/types/places";
 import {
-  getAllCategories,
-  insertCategory,
-  linkPlaceToCategory,
-  upsertPlace,
-} from "@/lib/db";
+  fetchSavedPlaces,
+  savePlace,
+  type SavedPlace,
+} from "@/lib/savedPlaces";
 import type { AppTheme } from "@/styles/themes";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -62,6 +61,7 @@ export function SavePlaceModal({
   userLocation,
 }: Props) {
   const { theme } = useTheme();
+  const { user } = useAuth();
   const { colors, typography, semantic, spacing, radii, shadow } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
@@ -84,17 +84,13 @@ export function SavePlaceModal({
     preselectedPlace ?? null
   );
 
-  // ── Form ──
-  const [label, setLabel] = useState("");
-  const [categories, setCategories] = useState<
-    Array<{ id: number; catName: string }>
-  >([]);
-  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(
-    null
-  );
+  // ── Form ── (one address per category, so no per-place label/default)
+  const [categories, setCategories] = useState<SavedPlace[]>([]);
+  const [selectedCategoryName, setSelectedCategoryName] = useState<
+    string | null
+  >(null);
   const [isCreatingCategory, setIsCreatingCategory] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState("");
-  const [isDefault, setIsDefault] = useState(false);
 
   // ── Save ──
   const [isSaving, setIsSaving] = useState(false);
@@ -110,14 +106,12 @@ export function SavePlaceModal({
     setSearchResults([]);
     setIsResolvingSelection(false);
     setSelectionError(null);
-    setLabel("");
-    setSelectedCategoryId(null);
+    setSelectedCategoryName(null);
     setIsCreatingCategory(false);
     setNewCategoryName("");
-    setIsDefault(false);
     setSaveError(null);
-    getAllCategories().then(setCategories).catch(() => {});
-  }, [visible, preselectedPlace]);
+    if (user) fetchSavedPlaces(user).then(setCategories).catch(() => {});
+  }, [visible, preselectedPlace, user]);
 
   // ─── Search debounce ─────────────────────────────────────────────────────────
 
@@ -174,52 +168,48 @@ export function SavePlaceModal({
     }
   }, []);
 
-  const handleSelectCategory = useCallback((id: number) => {
-    setSelectedCategoryId(id);
+  const handleSelectCategory = useCallback((name: string) => {
+    setSelectedCategoryName(name);
     setIsCreatingCategory(false);
     setNewCategoryName("");
   }, []);
 
   const handleNewCategoryChip = useCallback(() => {
-    setSelectedCategoryId(null);
+    setSelectedCategoryName(null);
     setIsCreatingCategory(true);
   }, []);
 
   const canSave = (() => {
     if (!chosenPlace) return false;
     if (isCreatingCategory) return newCategoryName.trim().length > 0;
-    return selectedCategoryId !== null;
+    return selectedCategoryName !== null;
   })();
 
   const handleSave = async () => {
     if (!canSave || !chosenPlace) return;
+    if (!user) {
+      setSaveError("You need to be signed in to save places.");
+      return;
+    }
     setIsSaving(true);
     setSaveError(null);
     try {
-      let categoryId: number;
-      let categoryName: string;
+      const categoryName = isCreatingCategory
+        ? newCategoryName.trim()
+        : selectedCategoryName!;
 
-      if (isCreatingCategory) {
-        categoryId = await insertCategory(newCategoryName.trim());
-        categoryName = newCategoryName.trim();
-      } else {
-        categoryId = selectedCategoryId!;
-        categoryName = categories.find((c) => c.id === categoryId)!.catName;
-      }
-
-      await upsertPlace(
-        chosenPlace.googlePlaceId,
-        chosenPlace.address,
-        chosenPlace.latitude,
-        chosenPlace.longitude
-      );
-      await linkPlaceToCategory(
-        categoryId,
+      // Best-effort: persists to the user DB and mirrors locally. A remote
+      // failure keeps the place pending rather than throwing, so this resolves.
+      await savePlace({
+        user,
         categoryName,
-        chosenPlace.googlePlaceId,
-        label.trim() || null,
-        isDefault
-      );
+        place: {
+          googlePlaceId: chosenPlace.googlePlaceId,
+          address: chosenPlace.address,
+          latitude: chosenPlace.latitude,
+          longitude: chosenPlace.longitude,
+        },
+      });
 
       onSaved();
       onClose();
@@ -392,20 +382,6 @@ export function SavePlaceModal({
                 </View>
               </View>
 
-              {/* Label input */}
-              <View style={styles.field}>
-                <Text style={[styles.fieldLabel, { color: colors.ink3, opacity: 1 }]}>Label (optional)</Text>
-                <TextInput
-                  style={[styles.textInput, { color: colors.ink, backgroundColor: colors.surface2, borderColor: colors.border }]}
-                  value={label}
-                  onChangeText={setLabel}
-                  placeholder="e.g. Mom's House, My Office…"
-                  placeholderTextColor={colors.ink3}
-                  returnKeyType="done"
-                  maxLength={60}
-                />
-              </View>
-
               {/* Category picker */}
               <View style={styles.field}>
                 <Text style={[styles.fieldLabel, { color: colors.ink3, opacity: 1 }]}>Category</Text>
@@ -416,16 +392,16 @@ export function SavePlaceModal({
                   keyboardShouldPersistTaps="handled"
                 >
                   {categories.map((cat) => {
-                    const selected = selectedCategoryId === cat.id;
+                    const selected = selectedCategoryName === cat.categoryName;
                     return (
                       <TouchableOpacity
-                        key={cat.id}
+                        key={cat.categoryCode}
                         style={[
                           styles.categoryChip,
                           { borderColor: colors.primary },
                           selected && { backgroundColor: colors.primary },
                         ]}
-                        onPress={() => handleSelectCategory(cat.id)}
+                        onPress={() => handleSelectCategory(cat.categoryName)}
                         activeOpacity={0.75}
                       >
                         <Text
@@ -434,7 +410,7 @@ export function SavePlaceModal({
                             { color: selected ? colors.onPrimary : colors.primary },
                           ]}
                         >
-                          {cat.catName}
+                          {cat.categoryName}
                         </Text>
                       </TouchableOpacity>
                     );
@@ -481,26 +457,12 @@ export function SavePlaceModal({
                 )}
               </View>
 
-              {/* Default toggle */}
-              <View style={styles.toggleRow}>
-                <View style={styles.toggleText}>
-                  <Text style={[styles.toggleLabel, { color: colors.ink }]}>
-                    Set as default for this category
-                  </Text>
-                  <Text style={[styles.toggleSub, { color: colors.ink3, opacity: 1 }]}>
-                    Appears in Quick Access on the Map
-                  </Text>
-                </View>
-                <Switch
-                  value={isDefault}
-                  onValueChange={setIsDefault}
-                  trackColor={{
-                    false: colors.muted,
-                    true: colors.primary + "88",
-                  }}
-                  thumbColor={isDefault ? colors.primary : colors.ink3}
-                />
-              </View>
+              {/* Overwrite hint — one address per category */}
+              {selectedCategoryName !== null && !isCreatingCategory && (
+                <Text style={[styles.overwriteNote, { color: colors.ink3 }]}>
+                  This replaces the address saved under “{selectedCategoryName}”.
+                </Text>
+              )}
 
               {/* Error */}
               {saveError && (
@@ -700,22 +662,10 @@ function makeStyles(t: AppTheme) {
       ...typography.captionStrong,
       color: colors.primary,
     },
-    toggleRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingVertical: 4,
-    },
-    toggleText: { flex: 1, marginRight: 12 },
-    toggleLabel: {
-      ...typography.bodyStrong,
-      color: colors.ink,
-    },
-    toggleSub: {
+    overwriteNote: {
       ...typography.caption,
       color: colors.ink3,
-      opacity: 0.5,
-      marginTop: 2,
+      opacity: 0.7,
     },
     saveError: {
       ...typography.caption,

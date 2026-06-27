@@ -17,6 +17,8 @@ interface AuthContextValue {
   isLoaded: boolean;
   /** True when there is an active Supabase session. */
   isSignedIn: boolean;
+  /** True when the active session belongs to an anonymous (guest) user. */
+  isGuest: boolean;
   session: Session | null;
   user: User | null;
   /** True between a password-recovery deep link and the user setting a new password. */
@@ -28,6 +30,7 @@ interface AuthContextValue {
 const AuthContext = createContext<AuthContextValue>({
   isLoaded: false,
   isSignedIn: false,
+  isGuest: false,
   session: null,
   user: null,
   recoveryMode: false,
@@ -108,6 +111,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     () => ({
       isLoaded,
       isSignedIn: !!session,
+      isGuest: session?.user?.is_anonymous ?? false,
       session,
       user: session?.user ?? null,
       recoveryMode,

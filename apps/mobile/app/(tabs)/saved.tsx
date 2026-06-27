@@ -1,106 +1,89 @@
 import {
   ActivityIndicator,
-  SectionList,
+  Alert,
+  FlatList,
   StyleSheet,
   Text,
   TouchableOpacity,
   View,
 } from "react-native";
+import { Swipeable } from "react-native-gesture-handler";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
-import { useState, useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
-import type { SavedPlace } from "@/lib/db";
+import type { SavedPlace } from "@/lib/savedPlaces";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
-import type { AppTheme, PastelKey } from "@/styles/themes";
-// ─── Category → pastel + icon ─────────────────────────────────────────────────
-
-const CATEGORY_STYLE: Record<string, { icon: string; pastel: PastelKey }> = {
-  home: { icon: "home", pastel: "lavender" },
-  work: { icon: "briefcase", pastel: "sky" },
-  office: { icon: "briefcase", pastel: "sky" },
-  school: { icon: "university", pastel: "butter" },
-  university: { icon: "university", pastel: "butter" },
-  gym: { icon: "dumbbell", pastel: "rose" },
-  food: { icon: "utensils", pastel: "peach" },
-  restaurant: { icon: "utensils", pastel: "peach" },
-  health: { icon: "heartbeat", pastel: "rose" },
-  hospital: { icon: "hospital", pastel: "rose" },
-  shopping: { icon: "shopping-bag", pastel: "lavender" },
-  park: { icon: "tree", pastel: "mint" },
-};
-
-function categoryStyle(name: string): { icon: string; pastel: PastelKey } {
-  return (
-    CATEGORY_STYLE[name.toLowerCase()] ?? {
-      icon: "map-marker-alt",
-      pastel: "sky",
-    }
-  );
-}
+import { categoryStyle } from "@/styles/categoryStyle";
+import type { AppTheme } from "@/styles/themes";
 
 // ─── Place row ────────────────────────────────────────────────────────────────
 
 function PlaceRow({
   place,
-  categoryName,
-  categoryId,
-  onSetDefault,
+  onDelete,
 }: {
   place: SavedPlace;
-  categoryName: string;
-  categoryId: number;
-  onSetDefault: (categoryId: number, placeId: string) => void;
+  onDelete: (categoryCode: string, categoryName: string) => void;
 }) {
   const { theme } = useTheme();
   const { colors } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { icon, pastel } = categoryStyle(categoryName);
+  const { pastel } = categoryStyle(place.categoryName);
   const p = theme.colors.pastels[pastel];
-  const displayName = place.label ?? place.address;
-  const subtitle = place.label ? place.address : null;
+
+  const renderRightActions = () => (
+    <TouchableOpacity
+      style={[styles.deleteAction, { backgroundColor: colors.danger }]}
+      onPress={() => onDelete(place.categoryCode, place.categoryName)}
+      activeOpacity={0.85}
+    >
+      <Ionicons name="trash-outline" size={20} color={colors.onPrimary} />
+      <Text style={[styles.deleteActionText, { color: colors.onPrimary }]}>
+        Delete
+      </Text>
+    </TouchableOpacity>
+  );
 
   return (
-    <TouchableOpacity
-      style={styles.placeRow}
-      activeOpacity={0.75}
-      onPress={() => {}}
-    >
-      <View style={[styles.placeIconBox, { backgroundColor: p.bg }]}>
-        <FontAwesome5 name={icon as any} size={15} color={p.ink} />
-      </View>
+    <Swipeable renderRightActions={renderRightActions} overshootRight={false}>
+      <View style={[styles.rowWrap, { backgroundColor: colors.card }]}>
+        <View style={styles.placeRow}>
+          <View style={[styles.placeIconBox, { backgroundColor: p.bg }]}>
+            <FontAwesome5
+              name={place.categoryIcon as any}
+              size={15}
+              color={p.ink}
+            />
+          </View>
 
-      <View style={styles.placeText}>
-        <Text
-          style={[styles.placeName, { color: colors.ink }]}
-          numberOfLines={1}
-        >
-          {displayName}
-        </Text>
-        {subtitle && (
-          <Text
-            style={[styles.placeAddress, { color: colors.ink3 }]}
-            numberOfLines={1}
-          >
-            {subtitle}
-          </Text>
-        )}
-      </View>
+          <View style={styles.placeText}>
+            <Text
+              style={[styles.placeName, { color: colors.ink }]}
+              numberOfLines={1}
+            >
+              {place.categoryName}
+            </Text>
+            <Text
+              style={[styles.placeAddress, { color: colors.ink3 }]}
+              numberOfLines={1}
+            >
+              {place.address}
+            </Text>
+          </View>
 
-      <TouchableOpacity
-        onPress={() => onSetDefault(categoryId, place.googlePlaceId)}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-        activeOpacity={0.7}
-      >
-        <Ionicons
-          name={place.isDefault ? "star" : "star-outline"}
-          size={20}
-          color={place.isDefault ? colors.accent : colors.ink3}
-        />
-      </TouchableOpacity>
-    </TouchableOpacity>
+          {place.pending ? (
+            <Ionicons
+              name="cloud-offline-outline"
+              size={18}
+              color={colors.ink3}
+            />
+          ) : null}
+        </View>
+      </View>
+    </Swipeable>
   );
 }
 
@@ -127,26 +110,27 @@ function EmptyState() {
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
-type Section = {
-  title: string;
-  categoryId: number;
-  data: SavedPlace[];
-};
-
 export default function SavedScreen() {
   const { theme } = useTheme();
-  const { colors, typography } = theme;
+  const { colors } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
-  const { data, loading, error, markDefault, refresh } = useSavedPlaces();
+  const { data, loading, error, refresh, remove } = useSavedPlaces();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
-  const sections: Section[] = data
-    .filter((cat) => cat.places.length > 0)
-    .map((cat) => ({
-      title: cat.catName,
-      categoryId: cat.id,
-      data: cat.places,
-    }));
+  const onDelete = (categoryCode: string, categoryName: string) => {
+    Alert.alert(
+      "Remove saved place",
+      `Remove “${categoryName}” from your saved places?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Remove",
+          style: "destructive",
+          onPress: () => remove(categoryCode),
+        },
+      ],
+    );
+  };
 
   if (loading) {
     return (
@@ -166,16 +150,13 @@ export default function SavedScreen() {
 
   return (
     <View style={[styles.screen, { backgroundColor: colors.surface }]}>
-      <SectionList
-        sections={sections}
-        keyExtractor={(item) => item.googlePlaceId}
+      <FlatList
+        data={data}
+        keyExtractor={(item) => item.categoryCode}
         contentContainerStyle={styles.list}
         showsVerticalScrollIndicator={false}
-        stickySectionHeadersEnabled={false}
         ListHeaderComponent={
-          <View
-            style={[styles.pageHeader, { backgroundColor: colors.surface }]}
-          >
+          <View style={[styles.pageHeader, { backgroundColor: colors.surface }]}>
             <View>
               <Text style={[styles.pageTitle, { color: colors.ink }]}>
                 Saved Places
@@ -185,39 +166,13 @@ export default function SavedScreen() {
               </Text>
             </View>
             <Text style={[styles.placeCount, { color: colors.ink3 }]}>
-              {sections.reduce((n, s) => n + s.data.length, 0)} places
+              {data.length} {data.length === 1 ? "place" : "places"}
             </Text>
           </View>
         }
         ListEmptyComponent={<EmptyState />}
-        renderSectionHeader={({ section }) => (
-          <View style={styles.sectionHeader}>
-            <Text style={[styles.sectionTitle, { color: colors.ink3 }]}>
-              {section.title.toUpperCase()}
-            </Text>
-          </View>
-        )}
-        renderItem={({ item, section }) => (
-          <View
-            style={[
-              styles.rowWrap,
-              { backgroundColor: colors.card, borderColor: colors.divider },
-            ]}
-          >
-            <PlaceRow
-              place={item}
-              categoryName={section.title}
-              categoryId={section.categoryId}
-              onSetDefault={markDefault}
-            />
-          </View>
-        )}
-        SectionSeparatorComponent={() => <View style={{ height: 12 }} />}
-        ItemSeparatorComponent={() => (
-          <View
-            style={[styles.itemSeparator, { backgroundColor: colors.divider }]}
-          />
-        )}
+        renderItem={({ item }) => <PlaceRow place={item} onDelete={onDelete} />}
+        ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
       />
 
       {/* FAB */}
@@ -241,7 +196,7 @@ export default function SavedScreen() {
 // ─── Styles ───────────────────────────────────────────────────────────────────
 
 function makeStyles(t: AppTheme) {
-  const { colors, typography, semantic, spacing, radii, shadow } = t;
+  const { colors, typography, spacing, radii } = t;
   return StyleSheet.create({
     screen: { flex: 1, backgroundColor: colors.surface },
     center: { flex: 1, justifyContent: "center", alignItems: "center" },
@@ -272,19 +227,6 @@ function makeStyles(t: AppTheme) {
     },
 
     list: { paddingBottom: 80 },
-
-    // Section
-    sectionHeader: {
-      paddingHorizontal: spacing.screen,
-      paddingTop: 8,
-      paddingBottom: 6,
-    },
-    sectionTitle: {
-      ...typography.microStrong,
-      letterSpacing: 1.4,
-      color: colors.ink3,
-      textTransform: "uppercase",
-    },
 
     // Rows
     rowWrap: {
@@ -320,10 +262,19 @@ function makeStyles(t: AppTheme) {
       color: colors.ink3,
       marginTop: 2,
     },
-    itemSeparator: {
-      height: 1,
-      backgroundColor: colors.divider,
-      marginLeft: 14 + 44 + 12,
+
+    // Swipe-to-delete action
+    deleteAction: {
+      justifyContent: "center",
+      alignItems: "center",
+      gap: 2,
+      width: 88,
+      marginRight: spacing.screen,
+      borderRadius: 18,
+    },
+    deleteActionText: {
+      ...typography.caption,
+      fontWeight: "700",
     },
 
     // Empty

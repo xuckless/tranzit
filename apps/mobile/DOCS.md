@@ -92,7 +92,7 @@ lib/
 hooks/
   usePlacesSearch.ts       — Single-source search hook (route service /search)
   useDestinationSearch.ts  — Dual-source search hook (/search + /autocomplete/json)
-  useSavedPlaces.ts        — SQLite-backed saved places hooks
+  useSavedPlaces.ts        — saved places hooks (user DB + SQLite mirror)
   useMapPressHandler.ts    — Map long-press → reverse geocode handler
 
 contexts/
@@ -206,13 +206,22 @@ Managed by `lib/db.ts` using `expo-sqlite`. Database file: `tranzit.db`. WAL mod
 **Schema:**
 
 ```
-Category          (Id PK, catName)
-Places            (GooglePlaceId PK, Address, Latitude, Longitude)
-category_places   (categoryID FK, PlaceID FK, categoryName, label, is_default)
+saved_place_cache    (user_id, category_code PK[user_id,category_code], category_name,
+                      category_icon, full_formatted_address, city, country, lat, lng,
+                      google_place_id, pending)
 transit_stops_cache  (globalid PK, teleride_number, stop_name, status, point, cached_at)
 ```
 
-`category_places` has a partial unique index (`uq_one_default_per_category`) enforcing at most one `is_default=1` row per category.
+**Saved places now live in the user DB**, not SQLite. `saved_place_cache` is an
+offline **mirror** of the per-user `saved_addresses` + `user_defined_default_categories`
+tables (one address per category). `lib/savedPlaces.ts` is the orchestrator:
+write-through to the middleware (`syncUserInfo → user_defined_default_categories →
+saved_addresses`, in that FK order), mirror locally, and read mirror-first. `pending = 1`
+marks a row saved offline that the outbox (`pushPending`) retries. Scoped by `user_id`
+so a guest and a real account on one device never collide. The old normalized
+`Category` / `Places` / `category_places` tables (with `uq_one_default_per_category`)
+are dropped on launch. Consumed via `hooks/useSavedPlaces.ts`
+(`useSavedPlaces` / `useQuickAccess`).
 
 `transit_stops_cache` has a 24-hour TTL enforced in code by `getCachedTransitStops()`.
 

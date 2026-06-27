@@ -6,10 +6,13 @@ import {
   TouchableOpacity,
   ScrollView,
   Switch,
+  ActivityIndicator,
+  Alert,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
+import { useUserProfile } from "@/hooks/useUserProfile";
 import { THEMES, THEME_IDS } from "@/styles/themes";
 import type { AppTheme, ThemeId } from "@/styles/themes";
 import { router } from "expo-router";
@@ -20,11 +23,30 @@ export default function SettingsScreen() {
   const styles = makeStyles(theme);
   const isDark = theme.isDark;
 
-  const { user, signOut } = useAuth();
-  const meta = user?.user_metadata ?? {};
-  const displayName = meta.full_name ?? meta.name ?? user?.email ?? "Profile";
-  const displayEmail = user?.email;
-  const avatarUrl: string | null = meta.avatar_url ?? meta.picture ?? null;
+  const { signOut, isGuest } = useAuth();
+  const { profile, loading: profileLoading, error: profileError } =
+    useUserProfile();
+
+  const displayName = profile?.name || profile?.username || "Profile";
+  const avatarUrl: string | null = profile?.avatar ?? null;
+
+  // Profile is read-only for now; the pen buttons are placeholders to wire later.
+  const profileFields: { key: string; label: string; value: string | null }[] =
+    [
+      { key: "name", label: "Name", value: profile?.name ?? null },
+      { key: "username", label: "Username", value: profile?.username ?? null },
+      { key: "email", label: "Email", value: profile?.email ?? null },
+      { key: "dob", label: "Date of birth", value: profile?.date_of_birth ?? null },
+      { key: "city", label: "City", value: profile?.city ?? null },
+      { key: "country", label: "Country", value: profile?.country ?? null },
+      { key: "plan", label: "Plan", value: profile?.subscription_status ?? null },
+    ];
+
+  const onEditField = (label: string) =>
+    Alert.alert(
+      "Coming soon",
+      `Editing your ${label.toLowerCase()} isn't available yet.`,
+    );
 
   return (
     <ScrollView style={styles.container}>
@@ -135,6 +157,7 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Account</Text>
 
+        {/* Profile header */}
         <View style={styles.profileRow}>
           {avatarUrl ? (
             <Image source={{ uri: avatarUrl }} style={styles.avatar} />
@@ -147,13 +170,44 @@ export default function SettingsScreen() {
             <Text style={styles.profileName} numberOfLines={1}>
               {displayName}
             </Text>
-            {displayEmail ? (
-              <Text style={styles.profileEmail} numberOfLines={1}>
-                {displayEmail}
-              </Text>
-            ) : null}
+            <Text style={styles.profileEmail} numberOfLines={1}>
+              {isGuest ? "Guest" : (profile?.email ?? "—")}
+            </Text>
           </View>
         </View>
+
+        {/* Profile details — read from user_info only */}
+        {profileLoading && !profile ? (
+          <View style={styles.profileLoading}>
+            <ActivityIndicator color={colors.primary} />
+          </View>
+        ) : profileError && !profile ? (
+          <Text style={styles.profileErrorText}>{profileError}</Text>
+        ) : (
+          <View style={styles.profileTable}>
+            {profileFields.map((f, i) => (
+              <View
+                key={f.key}
+                style={[
+                  styles.profileFieldRow,
+                  i > 0 && styles.profileFieldDivider,
+                ]}
+              >
+                <Text style={styles.profileFieldLabel}>{f.label}</Text>
+                <Text style={styles.profileFieldValue} numberOfLines={1}>
+                  {f.value || "—"}
+                </Text>
+                <TouchableOpacity
+                  style={styles.editBtn}
+                  onPress={() => onEditField(f.label)}
+                  hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                >
+                  <Ionicons name="pencil" size={15} color={colors.ink3} />
+                </TouchableOpacity>
+              </View>
+            ))}
+          </View>
+        )}
 
         <TouchableOpacity style={[styles.settingItem, styles.settingItemSpaced]}>
           <Ionicons
@@ -328,6 +382,51 @@ function makeStyles(t: AppTheme) {
       color: colors.ink3,
       marginTop: 2,
     },
+
+    // Borderless profile detail table (one card, hairline row dividers).
+    profileTable: {
+      backgroundColor: colors.card,
+      borderRadius: radii.chip,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      paddingHorizontal: 14,
+      marginBottom: spacing.element,
+    },
+    profileFieldRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingVertical: 12,
+      gap: 12,
+    },
+    profileFieldDivider: {
+      borderTopWidth: StyleSheet.hairlineWidth,
+      borderTopColor: colors.divider,
+    },
+    profileFieldLabel: {
+      ...typography.body,
+      color: colors.ink3,
+      width: 110,
+    },
+    profileFieldValue: {
+      ...typography.body,
+      color: colors.ink,
+      flex: 1,
+      textAlign: "right",
+    },
+    editBtn: {
+      padding: 4,
+    },
+    profileLoading: {
+      paddingVertical: 24,
+      alignItems: "center",
+    },
+    profileErrorText: {
+      ...typography.body,
+      color: colors.ink3,
+      paddingVertical: 16,
+      marginBottom: spacing.element,
+    },
+
     switch: {
       marginLeft: "auto",
     },
