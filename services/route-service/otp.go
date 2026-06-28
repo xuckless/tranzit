@@ -393,15 +393,16 @@ func enrichVehicleIDs(itineraries []CleanItinerary) {
 // fetchVehicleIDByTrip returns the vehicle_id currently assigned to tripID, or "" if no
 // live vehicle is reporting that trip. It queries tranzit-db-middleware's generic table API.
 func fetchVehicleIDByTrip(ctx context.Context, tripID string) (string, error) {
+	base, client := middlewareCall()
 	u := fmt.Sprintf("%s/api/v1/vehicle_positions?trip_id=%s&limit=1",
-		middlewareBaseURL(), url.QueryEscape(tripID))
+		base, url.QueryEscape(tripID))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
 	if err != nil {
 		return "", err
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

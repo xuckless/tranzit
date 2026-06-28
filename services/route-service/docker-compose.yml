@@ -41,6 +41,22 @@ services:
       - GMAPS_API_KEY=${GMAPS_API_KEY:-}
       - OTP_BASE_URL=https://tranzit-otp.tailnet-example.ts.net
       - MIDDLEWARE_BASE_URL=https://tranzit-db-middleware.tailnet-example.ts.net
+      # Auth (see AUTH.md): JWT for end users on the Funnel port; mTLS server for
+      # siblings on MTLS_LISTEN_ADDR; mTLS client when calling middleware.
+      - SUPABASE_URL=${SUPABASE_URL:-https://vxpjxjokuzyqigrlvjzb.supabase.co}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-false}
+      - MTLS_LISTEN_ADDR=${MTLS_LISTEN_ADDR:-:8443}
+      - MTLS_CA_CERT=/certs/ca.crt
+      - MTLS_CERT=/certs/tranzit-route-service.crt
+      - MTLS_KEY=/certs/tranzit-route-service.key
+      - MTLS_ALLOWED_CLIENTS=${MTLS_ALLOWED_CLIENTS:-tranzit-route-save}
+      # Empty → calls to middleware use the Funnel URL (safe rollout); set the
+      # tailnet IP:port to switch to mTLS.
+      - MIDDLEWARE_MTLS_ADDR=${MIDDLEWARE_MTLS_ADDR:-}
+      - MIDDLEWARE_MTLS_SERVERNAME=${MIDDLEWARE_MTLS_SERVERNAME:-tranzit-db-middleware}
+    volumes:
+      # mTLS material: ca.crt + this service's leaf (git-ignored; gen with middleware's scripts/gen-mtls-certs.sh).
+      - ./certs:/certs:ro
     restart: unless-stopped
 
 volumes:

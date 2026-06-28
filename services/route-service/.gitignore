@@ -1,7 +1,13 @@
 .env
 
 *.md
+# but DO track the auth docs deliverable
+!AUTH.md
 .claude/
+
+# mTLS key material — never commit. Keep the dir tracked.
+certs/*
+!certs/.gitkeep
 
 .idea/
 *.exe

@@ -1,10 +1,12 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"log"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/gofiber/fiber/v2"
 	"github.com/joho/godotenv"
@@ -26,8 +28,56 @@ func main() {
 		log.Println("No .env file found, relying on environment variables")
 	}
 
-	app := fiber.New()
+	// Auth: end users hit the public (Funnel) listener with a Supabase JWT; sibling
+	// services hit the separate tailnet-only mTLS listener (auth.go / mtls.go, AUTH.md).
+	enforce := envBool("AUTH_ENFORCE", false)
+	verifier := buildVerifier(enforce)
 
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "3100"
+	}
+
+	// Service-to-service mTLS listener (tailnet-only; NOT Funnel-published). Siblings
+	// (route-save) are authenticated by their client cert at the TLS handshake, so it
+	// needs no JWT middleware. Optional: unset MTLS_LISTEN_ADDR disables it.
+	if addr := os.Getenv("MTLS_LISTEN_ADDR"); addr != "" {
+		serviceApp := fiber.New()
+		registerRoutes(serviceApp)
+		go startMTLSListener(addr, serviceApp, enforce)
+	} else {
+		log.Println("mtls: MTLS_LISTEN_ADDR unset — service-to-service listener disabled")
+	}
+
+	// Public listener (Funnel): Supabase JWT, soft/enforce per flag.
+	publicApp := fiber.New()
+	publicApp.Use(fiberAuth(verifier, enforce))
+	registerRoutes(publicApp)
+
+	log.Printf("route-service listening on :%s (auth_enforce=%v)", port, enforce)
+	log.Fatal(publicApp.Listen(":" + port))
+}
+
+// startMTLSListener serves app over a mutual-TLS listener on addr. Fatal on
+// misconfiguration so a broken cert mount can't silently leave S2S unprotected.
+func startMTLSListener(addr string, app *fiber.App, enforce bool) {
+	cfg, err := loadServerMTLS(
+		os.Getenv("MTLS_CA_CERT"), os.Getenv("MTLS_CERT"), os.Getenv("MTLS_KEY"),
+		strings.Split(os.Getenv("MTLS_ALLOWED_CLIENTS"), ","), enforce,
+	)
+	if err != nil {
+		log.Fatalf("mtls: %v", err)
+	}
+	ln, err := tls.Listen("tcp", addr, cfg)
+	if err != nil {
+		log.Fatalf("mtls: listen %s: %v", addr, err)
+	}
+	log.Printf("mtls: service listener on %s (enforce=%v)", addr, enforce)
+	log.Fatal(app.Listener(ln))
+}
+
+// registerRoutes mounts every route on app; called for both the public and mTLS apps.
+func registerRoutes(app *fiber.App) {
 	app.Get("/", func(c *fiber.Ctx) error {
 		return c.SendString("Tranzit Route Service is running.")
 	})
@@ -257,10 +307,4 @@ func main() {
 			},
 		})
 	})
-
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3100"
-	}
-	log.Fatal(app.Listen(":" + port))
 }
