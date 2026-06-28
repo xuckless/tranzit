@@ -4,6 +4,16 @@ import type { TextStyle, ViewStyle } from "react-native";
 
 export type ThemeId = "classic-light" | "classic-dark" | (string & {});
 
+/**
+ * How the active variant of a pack is chosen.
+ * - `system` → follow the OS color scheme (via `useColorScheme()`).
+ * - `light` / `dark` → explicit override.
+ */
+export type ColorSchemePreference = "system" | "light" | "dark";
+
+/** The concrete variant a `ColorSchemePreference` resolves to. */
+export type ResolvedScheme = "light" | "dark";
+
 // ─── Palette tokens ───────────────────────────────────────────────────────────
 
 export type PastelKey =
@@ -234,4 +244,20 @@ export interface AppTheme {
   radii: AppRadius;
   shadow: AppShadow;
   mapPaint: AppMapPaint;
+}
+
+// ─── Theme pack (container) ──────────────────────────────────────────────────
+//
+// A "theme" the user sees is a *pack*: a container that holds a light and a
+// dark `AppTheme`. The active variant is chosen at runtime by the
+// `ColorSchemePreference` (system / light / dark). Future user-specific packs
+// are loaded from JSON (user DB → S3) and parsed into this shape.
+
+export interface ThemePack {
+  /** Stable id, e.g. "classic", "sunset". */
+  id: string;
+  /** Human-facing name shown in the theme picker, e.g. "Classic". */
+  name: string;
+  light: AppTheme;
+  dark: AppTheme;
 }

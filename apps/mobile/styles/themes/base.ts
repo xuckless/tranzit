@@ -1,6 +1,6 @@
 // Shared structural skeleton. Every concrete theme (classic-light, classic-dark)
 // extends this with palette-specific values. Do not import directly; import a
-// preset from `./classic-light` or `./classic-dark` (or via `getTheme()`).
+// preset from `./classic-light` or `./classic-dark` (or via `resolveTheme()`).
 
 import type {
   AppColors,

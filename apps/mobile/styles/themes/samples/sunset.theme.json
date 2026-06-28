@@ -1,0 +1,820 @@
+{
+  "id": "sunset",
+  "name": "Sunset",
+  "light": {
+    "colors": {
+      "primary": "#E2571E",
+      "secondary": "#FFB703",
+      "tertiary": "#D7263D",
+      "neutral": "#000000",
+      "primaryDim": "#FCEAD9",
+      "primaryInk": "#9A3A12",
+      "accent": "#FFB703",
+      "accentInk": "#7A5200",
+      "surface": "#FFF8F2",
+      "surface2": "#FBEFE4",
+      "card": "#FFFFFF",
+      "ink": "#2A1A12",
+      "ink2": "#5A3D2E",
+      "ink3": "#9A8070",
+      "divider": "rgba(15, 20, 16, 0.06)",
+      "success": "#00A84E",
+      "warn": "#E8C800",
+      "danger": "#FF3B30",
+      "muted": "#FBE6D6",
+      "text": "#3D4840",
+      "selected": "#9A3A12",
+      "background": "#FFF8F2",
+      "border": "rgba(15, 20, 16, 0.10)",
+      "error": "#FF3B30",
+      "onPrimary": "#FFFFFF",
+      "pastels": {
+        "peach": {
+          "bg": "#FFE3CC",
+          "ink": "#8A3A10"
+        },
+        "butter": {
+          "bg": "#FFF4B0",
+          "ink": "#7A6200"
+        },
+        "mint": {
+          "bg": "#C8EDD8",
+          "ink": "#005228"
+        },
+        "sky": {
+          "bg": "#CCE8F8",
+          "ink": "#154E7E"
+        },
+        "lavender": {
+          "bg": "#E2D4F8",
+          "ink": "#3E248A"
+        },
+        "rose": {
+          "bg": "#FFD4D0",
+          "ink": "#8A1A14"
+        }
+      }
+    },
+    "typography": {
+      "family": {
+        "sans": "Syne-Regular",
+        "mono": "DMmono-Regular",
+        "display": "Syne-ExtraBold"
+      },
+      "caption": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 12,
+        "fontWeight": "400"
+      },
+      "captionStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 12,
+        "fontWeight": "600"
+      },
+      "micro": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10,
+        "fontWeight": "700"
+      },
+      "microStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10,
+        "fontWeight": "800"
+      },
+      "body": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "400"
+      },
+      "bodyStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "600"
+      },
+      "bodyItalic": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "400",
+        "fontStyle": "italic"
+      },
+      "bodySmall": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "400"
+      },
+      "bodySmallStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600"
+      },
+      "bodyMedium": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14.5,
+        "fontWeight": "400"
+      },
+      "subtitle": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 16,
+        "fontWeight": "400"
+      },
+      "subtitleStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 16,
+        "fontWeight": "700"
+      },
+      "title": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 18,
+        "fontWeight": "700"
+      },
+      "titleLarge": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 20,
+        "fontWeight": "800",
+        "letterSpacing": -0.3
+      },
+      "titleXl": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 22,
+        "fontWeight": "800",
+        "letterSpacing": -0.5
+      },
+      "hero": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 52,
+        "fontWeight": "800",
+        "letterSpacing": -1.5,
+        "lineHeight": 60
+      },
+      "heroUnit": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 28,
+        "fontWeight": "600",
+        "letterSpacing": -0.5
+      },
+      "display": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 28,
+        "fontWeight": "800",
+        "letterSpacing": -0.7
+      },
+      "displayLg": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 30,
+        "fontWeight": "800",
+        "letterSpacing": -0.8
+      },
+      "chipLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 9,
+        "fontWeight": "700"
+      },
+      "chipDelay": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 9,
+        "fontWeight": "700"
+      },
+      "tabLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10.5,
+        "fontWeight": "700",
+        "letterSpacing": 0.1
+      },
+      "cardTitle": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 24,
+        "fontWeight": "800"
+      },
+      "buttonLg": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 15,
+        "fontWeight": "600"
+      },
+      "buttonMd": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 14,
+        "fontWeight": "700"
+      },
+      "fieldLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600"
+      },
+      "meta": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 15.5,
+        "fontWeight": "700",
+        "letterSpacing": -0.2
+      },
+      "badge": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 11,
+        "fontWeight": "700"
+      },
+      "badgeLg": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600",
+        "letterSpacing": 0.2
+      },
+      "metaLg": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 17,
+        "fontWeight": "700"
+      },
+      "arrival": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 18,
+        "fontWeight": "700"
+      },
+      "mono": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 12,
+        "fontWeight": "400"
+      },
+      "monoBody": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 11,
+        "fontWeight": "400"
+      },
+      "monoSearch": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 13,
+        "fontWeight": "400"
+      },
+      "delayOnTime": "#2E7D32",
+      "delayLate": "#C62828",
+      "delayEarly": "#1565C0"
+    },
+    "semantic": {
+      "warning": "#F59E0B",
+      "warningInk": "#D97706",
+      "warningBg": "#FEF3C7",
+      "danger": "#EF4444",
+      "success": "#16A34A",
+      "neutralLine": "#BBCBB9",
+      "panelTitle": "#1A1C1F",
+      "handle": "#DEDEDE",
+      "handleHint": "#B0B4BF",
+      "sheetBg": "#FFFFFF",
+      "shadow": "#000000",
+      "backdrop": "rgba(0,0,0,0.45)",
+      "primaryButtonText": "#FFFFFF",
+      "offWhite": "rgba(255,255,255,0.75)",
+      "offWhiteStrong": "rgba(255,255,255,0.85)",
+      "errorBannerBg": "#FFEDEA",
+      "errorBannerBorder": "#FFCDC7",
+      "errorBannerText": "#BA1A1A",
+      "routePalette": [
+        "#0058BC",
+        "#FF5722",
+        "#2E7D32",
+        "#6A1B9A"
+      ],
+      "unselectedPolyline": "#C1C6D7",
+      "categoryIcons": {
+        "work": "#0070EB",
+        "food": "#E0A000",
+        "health": "#D32F2F",
+        "shopping": "#9C27B0",
+        "park": "#388E3C",
+        "school": "#005228",
+        "gym": "#FF3B30",
+        "other": "#0070EB"
+      },
+      "primaryChipBlue": "#3b7bff",
+      "primaryChipBlueBg": "rgba(59,123,255,0.1)",
+      "primaryChipBlueBorder": "rgba(59,123,255,0.25)",
+      "thumbColor": "#FFFFFF",
+      "shadowCardOverlay": "rgba(20,30,80,0.06)",
+      "shadowSoft": "rgba(20,30,80,0.04)",
+      "walkChipBg": "#F0F0F0",
+      "cardSelectedBg": "#F5F8FF",
+      "buttonShadow": "#000000",
+      "openPillBg": "#D5EAE0",
+      "openPillText": "#2A6A45",
+      "closedPillBg": "#FFEDEA",
+      "closedPillText": "#BA1A1A",
+      "selected": "#E2571E"
+    },
+    "spacing": {
+      "screen": 18,
+      "card": 16,
+      "element": 8,
+      "xs": 4
+    },
+    "radii": {
+      "chip": 12,
+      "button": 18,
+      "card": 22,
+      "sheet": 28,
+      "element": 8,
+      "pill": 99,
+      "fab": 18
+    },
+    "shadow": {
+      "card": {
+        "shadowColor": "rgba(0, 20, 10, 0.08)",
+        "shadowOffset": {
+          "width": 0,
+          "height": 4
+        },
+        "shadowOpacity": 1,
+        "shadowRadius": 12,
+        "elevation": 3
+      },
+      "floating": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 6
+        },
+        "shadowOpacity": 0.15,
+        "shadowRadius": 16,
+        "elevation": 10
+      },
+      "liveBadge": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 2
+        },
+        "shadowOpacity": 0.15,
+        "shadowRadius": 4,
+        "elevation": 4
+      },
+      "soft": {
+        "shadowColor": "rgba(20,30,80,0.04)",
+        "shadowOffset": {
+          "width": 0,
+          "height": 1
+        },
+        "shadowOpacity": 1,
+        "shadowRadius": 2,
+        "elevation": 1
+      },
+      "button": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 4
+        },
+        "shadowOpacity": 0.25,
+        "shadowRadius": 8,
+        "elevation": 4
+      }
+    },
+    "mapPaint": {
+      "baseStyle": "",
+      "stopCircle": {
+        "color": "#E2571E",
+        "stroke": "#FFFFFF",
+        "strokeWidth": 2,
+        "opacity": 0.95,
+        "activeRadius": 7,
+        "upcomingRadius": 4
+      },
+      "busSymbol": {
+        "iconSize": 0.12,
+        "textSize": 10,
+        "textColor": "#FFFFFF",
+        "haloColor": "rgba(0,0,0,0.45)",
+        "haloWidth": 1
+      },
+      "polyline": {
+        "completed": "#E2571E",
+        "remaining": "#E2571E",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "destination": "#FFB703",
+        "upcoming": "#C1C6D7",
+        "walk": "#6B7280",
+        "width": 5
+      },
+      "stopMatch": {
+        "active": "#E2571E",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "upcoming": "#C1C6D7",
+        "destination": "#FFB703",
+        "departed": "#E2571E"
+      },
+      "timelineMatch": {
+        "current": "#E2571E",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "upcoming": "#C1C6D7",
+        "destination": "#FFB703",
+        "departed": "#E2571E"
+      }
+    }
+  },
+  "dark": {
+    "colors": {
+      "primary": "#FF7A3C",
+      "secondary": "#FFB703",
+      "tertiary": "#FF5C6C",
+      "neutral": "#FFFFFF",
+      "primaryDim": "#3A1E10",
+      "primaryInk": "#FFB088",
+      "accent": "#FFB703",
+      "accentInk": "#F5C04A",
+      "surface": "#1A100A",
+      "surface2": "#241710",
+      "card": "#2A1C14",
+      "ink": "#F5E6DA",
+      "ink2": "#C8A992",
+      "ink3": "#8A7060",
+      "divider": "rgba(255, 255, 255, 0.08)",
+      "success": "#00C45A",
+      "warn": "#E8C800",
+      "danger": "#FF3B30",
+      "muted": "#2E1C12",
+      "text": "#A8B5AA",
+      "selected": "#FFB088",
+      "background": "#1A100A",
+      "border": "rgba(255, 255, 255, 0.12)",
+      "error": "#FF3B30",
+      "onPrimary": "#FFFFFF",
+      "pastels": {
+        "peach": {
+          "bg": "#3A2418",
+          "ink": "#FFE3CC"
+        },
+        "butter": {
+          "bg": "#3A3416",
+          "ink": "#FFF4B0"
+        },
+        "mint": {
+          "bg": "#0F2E1A",
+          "ink": "#C8EDD8"
+        },
+        "sky": {
+          "bg": "#102536",
+          "ink": "#CCE8F8"
+        },
+        "lavender": {
+          "bg": "#231B3F",
+          "ink": "#E2D4F8"
+        },
+        "rose": {
+          "bg": "#3A1A18",
+          "ink": "#FFD4D0"
+        }
+      }
+    },
+    "typography": {
+      "family": {
+        "sans": "Syne-Regular",
+        "mono": "DMmono-Regular",
+        "display": "Syne-ExtraBold"
+      },
+      "caption": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 12,
+        "fontWeight": "400"
+      },
+      "captionStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 12,
+        "fontWeight": "600"
+      },
+      "micro": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10,
+        "fontWeight": "700"
+      },
+      "microStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10,
+        "fontWeight": "800"
+      },
+      "body": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "400"
+      },
+      "bodyStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "600"
+      },
+      "bodyItalic": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14,
+        "fontWeight": "400",
+        "fontStyle": "italic"
+      },
+      "bodySmall": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "400"
+      },
+      "bodySmallStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600"
+      },
+      "bodyMedium": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 14.5,
+        "fontWeight": "400"
+      },
+      "subtitle": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 16,
+        "fontWeight": "400"
+      },
+      "subtitleStrong": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 16,
+        "fontWeight": "700"
+      },
+      "title": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 18,
+        "fontWeight": "700"
+      },
+      "titleLarge": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 20,
+        "fontWeight": "800",
+        "letterSpacing": -0.3
+      },
+      "titleXl": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 22,
+        "fontWeight": "800",
+        "letterSpacing": -0.5
+      },
+      "hero": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 52,
+        "fontWeight": "800",
+        "letterSpacing": -1.5,
+        "lineHeight": 60
+      },
+      "heroUnit": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 28,
+        "fontWeight": "600",
+        "letterSpacing": -0.5
+      },
+      "display": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 28,
+        "fontWeight": "800",
+        "letterSpacing": -0.7
+      },
+      "displayLg": {
+        "fontFamily": "Syne-ExtraBold",
+        "fontSize": 30,
+        "fontWeight": "800",
+        "letterSpacing": -0.8
+      },
+      "chipLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 9,
+        "fontWeight": "700"
+      },
+      "chipDelay": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 9,
+        "fontWeight": "700"
+      },
+      "tabLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 10.5,
+        "fontWeight": "700",
+        "letterSpacing": 0.1
+      },
+      "cardTitle": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 24,
+        "fontWeight": "800"
+      },
+      "buttonLg": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 15,
+        "fontWeight": "600"
+      },
+      "buttonMd": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 14,
+        "fontWeight": "700"
+      },
+      "fieldLabel": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600"
+      },
+      "meta": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 15.5,
+        "fontWeight": "700",
+        "letterSpacing": -0.2
+      },
+      "badge": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 11,
+        "fontWeight": "700"
+      },
+      "badgeLg": {
+        "fontFamily": "Syne-Regular",
+        "fontSize": 13,
+        "fontWeight": "600",
+        "letterSpacing": 0.2
+      },
+      "metaLg": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 17,
+        "fontWeight": "700"
+      },
+      "arrival": {
+        "fontFamily": "Syne-Bold",
+        "fontSize": 18,
+        "fontWeight": "700"
+      },
+      "mono": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 12,
+        "fontWeight": "400"
+      },
+      "monoBody": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 11,
+        "fontWeight": "400"
+      },
+      "monoSearch": {
+        "fontFamily": "DMmono-Regular",
+        "fontSize": 13,
+        "fontWeight": "400"
+      },
+      "delayOnTime": "#2E7D32",
+      "delayLate": "#C62828",
+      "delayEarly": "#1565C0"
+    },
+    "semantic": {
+      "warning": "#F59E0B",
+      "warningInk": "#D97706",
+      "warningBg": "#3A2A10",
+      "danger": "#EF4444",
+      "success": "#16A34A",
+      "neutralLine": "#3A4840",
+      "panelTitle": "#E8F0E9",
+      "handle": "#3A4840",
+      "handleHint": "#6A7870",
+      "sheetBg": "#1E2620",
+      "shadow": "#000000",
+      "backdrop": "rgba(0,0,0,0.65)",
+      "primaryButtonText": "#FFFFFF",
+      "offWhite": "rgba(255,255,255,0.75)",
+      "offWhiteStrong": "rgba(255,255,255,0.85)",
+      "errorBannerBg": "#3A1A18",
+      "errorBannerBorder": "#5A2A28",
+      "errorBannerText": "#FFB4AE",
+      "routePalette": [
+        "#4F8FE0",
+        "#FF8A65",
+        "#66BB6A",
+        "#BA68C8"
+      ],
+      "unselectedPolyline": "#3A4840",
+      "categoryIcons": {
+        "work": "#4F8FE0",
+        "food": "#E0A000",
+        "health": "#FF6B6B",
+        "shopping": "#BA68C8",
+        "park": "#66BB6A",
+        "school": "#6DD49A",
+        "gym": "#FF8A80",
+        "other": "#4F8FE0"
+      },
+      "primaryChipBlue": "#7B9EFF",
+      "primaryChipBlueBg": "rgba(123,158,255,0.18)",
+      "primaryChipBlueBorder": "rgba(123,158,255,0.35)",
+      "thumbColor": "#FFFFFF",
+      "shadowCardOverlay": "rgba(0,0,0,0.4)",
+      "shadowSoft": "rgba(0,0,0,0.5)",
+      "walkChipBg": "#2A3530",
+      "cardSelectedBg": "#0D2E1A",
+      "buttonShadow": "#000000",
+      "openPillBg": "#0D2E1A",
+      "openPillText": "#6DD49A",
+      "closedPillBg": "#3A1A18",
+      "closedPillText": "#FFB4AE",
+      "selected": "#FF7A3C"
+    },
+    "spacing": {
+      "screen": 18,
+      "card": 16,
+      "element": 8,
+      "xs": 4
+    },
+    "radii": {
+      "chip": 12,
+      "button": 18,
+      "card": 22,
+      "sheet": 28,
+      "element": 8,
+      "pill": 99,
+      "fab": 18
+    },
+    "shadow": {
+      "card": {
+        "shadowColor": "rgba(0, 0, 0, 0.5)",
+        "shadowOffset": {
+          "width": 0,
+          "height": 4
+        },
+        "shadowOpacity": 1,
+        "shadowRadius": 12,
+        "elevation": 3
+      },
+      "floating": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 6
+        },
+        "shadowOpacity": 0.6,
+        "shadowRadius": 16,
+        "elevation": 10
+      },
+      "liveBadge": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 2
+        },
+        "shadowOpacity": 0.5,
+        "shadowRadius": 4,
+        "elevation": 4
+      },
+      "soft": {
+        "shadowColor": "rgba(0, 0, 0, 0.5)",
+        "shadowOffset": {
+          "width": 0,
+          "height": 1
+        },
+        "shadowOpacity": 1,
+        "shadowRadius": 2,
+        "elevation": 1
+      },
+      "button": {
+        "shadowColor": "#000000",
+        "shadowOffset": {
+          "width": 0,
+          "height": 4
+        },
+        "shadowOpacity": 0.5,
+        "shadowRadius": 8,
+        "elevation": 4
+      }
+    },
+    "mapPaint": {
+      "baseStyle": "",
+      "stopCircle": {
+        "color": "#FF7A3C",
+        "stroke": "#0F1410",
+        "strokeWidth": 2,
+        "opacity": 0.95,
+        "activeRadius": 7,
+        "upcomingRadius": 4
+      },
+      "busSymbol": {
+        "iconSize": 0.12,
+        "textSize": 10,
+        "textColor": "#FFFFFF",
+        "haloColor": "rgba(0,0,0,0.55)",
+        "haloWidth": 1
+      },
+      "polyline": {
+        "completed": "#FF7A3C",
+        "remaining": "#FF7A3C",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "destination": "#FFB703",
+        "upcoming": "#3A4840",
+        "walk": "#9CA3AF",
+        "width": 5
+      },
+      "stopMatch": {
+        "active": "#FF7A3C",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "upcoming": "#3A4840",
+        "destination": "#FFB703",
+        "departed": "#FF7A3C"
+      },
+      "timelineMatch": {
+        "current": "#FF7A3C",
+        "unsure": "#F59E0B",
+        "missed": "#EF4444",
+        "upcoming": "#3A4840",
+        "destination": "#FFB703",
+        "departed": "#FF7A3C"
+      }
+    }
+  }
+}

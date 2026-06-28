@@ -5,7 +5,6 @@ import {
   StyleSheet,
   TouchableOpacity,
   ScrollView,
-  Switch,
   ActivityIndicator,
   Alert,
 } from "react-native";
@@ -13,15 +12,30 @@ import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "@/contexts/AuthContext";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useUserProfile } from "@/hooks/useUserProfile";
-import { THEMES, THEME_IDS } from "@/styles/themes";
-import type { AppTheme, ThemeId } from "@/styles/themes";
+import type { AppTheme, ColorSchemePreference } from "@/styles/themes";
 import { router } from "expo-router";
 
+const MODES: {
+  key: ColorSchemePreference;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+}[] = [
+  { key: "system", label: "System", icon: "phone-portrait-outline" },
+  { key: "light", label: "Light", icon: "sunny-outline" },
+  { key: "dark", label: "Dark", icon: "moon-outline" },
+];
+
 export default function SettingsScreen() {
-  const { theme, themeId, setThemeId } = useTheme();
-  const { colors, typography, semantic, spacing, radii } = theme;
+  const {
+    theme,
+    packId,
+    schemePreference,
+    setPackId,
+    setSchemePreference,
+    availablePacks,
+  } = useTheme();
+  const { colors } = theme;
   const styles = makeStyles(theme);
-  const isDark = theme.isDark;
 
   const { signOut, isGuest } = useAuth();
   const { profile, loading: profileLoading, error: profileError } =
@@ -60,57 +74,81 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Appearance</Text>
 
-        {/* ── Theme picker ── */}
-        <View style={styles.themeGroup}>
-          {THEME_IDS.map((id) => {
-            const preset = THEMES[id];
-            const active = id === themeId;
+        {/* ── Mode: System / Light / Dark ── */}
+        <Text style={styles.fieldLabel}>Mode</Text>
+        <View style={styles.modeRow}>
+          {MODES.map((m) => {
+            const active = schemePreference === m.key;
             return (
               <TouchableOpacity
-                key={id}
-                style={[
-                  styles.themeChip,
-                  active && styles.themeChipActive,
-                ]}
-                onPress={() => setThemeId(id as ThemeId)}
+                key={m.key}
+                style={[styles.modeSegment, active && styles.modeSegmentActive]}
+                onPress={() => setSchemePreference(m.key)}
+                activeOpacity={0.85}
+              >
+                <Ionicons
+                  name={m.icon}
+                  size={16}
+                  color={active ? colors.onPrimary : colors.ink3}
+                />
+                <Text
+                  style={[styles.modeText, active && styles.modeTextActive]}
+                >
+                  {m.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
+        {/* ── Theme pack picker (each pack carries a light + dark variant) ── */}
+        <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>Theme</Text>
+        <View style={styles.themeGroup}>
+          {availablePacks.map((pack) => {
+            const active = pack.id === packId;
+            return (
+              <TouchableOpacity
+                key={pack.id}
+                style={[styles.themeChip, active && styles.themeChipActive]}
+                onPress={() => setPackId(pack.id)}
                 activeOpacity={0.8}
               >
                 <View style={styles.themeSwatches}>
                   <View
                     style={[
                       styles.themeSwatch,
-                      { backgroundColor: preset.colors.primary },
-                    ]}
-                  />
-                  <View
-                    style={[
-                      styles.themeSwatch,
-                      { backgroundColor: preset.colors.secondary },
+                      { backgroundColor: pack.light.colors.primary },
                     ]}
                   />
                   <View
                     style={[
                       styles.themeSwatch,
                       {
-                        backgroundColor: preset.colors.surface,
-                        borderColor: preset.colors.border,
+                        backgroundColor: pack.light.colors.surface,
+                        borderColor: pack.light.colors.border,
                       },
                     ]}
                   />
                   <View
                     style={[
                       styles.themeSwatch,
-                      { backgroundColor: preset.colors.ink },
+                      {
+                        backgroundColor: pack.dark.colors.surface,
+                        borderColor: pack.dark.colors.border,
+                      },
+                    ]}
+                  />
+                  <View
+                    style={[
+                      styles.themeSwatch,
+                      { backgroundColor: pack.dark.colors.primary },
                     ]}
                   />
                 </View>
                 <Text
-                  style={[
-                    styles.themeLabel,
-                    active && styles.themeLabelActive,
-                  ]}
+                  style={[styles.themeLabel, active && styles.themeLabelActive]}
                 >
-                  {formatThemeName(id)}
+                  {pack.name}
                 </Text>
                 {active && (
                   <Ionicons
@@ -122,21 +160,6 @@ export default function SettingsScreen() {
               </TouchableOpacity>
             );
           })}
-        </View>
-
-        {/* ── Quick dark-mode toggle (still useful for power users) ── */}
-        <View style={styles.settingItem}>
-          <Ionicons name="moon-outline" size={22} color={colors.primary} />
-          <Text style={styles.settingText}>Dark Mode</Text>
-          <Switch
-            value={isDark}
-            onValueChange={() =>
-              setThemeId(isDark ? "classic-light" : "classic-dark")
-            }
-            trackColor={{ false: colors.divider, true: colors.primary }}
-            thumbColor={isDark ? semantic.thumbColor : colors.ink3}
-            style={styles.switch}
-          />
         </View>
       </View>
 
@@ -234,13 +257,6 @@ export default function SettingsScreen() {
   );
 }
 
-function formatThemeName(id: string): string {
-  return id
-    .split("-")
-    .map((s) => s.charAt(0).toUpperCase() + s.slice(1))
-    .join(" ");
-}
-
 function makeStyles(t: AppTheme) {
   const { colors, typography, semantic, spacing, radii } = t;
   return StyleSheet.create({
@@ -291,6 +307,44 @@ function makeStyles(t: AppTheme) {
     },
     settingItemSpaced: {
       marginTop: spacing.card,
+    },
+    fieldLabel: {
+      ...typography.fieldLabel,
+      color: colors.ink3,
+      marginBottom: spacing.element,
+    },
+    fieldLabelSpaced: {
+      marginTop: spacing.element,
+    },
+    modeRow: {
+      flexDirection: "row",
+      backgroundColor: colors.surface2,
+      borderRadius: radii.chip,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: 4,
+      gap: 4,
+      marginBottom: spacing.card,
+    },
+    modeSegment: {
+      flex: 1,
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 6,
+      paddingVertical: 9,
+      borderRadius: radii.element,
+    },
+    modeSegmentActive: {
+      backgroundColor: colors.primary,
+    },
+    modeText: {
+      ...typography.buttonMd,
+      color: colors.ink2,
+    },
+    modeTextActive: {
+      color: colors.onPrimary,
+      fontWeight: "700",
     },
     themeGroup: {
       gap: spacing.element,
@@ -425,10 +479,6 @@ function makeStyles(t: AppTheme) {
       color: colors.ink3,
       paddingVertical: 16,
       marginBottom: spacing.element,
-    },
-
-    switch: {
-      marginLeft: "auto",
     },
   });
 }
