@@ -14,6 +14,7 @@ package main
 import (
 	"context"
 	"math"
+	"strings"
 	"time"
 
 	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
@@ -61,7 +62,18 @@ func sanitizeStopTimes(ctx context.Context, q querier, live *gtfs.FeedMessage) e
 		}
 		sched := schedules[tu.GetTrip().GetTripId()]
 		if len(sched) == 0 {
-			continue // unscheduled / added trip — leave its updates untouched
+			// Unscheduled / ADDED trip: OTP resolves its stops by stop_id (no static schedule
+			// to match by sequence), so an empty stop_id is fatal — "Missing mandatory id on
+			// FeedScopeId" drops the whole update. Strip the STUs Calgary sent without a stop_id;
+			// pass the rest through untouched.
+			kept := tu.StopTimeUpdate[:0]
+			for _, stu := range tu.StopTimeUpdate {
+				if strings.TrimSpace(stu.GetStopId()) != "" {
+					kept = append(kept, stu)
+				}
+			}
+			tu.StopTimeUpdate = kept
+			continue
 		}
 		if rebuilt := rebuildTimetable(tu, sched); rebuilt != nil {
 			tu.StopTimeUpdate = rebuilt
