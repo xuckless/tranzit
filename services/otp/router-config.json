@@ -4,7 +4,8 @@
     "streetRoutingTimeout": "10s",
     "transferSlack": "2m",
     "walkSpeed": 1.33,
-    "bikeSpeed": 5.0
+    "bikeSpeed": 5.0,
+    "maxSearchWindow": "PT24H"
   },
   "updaters": [
     {
