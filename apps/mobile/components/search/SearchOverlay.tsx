@@ -184,6 +184,10 @@ export const SearchOverlay: React.FC<Props> = ({
   }));
 
   const showRecents = query.trim() === "" && recents.length > 0;
+  const recentSuggestions = useMemo(
+    () => recents.map(recentToSuggestion),
+    [recents],
+  );
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -252,7 +256,7 @@ export const SearchOverlay: React.FC<Props> = ({
           {showRecents ? (
             <DestinationSuggestionsList
               variant="recent"
-              suggestions={recents.map(recentToSuggestion)}
+              suggestions={recentSuggestions}
               onSelect={handleSelect}
             />
           ) : status === "loading" ? (

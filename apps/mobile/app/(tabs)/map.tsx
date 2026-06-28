@@ -36,7 +36,7 @@ import * as Location from "expo-location";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { useTheme } from "@/contexts/ThemeContext";
-import { useRouter } from "expo-router";
+import { useRouter, useFocusEffect } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { PlaceDetails } from "@/types/places";
 import { useQuickAccess } from "@/hooks/useSavedPlaces";
@@ -288,14 +288,25 @@ export default function MapScreen() {
   );
 
   // ── Nearby stops (tile-filtered) ─────────────────────────────────────────────
-  const nearbyTransitStops = useMemo(() => {
-    if (!userLocation) return [];
-    const ZOOM = 15;
-    const { x: ux, y: uy } = latLngToTile(
+  const NEARBY_ZOOM = 15;
+  // Quantize the user position to its zoom-15 tile. GPS jitter within a tile
+  // (~1km) keeps the same key, so the ~3000-stop scan below doesn't re-run on
+  // every GPS sample — only when the user actually crosses a tile boundary.
+  const userTileKey = useMemo(() => {
+    if (!userLocation) return "";
+    const { x, y } = latLngToTile(
       userLocation.latitude,
       userLocation.longitude,
-      ZOOM,
+      NEARBY_ZOOM,
     );
+    return `${x},${y}`;
+  }, [userLocation]);
+
+  const nearbyTransitStops = useMemo(() => {
+    // Only consumed by the expanded "Nearby Stops" panel — skip the scan entirely
+    // while it's collapsed.
+    if (!isExpanded || !userTileKey) return [];
+    const [ux, uy] = userTileKey.split(",").map(Number);
     const tileSet = new Set<string>();
     for (let dx = -1; dx <= 1; dx++) {
       for (let dy = -1; dy <= 1; dy++) {
@@ -307,11 +318,15 @@ export default function MapScreen() {
         if (!stop.point) return false;
         const coord = parseWKTPoint(stop.point);
         if (!coord) return false;
-        const { x, y } = latLngToTile(coord.latitude, coord.longitude, ZOOM);
+        const { x, y } = latLngToTile(
+          coord.latitude,
+          coord.longitude,
+          NEARBY_ZOOM,
+        );
         return tileSet.has(`${x},${y}`);
       })
       .slice(0, 20);
-  }, [transitStops, userLocation]);
+  }, [transitStops, userTileKey, isExpanded]);
 
   // ── Camera helpers ───────────────────────────────────────────────────────────
   const flyTo = useCallback((coord: Coordinate, zoom = 14, duration = 800) => {
@@ -634,28 +649,41 @@ export default function MapScreen() {
   }, [transitStops, flyTo]);
 
   // ── GPS watch (position only — UserLocation handles heading natively) ────────
-  useEffect(() => {
-    if (!hasPermission) return;
-    let posSub: Location.LocationSubscription;
-    (async () => {
-      posSub = await Location.watchPositionAsync(
-        {
-          accuracy: Location.Accuracy.BestForNavigation,
-          distanceInterval: 2,
-          timeInterval: 1000,
-        },
-        ({ coords }) => {
-          setUserLocation({
-            latitude: coords.latitude,
-            longitude: coords.longitude,
-          });
-        },
-      );
-    })();
-    return () => {
-      posSub?.remove();
-    };
-  }, [hasPermission]);
+  // Browsing the map doesn't need turn-by-turn fidelity, so use a balanced,
+  // low-cadence watch instead of BestForNavigation@1Hz (which pins the GPS chip
+  // and re-renders the screen every second). useFocusEffect tears the watch down
+  // when the tab is blurred, so it doesn't keep running behind the other tabs.
+  useFocusEffect(
+    useCallback(() => {
+      if (!hasPermission) return;
+      let posSub: Location.LocationSubscription | undefined;
+      let cancelled = false;
+      (async () => {
+        const sub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.Balanced,
+            distanceInterval: 10,
+            timeInterval: 5000,
+          },
+          ({ coords }) => {
+            setUserLocation({
+              latitude: coords.latitude,
+              longitude: coords.longitude,
+            });
+          },
+        );
+        if (cancelled) {
+          sub.remove();
+          return;
+        }
+        posSub = sub;
+      })();
+      return () => {
+        cancelled = true;
+        posSub?.remove();
+      };
+    }, [hasPermission]),
+  );
 
   useEffect(() => {
     requestLocationPermission();

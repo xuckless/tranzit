@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -37,7 +37,7 @@ const PROVIDERS: {
  */
 export function SocialButtons() {
   const { theme } = useTheme();
-  const styles = makeStyles(theme);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   const iconColor = theme.colors.ink;
   const [pending, setPending] = useState<Provider | null>(null);
 

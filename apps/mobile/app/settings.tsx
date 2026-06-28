@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import {
   View,
   Text,
@@ -35,7 +36,7 @@ export default function SettingsScreen() {
     availablePacks,
   } = useTheme();
   const { colors } = theme;
-  const styles = makeStyles(theme);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const { signOut, isGuest } = useAuth();
   const { profile, loading: profileLoading, error: profileError } =

@@ -85,16 +85,35 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
   },
 });
 
+// ── In-memory access-token cache ─────────────────────────────────────────────
+// supabase.auth.getSession() reads + decrypts the whole session from the chunked
+// SecureStore adapter on *every* call (multiple Android-Keystore round-trips,
+// serialized under an internal lock). Calling it per REST/SSE/WS request — as the
+// app now does on all backend calls — was a major source of interactive jank
+// (e.g. while typing a destination). Instead we mirror the current access token
+// into a module-level variable, kept fresh by onAuthStateChange: with
+// autoRefreshToken enabled, a near-expiry refresh fires TOKEN_REFRESHED, so the
+// cache is always current without re-reading SecureStore.
+let cachedToken: string | null = null;
+
+supabase.auth.onAuthStateChange((_event, session) => {
+  cachedToken = session?.access_token ?? null;
+});
+
 /**
  * The current Supabase access token (JWT), or null when signed out. Backends that
  * verify auth (e.g. Route Save) expect this as `Authorization: Bearer <token>` on
- * REST calls and as the `?token=` query param on the trip WebSocket. getSession()
- * transparently refreshes a near-expired token, so callers should fetch it fresh
- * per request/connection rather than caching it.
+ * REST calls and as the `?token=` query param on the trip WebSocket.
+ *
+ * Resolves synchronously from the in-memory cache (kept fresh via
+ * onAuthStateChange). On a cold start before the first auth event has fired, it
+ * falls back to getSession() once and seeds the cache.
  */
 export async function getAccessToken(): Promise<string | null> {
+  if (cachedToken != null) return cachedToken;
   const { data } = await supabase.auth.getSession();
-  return data.session?.access_token ?? null;
+  cachedToken = data.session?.access_token ?? null;
+  return cachedToken;
 }
 
 /**

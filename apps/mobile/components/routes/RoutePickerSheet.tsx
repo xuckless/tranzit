@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo, useMemo } from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
@@ -75,7 +75,11 @@ function condense(steps: RouteStep[]): ChipItem[] {
 // ─── Transit chip with live SSE delay ────────────────────────────────────────
 // Must be a proper component to call the hook.
 
-function TransitChipLive({ step }: { step: RouteStep }) {
+const TransitChipLive = memo(function TransitChipLive({
+  step,
+}: {
+  step: RouteStep;
+}) {
   const { theme } = useTheme();
   const { typography } = theme;
   const nameShort =
@@ -143,19 +147,30 @@ function TransitChipLive({ step }: { step: RouteStep }) {
       )}
     </View>
   );
-}
+});
 
 // ─── Step Chips row ───────────────────────────────────────────────────────────
 
-export function StepChips({ steps }: { steps: RouteStep[] }) {
+export const StepChips = memo(function StepChips({
+  steps,
+}: {
+  steps: RouteStep[];
+}) {
   const { theme } = useTheme();
   const { colors, semantic, typography } = theme;
-  const items = condense(steps);
+  const items = useMemo(() => condense(steps), [steps]);
 
   return (
     <View style={chipStyles.row}>
-      {items.map((item, i) => (
-        <React.Fragment key={i}>
+      {items.map((item, i) => {
+        // Content-based keys so re-renders never remount a chip (which would
+        // tear down/reopen its live SSE subscription).
+        const key =
+          item.kind === "transit"
+            ? `t-${item.step.transitDetails?.transitLine?.nameShort ?? ""}-${item.step.transitDetails?.stopDetails?.departureTime ?? i}`
+            : `w-${i}`;
+        return (
+          <React.Fragment key={key}>
           {item.kind === "walk" ? (
             <View style={[chipStyles.walkChip, { backgroundColor: semantic.walkChipBg }]}>
               <FontAwesome5 name="walking" size={10} color={colors.ink3} />
@@ -176,10 +191,11 @@ export function StepChips({ steps }: { steps: RouteStep[] }) {
             <Ionicons name="chevron-forward" size={10} color={colors.ink3} />
           )}
         </React.Fragment>
-      ))}
+        );
+      })}
     </View>
   );
-}
+});
 
 const chipStyles = StyleSheet.create({
   row: {
@@ -214,7 +230,7 @@ const chipStyles = StyleSheet.create({
 
 // ─── Single Route Card ────────────────────────────────────────────────────────
 
-function RouteCard({
+const RouteCard = memo(function RouteCard({
   route,
   isFastest,
   isLeastWalking,
@@ -225,13 +241,16 @@ function RouteCard({
   isFastest: boolean;
   isLeastWalking: boolean;
   isSelected: boolean;
-  onSelect: () => void;
+  onSelect: (route: Route) => void;
 }) {
   const { theme } = useTheme();
   const { colors, typography, semantic, spacing, radii, shadow } = theme;
-  const styles = makeStyles(theme);
-  const allSteps = route.legs.flatMap((l) => l.steps);
-  const transitSteps = allSteps.filter((s) => s.travelMode === "TRANSIT");
+  const styles = useMemo(() => makeStyles(theme), [theme]);
+  const allSteps = useMemo(() => route.legs.flatMap((l) => l.steps), [route]);
+  const transitSteps = useMemo(
+    () => allSteps.filter((s) => s.travelMode === "TRANSIT"),
+    [allSteps],
+  );
   const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
   const lastArr = transitSteps.at(-1)?.transitDetails?.stopDetails?.arrivalTime;
 
@@ -245,7 +264,7 @@ function RouteCard({
           { backgroundColor: semantic.cardSelectedBg },
         ],
       ]}
-      onPress={onSelect}
+      onPress={() => onSelect(route)}
       activeOpacity={0.85}
     >
       {isFastest && (
@@ -299,6 +318,16 @@ function RouteCard({
       <StepChips steps={allSteps} />
     </TouchableOpacity>
   );
+});
+
+// A route has no server id, but its encoded polyline is always present and
+// unique per geometry — a stable identity that survives filtering/reordering so
+// cards (and their live SSE subscriptions) aren't remounted on every filter tap.
+function routeKey(route: Route): string {
+  return (
+    route.polyline?.encodedPolyline ||
+    `${route.duration}-${route.distanceMeters}`
+  );
 }
 
 // ─── Sheet ────────────────────────────────────────────────────────────────────
@@ -322,7 +351,7 @@ export function RoutePickerSheet({
 }: Props) {
   const { theme } = useTheme();
   const { colors, typography, semantic, spacing } = theme;
-  const styles = makeStyles(theme);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
   return (
     <View style={styles.container}>
       <View style={styles.header}>
@@ -336,14 +365,14 @@ export function RoutePickerSheet({
         showsVerticalScrollIndicator={false}
         contentContainerStyle={styles.list}
       >
-        {routes.map((route, i) => (
+        {routes.map((route) => (
           <RouteCard
-            key={i}
+            key={routeKey(route)}
             route={route}
             isFastest={route === fastestRoute}
             isLeastWalking={route === leastWalkingRoute}
             isSelected={route === selectedRoute}
-            onSelect={() => onSelectRoute(route)}
+            onSelect={onSelectRoute}
           />
         ))}
       </BottomSheetScrollView>

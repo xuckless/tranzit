@@ -109,6 +109,10 @@ export default function RouteScreen() {
     const destinationSearch = useDestinationSearch(gpsLocation);
     const { record: recordSearch } = useSearchHistory();
     const { recents, refresh: refreshRecents } = useRecentSearches();
+    const recentSuggestions = useMemo(
+        () => recents.map(recentToSuggestion),
+        [recents],
+    );
 
     // ── Location ─────────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -1135,7 +1139,7 @@ export default function RouteScreen() {
                         recents.length > 0 && (
                             <DestinationSuggestionsList
                                 variant="recent"
-                                suggestions={recents.map(recentToSuggestion)}
+                                suggestions={recentSuggestions}
                                 onSelect={handleSelectDest}
                             />
                         )}
@@ -1182,7 +1186,7 @@ export default function RouteScreen() {
                     {originSearch.status === "idle" && recents.length > 0 && (
                         <DestinationSuggestionsList
                             variant="recent"
-                            suggestions={recents.map(recentToSuggestion)}
+                            suggestions={recentSuggestions}
                             onSelect={handleSelectOrigin}
                         />
                     )}
@@ -1319,7 +1323,7 @@ export default function RouteScreen() {
                                 selectedRoute={selectedRoute}
                                 fastestRoute={overallFastest}
                                 leastWalkingRoute={leastWalkingRoute}
-                                onSelectRoute={(r) => setSelectedRoute(r)}
+                                onSelectRoute={setSelectedRoute}
                             />
                         ) : (
                             <Text style={[styles.emptyText, { marginTop: 16 }]}>

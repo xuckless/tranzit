@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -53,7 +53,13 @@ export function MarqueeText({
   const tx = useSharedValue(0);
   const dragging = useSharedValue(false);
 
-  useFrameCallback((frame) => {
+  // Start the per-frame worklet inactive and only run it while the text is
+  // actually scrolling. Otherwise this fires 60×/sec on the UI thread for the
+  // entire lifetime of every mounted instance (even when the text fits), which
+  // keeps the GPU/UI thread hot — the dominant heat source with several
+  // MarqueeTexts on screen. The React Compiler can't optimize worklets, so the
+  // gating is explicit.
+  const frameCallback = useFrameCallback((frame) => {
     if (!overflowing || single <= 0) return;
     if (!dragging.value) {
       const dt = (frame.timeSincePreviousFrame ?? 16) / 1000;
@@ -61,7 +67,11 @@ export function MarqueeText({
     }
     if (tx.value <= -single) tx.value += single;
     if (tx.value > 0) tx.value -= single;
-  });
+  }, false);
+
+  useEffect(() => {
+    frameCallback.setActive(overflowing);
+  }, [overflowing, frameCallback]);
 
   const animatedStyle = useAnimatedStyle(() => ({
     transform: [{ translateX: tx.value }],

@@ -1,4 +1,13 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+  useState,
+  useEffect,
+  useRef,
+  useCallback,
+  useMemo,
+  memo,
+  forwardRef,
+  useImperativeHandle,
+} from "react";
 import {
   View,
   Text,
@@ -254,7 +263,11 @@ function ReportIcon({
 
 // ─── STOP ITEM ────────────────────────────────────────────────────────────────
 
-function StopItem({
+// Memoized: the timeline can be long, and the screen re-renders on every GPS
+// sample (currentSpeed) and notify-state change. Stop objects keep a stable
+// reference across those renders (they're only rebuilt from a trip STATE frame),
+// so memo skips reconciling every row except when the trip data actually changes.
+const StopItem = memo(function StopItem({
   stop,
   connectorType,
 }: {
@@ -615,7 +628,32 @@ function StopItem({
       </View>
     </View>
   );
-}
+});
+
+// ─── Speed badge ────────────────────────────────────────────────────────────
+
+type SpeedBadgeHandle = { setSpeed: (kmh: number | null) => void };
+
+// Owns its own speed state so a GPS sample (every ~3s) updates only this badge
+// instead of re-rendering the whole CommuteScreen and its timeline. The parent
+// pushes values in imperatively via the ref from the location watch.
+const SpeedBadge = memo(
+  forwardRef<SpeedBadgeHandle>(function SpeedBadge(_props, ref) {
+    const { theme } = useTheme();
+    const { colors } = theme;
+    const styles = useMemo(() => makeStyles(theme), [theme]);
+    const [speed, setSpeed] = useState<number | null>(null);
+    useImperativeHandle(ref, () => ({ setSpeed }), []);
+    return (
+      <View style={styles.heroSpeedBadge}>
+        <Ionicons name="speedometer-outline" size={14} color={colors.ink3} />
+        <Text style={styles.heroSpeedText}>
+          {speed != null ? `${speed} km/h` : "-- km/h"}
+        </Text>
+      </View>
+    );
+  }),
+);
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
@@ -654,11 +692,7 @@ export default function CommuteScreen() {
   );
   const [pendingReroute, setPendingReroute] = useState(false);
 
-  const [userLocation, setUserLocation] = useState<{
-    latitude: number;
-    longitude: number;
-  } | null>(null);
-  const [currentSpeed, setCurrentSpeed] = useState<number | null>(null);
+  const speedBadgeRef = useRef<SpeedBadgeHandle>(null);
 
   const locationSubRef = useRef<Location.LocationSubscription | null>(null);
   const lastLocationSentRef = useRef<number>(0);
@@ -792,12 +826,8 @@ export default function CommuteScreen() {
             timeInterval: 3000,
           },
           ({ coords }) => {
-            setUserLocation({
-              latitude: coords.latitude,
-              longitude: coords.longitude,
-            });
             if (coords.speed != null && coords.speed >= 0) {
-              setCurrentSpeed(Math.round(coords.speed * 3.6));
+              speedBadgeRef.current?.setSpeed(Math.round(coords.speed * 3.6));
             }
 
             const now = Date.now();
@@ -1087,33 +1117,26 @@ export default function CommuteScreen() {
     }, 400);
   }, [route]);
 
-  const routePolylinesGeoJSON = useMemo(() => {
-    const empty = {
-      type: "FeatureCollection" as const,
-      features: [] as Array<{
-        type: "Feature";
-        properties: { color: string; mode: "WALK" | "TRANSIT" };
-        geometry: { type: "LineString"; coordinates: [number, number][] };
-      }>,
-    };
-    if (!route) return empty;
-
-    // Per-step geometry (OTP always carries it) lets walk segments render as
-    // dotted lines; a route missing any step polyline (Google standby) falls
-    // back to one solid route-level segment, exactly the old behavior.
-    type Segment = {
-      mode: "WALK" | "TRANSIT";
-      coords: { latitude: number; longitude: number }[];
-      color: string;
-    };
+  // Decoding the per-step polylines and assigning colors only depends on the
+  // route (stable except on reroute). Keep it out of the per-STATE-tick path so
+  // we don't re-decode thousands of points every few seconds.
+  // Per-step geometry (OTP always carries it) lets walk segments render as
+  // dotted lines; a route missing any step polyline (Google standby) falls back
+  // to one solid route-level segment, exactly the old behavior.
+  type Segment = {
+    mode: "WALK" | "TRANSIT";
+    coords: { latitude: number; longitude: number }[];
+    color: string;
+  };
+  const decodedSegments = useMemo<Segment[]>(() => {
+    if (!route) return [];
     const allSteps = (route.legs ?? []).flatMap((l) => l.steps ?? []);
     const hasStepGeometry =
       allSteps.length > 0 &&
       allSteps.every((s) => s.polyline?.encodedPolyline);
 
-    let segments: Segment[];
     if (hasStepGeometry) {
-      segments = allSteps
+      return allSteps
         .map((s) => ({
           mode: s.travelMode,
           coords: safeDecodePolyline(s.polyline!.encodedPolyline),
@@ -1126,37 +1149,61 @@ export default function CommuteScreen() {
                 ),
         }))
         .filter((seg) => seg.coords.length > 1);
-    } else {
-      const allCoords = safeDecodePolyline(
-        route.polyline?.encodedPolyline ?? "",
-      );
-      if (allCoords.length === 0) return empty;
-      const transitStep = allSteps.find((s) => s.travelMode === "TRANSIT");
-      segments = [
-        {
-          mode: "TRANSIT",
-          coords: allCoords,
-          color: normalizeColor(
-            transitStep?.transitDetails?.transitLine?.color,
-            colors.primary,
-          ),
-        },
-      ];
     }
+    const allCoords = safeDecodePolyline(route.polyline?.encodedPolyline ?? "");
+    if (allCoords.length === 0) return [];
+    const transitStep = allSteps.find((s) => s.travelMode === "TRANSIT");
+    return [
+      {
+        mode: "TRANSIT",
+        coords: allCoords,
+        color: normalizeColor(
+          transitStep?.transitDetails?.transitLine?.color,
+          colors.primary,
+        ),
+      },
+    ];
+  }, [route, mapPaint.polyline, colors.primary]);
+
+  // The completed/upcoming split only moves when the *current* stop advances.
+  // Key it on a primitive so a STATE tick that merely updates ETAs (rebuilding
+  // `stops` with the same current-stop coordinate) doesn't re-run the O(coords)
+  // nearest-point search below.
+  const currentStopKey = useMemo(() => {
+    const cur = stops.find((s) => s.status === "current");
+    return cur?.coordinate
+      ? `${cur.coordinate.latitude},${cur.coordinate.longitude}`
+      : "";
+  }, [stops]);
+  const currentStopCoord = useMemo(() => {
+    if (!currentStopKey) return null;
+    const [latitude, longitude] = currentStopKey.split(",").map(Number);
+    return { latitude, longitude };
+  }, [currentStopKey]);
+
+  const routePolylinesGeoJSON = useMemo(() => {
+    const empty = {
+      type: "FeatureCollection" as const,
+      features: [] as Array<{
+        type: "Feature";
+        properties: { color: string; mode: "WALK" | "TRANSIT" };
+        geometry: { type: "LineString"; coordinates: [number, number][] };
+      }>,
+    };
+    const segments = decodedSegments;
     if (segments.length === 0) return empty;
 
     // Split the whole path at the coordinate nearest the current stop: before
     // it renders as "completed" (muted), after it in segment colors.
-    const currentStop = stops.find((s) => s.status === "current");
     let splitSeg = -1;
     let splitIdx = 0;
-    if (currentStop?.coordinate) {
+    if (currentStopCoord) {
       let minDist = Infinity;
       segments.forEach((seg, si) => {
         seg.coords.forEach((c, i) => {
           const d = haversineMeters(
-            currentStop.coordinate!.latitude,
-            currentStop.coordinate!.longitude,
+            currentStopCoord.latitude,
+            currentStopCoord.longitude,
             c.latitude,
             c.longitude,
           );
@@ -1196,7 +1243,7 @@ export default function CommuteScreen() {
     });
 
     return { type: "FeatureCollection" as const, features };
-  }, [route, stops, mapPaint.polyline, colors.primary]);
+  }, [decodedSegments, currentStopCoord, mapPaint.polyline.completed]);
 
   const timelineStopsGeoJSON = useMemo(
     () => ({
@@ -1867,16 +1914,7 @@ export default function CommuteScreen() {
                     : "Your journey"
                 }
               />
-              <View style={styles.heroSpeedBadge}>
-                <Ionicons
-                  name="speedometer-outline"
-                  size={14}
-                  color={colors.ink3}
-                />
-                <Text style={styles.heroSpeedText}>
-                  {currentSpeed != null ? `${currentSpeed} km/h` : "-- km/h"}
-                </Text>
-              </View>
+              <SpeedBadge ref={speedBadgeRef} />
             </View>
 
             <View style={styles.heroDivider} />

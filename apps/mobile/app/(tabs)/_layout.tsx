@@ -1,3 +1,4 @@
+import { useMemo } from "react";
 import { Tabs, useRouter, Redirect } from "expo-router";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import MaterialIcons from "@expo/vector-icons/MaterialIcons";
@@ -38,7 +39,7 @@ function HeaderBar() {
   const insets = useSafeAreaInsets();
   const { theme } = useTheme();
   const { colors, typography } = theme;
-  const styles = makeStyles(theme);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   return (
     <View style={styles.headerContainer}>
@@ -59,7 +60,7 @@ function HeaderBar() {
 export default function RootLayout() {
   const { theme } = useTheme();
   const { colors, typography, semantic, radii, spacing } = theme;
-  const styles = makeStyles(theme);
+  const styles = useMemo(() => makeStyles(theme), [theme]);
 
   // Hard auth gate: no tab is reachable until Supabase reports a session. Also
   // covers the top-level settings/add-trip stack routes, which are only
@@ -73,6 +74,11 @@ export default function RootLayout() {
       screenOptions={({ route }) => ({
         headerShown: true,
         header: () => <HeaderBar />,
+        // Suspend rendering of off-screen tabs (react-freeze) while keeping their
+        // state and subscriptions alive. This stops the Map + Commute screens —
+        // each with a live MapLibre instance and SSE streams — from re-rendering
+        // in the background, without losing map position or an active trip.
+        freezeOnBlur: true,
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: colors.ink3,
         tabBarStyle: [
