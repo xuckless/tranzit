@@ -425,16 +425,19 @@ export default function MapScreen() {
       });
 
       let address = dest.displayText;
+      let name = dest.displayText;
       try {
         const full = await TranzitApiService.getPlaceDetails(dest.placeId);
         setPlaceDetails({ place: full, isFetching: false });
         if (full.formattedAddress) address = full.formattedAddress;
+        if (full.displayName?.text) name = full.displayName.text;
       } catch {
         setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
       }
 
       recordSearch({
         placeId: dest.placeId,
+        name,
         address,
         lat: dest.coordinate.latitude,
         lng: dest.coordinate.longitude,
@@ -541,16 +544,19 @@ export default function MapScreen() {
       });
 
       let address = place.formattedAddress || place.displayName.text;
+      let name = place.displayName.text;
       try {
         const full = await TranzitApiService.getPlaceDetails(place.id);
         setPlaceDetails({ place: full, isFetching: false, fromNearby: true });
         if (full.formattedAddress) address = full.formattedAddress;
+        if (full.displayName?.text) name = full.displayName.text;
       } catch {
         setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
       }
 
       recordSearch({
         placeId: place.id,
+        name,
         address,
         lat: place.location.latitude,
         lng: place.location.longitude,
@@ -951,6 +957,7 @@ export default function MapScreen() {
                       flyTo(coord, 14, 900);
                       recordSearch({
                         placeId: item.googlePlaceId,
+                        name: item.categoryName,
                         address: item.address || item.categoryName,
                         lat: item.latitude,
                         lng: item.longitude,

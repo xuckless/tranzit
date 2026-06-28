@@ -36,6 +36,8 @@ const HISTORY_CAP = 50;
 export interface SearchHistoryInput {
   /** google_place_id, when the place came from Places. */
   placeId?: string | null;
+  /** Business / display name shown as the primary line (→ common_name). */
+  name?: string | null;
   /** Destination label / formatted address (→ destination_full_formatted_address). */
   address: string;
   lat?: number | null;
@@ -77,6 +79,7 @@ function toRow(userId: string, input: SearchHistoryInput): SearchHistoryMirrorRo
     user_id: userId,
     place_key: placeKeyOf(input),
     google_place_id: input.placeId ?? null,
+    common_name: input.name ?? null,
     destination_full_formatted_address: input.address,
     destination_city: input.city ?? null,
     destination_country: input.country ?? null,
@@ -103,6 +106,7 @@ async function pushRow(user: User, row: SearchHistoryMirrorRow): Promise<void> {
   }
   await middlewareUpsert("user_history", {
     user_id: row.user_id,
+    common_name: row.common_name,
     origin_lat: row.origin_lat,
     origin_lng: row.origin_lng,
     origin_address: row.origin_address,
@@ -200,6 +204,8 @@ export async function pruneRemoteHistory(user: User): Promise<void> {
 export interface RecentSearch {
   placeKey: string;
   placeId: string | null;
+  /** Business / common name, if known. */
+  name: string | null;
   address: string;
   mainText: string;
   secondaryText?: string;
@@ -226,13 +232,24 @@ function splitAddress(address: string): { mainText: string; secondaryText?: stri
 }
 
 function toRecent(row: SearchHistoryMirrorRow): RecentSearch {
-  const { mainText, secondaryText } = splitAddress(
-    row.destination_full_formatted_address,
-  );
+  const address = row.destination_full_formatted_address;
+  // Mirror the /autocomplete format: business/common name as the primary line,
+  // the address as the secondary line. Fall back to splitting the address when
+  // no common name was captured (older rows).
+  const name = row.common_name?.trim() || null;
+  let mainText: string;
+  let secondaryText: string | undefined;
+  if (name) {
+    mainText = name;
+    secondaryText = address || undefined;
+  } else {
+    ({ mainText, secondaryText } = splitAddress(address));
+  }
   return {
     placeKey: row.place_key,
     placeId: row.google_place_id,
-    address: row.destination_full_formatted_address,
+    name,
+    address,
     mainText,
     secondaryText,
     lat: row.destination_lat,
@@ -257,6 +274,7 @@ export async function listRecentSearches(
 
 interface RemoteHistoryRow {
   google_place_id: string | null;
+  common_name: string | null;
   destination_full_formatted_address: string | null;
   destination_city: string | null;
   destination_country: string | null;
@@ -299,6 +317,7 @@ export async function syncRecentSearchesFromRemote(user: User): Promise<void> {
         user_id: userId,
         place_key,
         google_place_id: r.google_place_id ?? null,
+        common_name: r.common_name ?? null,
         destination_full_formatted_address: address,
         destination_city: r.destination_city ?? null,
         destination_country: r.destination_country ?? null,

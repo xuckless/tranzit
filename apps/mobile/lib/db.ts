@@ -32,6 +32,7 @@ export interface SearchHistoryMirrorRow {
   user_id: string;
   place_key: string;
   google_place_id: string | null;
+  common_name: string | null;
   destination_full_formatted_address: string;
   destination_city: string | null;
   destination_country: string | null;
@@ -102,6 +103,7 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
       user_id                            TEXT NOT NULL,
       place_key                          TEXT NOT NULL,
       google_place_id                    TEXT,
+      common_name                        TEXT,
       destination_full_formatted_address TEXT NOT NULL,
       destination_city                   TEXT,
       destination_country                TEXT,
@@ -120,6 +122,8 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_search_history_user
       ON search_history_cache (user_id, date_time)
   `);
+  // Add common_name to mirrors created before the column existed (idempotent).
+  await _addColumnIfMissing(db, "search_history_cache", "common_name", "TEXT");
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS transit_stops_cache (
@@ -135,6 +139,22 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_stops_teleride
       ON transit_stops_cache (teleride_number)
   `);
+}
+
+/** Add a column to an existing table if it isn't there yet (SQLite has no
+ *  IF NOT EXISTS for ADD COLUMN). Idempotent across launches. */
+async function _addColumnIfMissing(
+  db: SQLite.SQLiteDatabase,
+  table: string,
+  column: string,
+  type: string,
+): Promise<void> {
+  const cols = await db.getAllAsync<{ name: string }>(
+    `PRAGMA table_info(${table})`,
+  );
+  if (!cols.some((c) => c.name === column)) {
+    await db.execAsync(`ALTER TABLE ${table} ADD COLUMN ${column} ${type}`);
+  }
 }
 
 // ─── Saved-place mirror (offline cache of the user DB) ──────────────────────────
@@ -268,7 +288,7 @@ export async function mirrorReplaceAll(
 
 // ─── Search-history mirror (offline outbox of the user DB) ──────────────────────
 
-const SEARCH_COLS = `user_id, place_key, google_place_id,
+const SEARCH_COLS = `user_id, place_key, google_place_id, common_name,
             destination_full_formatted_address, destination_city, destination_country,
             destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
             category_code, date_time, pending`;
@@ -279,13 +299,14 @@ export async function mirrorUpsertSearch(
   const db = await getDb();
   await db.runAsync(
     `INSERT INTO search_history_cache
-       (user_id, place_key, google_place_id,
+       (user_id, place_key, google_place_id, common_name,
         destination_full_formatted_address, destination_city, destination_country,
         destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
         category_code, date_time, pending)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, place_key) DO UPDATE SET
        google_place_id                    = excluded.google_place_id,
+       common_name                        = excluded.common_name,
        destination_full_formatted_address = excluded.destination_full_formatted_address,
        destination_city                   = excluded.destination_city,
        destination_country                = excluded.destination_country,
@@ -300,6 +321,7 @@ export async function mirrorUpsertSearch(
     row.user_id,
     row.place_key,
     row.google_place_id,
+    row.common_name,
     row.destination_full_formatted_address,
     row.destination_city,
     row.destination_country,
@@ -387,13 +409,14 @@ export async function mirrorReplaceAllSearch(
     for (const r of rows) {
       await txn.runAsync(
         `INSERT INTO search_history_cache
-           (user_id, place_key, google_place_id,
+           (user_id, place_key, google_place_id, common_name,
             destination_full_formatted_address, destination_city, destination_country,
             destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
             category_code, date_time, pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
          ON CONFLICT(user_id, place_key) DO UPDATE SET
            google_place_id                    = excluded.google_place_id,
+           common_name                        = excluded.common_name,
            destination_full_formatted_address = excluded.destination_full_formatted_address,
            destination_city                   = excluded.destination_city,
            destination_country                = excluded.destination_country,
@@ -408,6 +431,7 @@ export async function mirrorReplaceAllSearch(
         r.user_id,
         r.place_key,
         r.google_place_id,
+        r.common_name,
         r.destination_full_formatted_address,
         r.destination_city,
         r.destination_country,

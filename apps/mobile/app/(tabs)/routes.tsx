@@ -591,9 +591,8 @@ export default function RouteScreen() {
             if (coords) {
                 recordSearch({
                     placeId: suggestion.placeId,
-                    address: suggestion.secondaryText
-                        ? `${suggestion.mainText}, ${suggestion.secondaryText}`
-                        : suggestion.mainText,
+                    name: suggestion.mainText,
+                    address: suggestion.secondaryText ?? suggestion.mainText,
                     lat: coords.lat,
                     lng: coords.lng,
                     originLat: origin?.lat ?? null,

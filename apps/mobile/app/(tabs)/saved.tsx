@@ -132,6 +132,7 @@ export default function SavedScreen() {
     if (place.latitude == null || place.longitude == null) return;
     recordSearch({
       placeId: place.googlePlaceId,
+      name: place.categoryName,
       address: place.address || place.categoryName,
       lat: place.latitude,
       lng: place.longitude,
