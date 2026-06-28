@@ -122,7 +122,7 @@ func otpModes(mode string) ([]transportMode, error) {
 }
 
 const otpPlanQuery = `
-query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $modes: [TransportMode!], $num: Int, $date: String, $time: String, $searchWindow: Int, $arriveBy: Boolean) {
+query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $modes: [TransportMode!], $num: Int, $date: String, $time: String, $searchWindow: Long, $arriveBy: Boolean) {
   plan(
     from: {lat: $fromLat, lon: $fromLon}
     to: {lat: $toLat, lon: $toLon}
