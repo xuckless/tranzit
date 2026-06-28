@@ -70,6 +70,13 @@ func newTripUpdateFeed() *tripUpdateFeed {
 // rebuild composes the OTP-facing feed from the live TripUpdates feed and (when static GTFS is
 // loaded) the synthesized cancellations, marshals it, and swaps it into the cache.
 func (f *tripUpdateFeed) rebuild(ctx context.Context, q querier, live *gtfs.FeedMessage) error {
+	// Repair the live stop-time updates so OTP doesn't reject them with NEGATIVE_HOP_TIME. Best-effort:
+	// on error we publish the unsanitized feed rather than nothing.
+	var sanErr error
+	if f.gtfsLoaded {
+		sanErr = sanitizeStopTimes(ctx, q, live)
+	}
+
 	entities := live.GetEntity()
 
 	// Cancellation synthesis is best-effort: if the query fails we still publish the live feed
@@ -98,7 +105,10 @@ func (f *tripUpdateFeed) rebuild(ctx context.Context, q querier, live *gtfs.Feed
 	f.mu.Lock()
 	f.bytes = b
 	f.mu.Unlock()
-	return augErr
+	if augErr != nil {
+		return augErr
+	}
+	return sanErr
 }
 
 // confirm advances the consecutive-missing counters and returns only the trips that have been

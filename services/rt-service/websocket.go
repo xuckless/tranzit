@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net/http"
+	"strconv"
 	"sync"
 
 	"github.com/gorilla/websocket"
@@ -89,6 +90,10 @@ func (f *tripUpdateFeed) serveTripUpdates(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("Content-Type", "application/x-protobuf")
 	w.Header().Set("Cache-Control", "no-store")
+	// Set Content-Length explicitly so the body is sent in one piece — the marshaled feed is large
+	// enough that net/http would otherwise stream it chunked, which the Tailscale Funnel proxy has
+	// occasionally truncated mid-message (OTP then logs InvalidProtocolBufferException).
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	_, _ = w.Write(b)
 }
 
