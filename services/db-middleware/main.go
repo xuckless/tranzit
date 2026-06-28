@@ -1023,6 +1023,34 @@ func main() {
 	// unset/unreachable, only /api/v1/user/ is affected — Supabase routes are not.
 	initUserDB(context.Background())
 
+	// Auth: end users hit the public (Funnel) listener with a Supabase JWT; sibling
+	// services hit the separate mTLS listener (auth.go / mtls.go, AUTH.md).
+	authEnforce = envBool("AUTH_ENFORCE", false)
+	verifier := buildVerifier(authEnforce)
+
+	mux := registerRoutes()
+
+	// Service-to-service mTLS listener — tailnet-only (NOT published via Funnel), so
+	// it carries no end-user traffic. Optional: unset MTLS_LISTEN_ADDR disables it.
+	if addr := os.Getenv("MTLS_LISTEN_ADDR"); addr != "" {
+		go startMTLSListener(addr, markServiceCaller(mux))
+	} else {
+		log.Println("mtls: MTLS_LISTEN_ADDR unset — service-to-service listener disabled")
+	}
+
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "8080"
+	}
+	log.Printf("listening on :%s (auth_enforce=%v)", port, authEnforce)
+	log.Fatal(http.ListenAndServe(":"+port, requireUserAuth(verifier, authEnforce, mux)))
+}
+
+// authEnforce gates hard 401/403 (true) vs log-and-allow soft rollout (false).
+var authEnforce bool
+
+// registerRoutes builds the shared route mux mounted behind both listeners.
+func registerRoutes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/health", handleHealth)
 	// Exact matches take precedence over the /api/v1/ prefix catch-all.
@@ -1036,13 +1064,58 @@ func main() {
 	// /api/v1/, so it takes precedence in the mux.
 	mux.HandleFunc("/api/v1/user/", withCORSWrite(withGzip(handleUserData)))
 	mux.HandleFunc("/api/v1/", withCORS(withGzip(handleQuery)))
+	return mux
+}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "8080"
+// buildVerifier constructs the Supabase JWT verifier. SUPABASE_URL is required when
+// enforcing; in soft mode an empty/unreachable JWKS only disables verification (with
+// a warning) so the service still starts.
+func buildVerifier(enforce bool) Verifier {
+	supabaseURL := os.Getenv("SUPABASE_URL")
+	if supabaseURL == "" {
+		if enforce {
+			log.Fatal("SUPABASE_URL is required when AUTH_ENFORCE=true")
+		}
+		log.Println("auth: SUPABASE_URL unset — JWT verification disabled (soft mode)")
+		return nil
 	}
-	log.Printf("listening on :%s", port)
-	log.Fatal(http.ListenAndServe(":"+port, mux))
+	v, err := newJWKSVerifier(supabaseURL)
+	if err != nil {
+		if enforce {
+			log.Fatalf("auth: %v", err)
+		}
+		log.Printf("auth: JWKS unavailable, verification disabled (soft mode): %v", err)
+		return nil
+	}
+	return v
+}
+
+// startMTLSListener serves handler over TLS with client-cert auth on addr. Fatal on
+// misconfiguration so a broken cert mount can't silently leave S2S unprotected.
+func startMTLSListener(addr string, handler http.Handler) {
+	cfg, err := loadServerMTLS(
+		os.Getenv("MTLS_CA_CERT"), os.Getenv("MTLS_CERT"), os.Getenv("MTLS_KEY"),
+		strings.Split(os.Getenv("MTLS_ALLOWED_CLIENTS"), ","), authEnforce,
+	)
+	if err != nil {
+		log.Fatalf("mtls: %v", err)
+	}
+	srv := &http.Server{Addr: addr, Handler: handler, TLSConfig: cfg}
+	log.Printf("mtls: service listener on %s (enforce=%v)", addr, authEnforce)
+	// Certs are supplied via TLSConfig.Certificates, so the file args are empty.
+	log.Fatal(srv.ListenAndServeTLS("", ""))
+}
+
+// envBool reads a boolean env var (1/true/yes), falling back to def.
+func envBool(key string, def bool) bool {
+	switch strings.ToLower(strings.TrimSpace(os.Getenv(key))) {
+	case "1", "true", "yes", "on":
+		return true
+	case "0", "false", "no", "off":
+		return false
+	default:
+		return def
+	}
 }
 
 // gzipResponseWriter compresses the body lazily: it only switches on gzip for a 200

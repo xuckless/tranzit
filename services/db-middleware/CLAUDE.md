@@ -84,3 +84,12 @@ Security notes
 - Filter keys validated against information_schema.columns (no SQL injection via column)
 - Filter values always passed as $N parameters (no SQL injection via value)
 - Column list cached after first use per table
+
+Auth — see AUTH.md (full reference)
+
+- Two listeners: end users hit the Funnel port with a Supabase JWT (Bearer/?token);
+  sibling services hit a separate tailnet-only mTLS port (client cert + CN allow-list).
+- /api/v1/user/* enforces per-user ownership (token sub == user_id) on the user-owned
+  tables; service (mTLS) callers bypass. /health is always open.
+- Rollout is soft (AUTH_ENFORCE=false) → log + allow; flip to true for hard 401/403 +
+  RequireAndVerifyClientCert. Certs: scripts/gen-mtls-certs.sh.

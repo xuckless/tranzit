@@ -41,6 +41,18 @@ services:
       - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
       # tranzit-user-db over the tailnet (private). Empty → /api/v1/user/ is disabled.
       - TRANZIT_USER_DB_CONNECTION_STRING=${TRANZIT_USER_DB_CONNECTION_STRING:-}
+      # Auth (see AUTH.md): JWT for end users on the Funnel port, mTLS for siblings
+      # on MTLS_LISTEN_ADDR (tailnet-only, not Funnel-published).
+      - SUPABASE_URL=${SUPABASE_URL:-https://vxpjxjokuzyqigrlvjzb.supabase.co}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-false}
+      - MTLS_LISTEN_ADDR=${MTLS_LISTEN_ADDR:-:8443}
+      - MTLS_CA_CERT=/certs/ca.crt
+      - MTLS_CERT=/certs/tranzit-db-middleware.crt
+      - MTLS_KEY=/certs/tranzit-db-middleware.key
+      - MTLS_ALLOWED_CLIENTS=${MTLS_ALLOWED_CLIENTS:-tranzit-route-save,tranzit-route-service}
+    volumes:
+      # mTLS material: ca.crt + this service's leaf (git-ignored; see scripts/gen-mtls-certs.sh).
+      - ./certs:/certs:ro
     restart: unless-stopped
 
 volumes:

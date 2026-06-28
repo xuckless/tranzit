@@ -5,9 +5,10 @@ package main
 // or any existing route — it stands up its own pgxpool (`userDB`) and serves the
 // 12 user-data tables under the /api/v1/user/ prefix:
 //
-//   GET  /api/v1/user/            → list user tables
-//   GET  /api/v1/user/{table}     → query a user table (same PostgREST-ish filters as /api/v1)
-//   POST /api/v1/user/{table}     → upsert one row or an array of rows (INSERT … ON CONFLICT)
+//   GET    /api/v1/user/          → list user tables
+//   GET    /api/v1/user/{table}   → query a user table (same PostgREST-ish filters as /api/v1)
+//   POST   /api/v1/user/{table}   → upsert one row or an array of rows (INSERT … ON CONFLICT)
+//   DELETE /api/v1/user/{table}   → delete rows matching the query filters (filter required)
 //
 // Reads are NOT cached here — user data is mutable per request, unlike the GTFS
 // reference/realtime tables fronted by main.go's response cache.
@@ -15,6 +16,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -27,6 +29,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -51,6 +54,95 @@ var userTables = map[string]struct{}{
 	"user_calendar":                   {},
 	"user_posts":                      {},
 	"user_friendships":                {},
+}
+
+// userOwnedTables are the user-data tables whose every row belongs to one user via
+// the `user_id` column. On these, an end user may only touch their own rows: the
+// authenticated token `sub` is forced onto reads/deletes and required on upserts
+// (auth.go, AUTH.md). Service (mTLS) callers bypass this. Inherently-shared tables
+// (posts, user_posts, user_friendships) are intentionally excluded.
+var userOwnedTables = map[string]struct{}{
+	"user_info":                       {},
+	"user_defined_default_categories": {},
+	"user_defined_default_themes":     {},
+	"user_defined_events":             {},
+	"cached_pre_routes":               {},
+	"saved_addresses":                 {},
+	"user_themes":                     {},
+	"user_history":                    {},
+	"user_calendar":                   {},
+}
+
+// scopeToOwner enforces row ownership on a read/delete query for user-owned tables.
+// It returns the (possibly user-scoped) query and ok=false if the request was
+// rejected (a response has already been written). Non-owned tables and service
+// callers pass through untouched. When enforcing, the owner's id is forced onto the
+// `user_id` filter (overriding any client value); in soft mode mismatches are only
+// logged so legitimate traffic is never altered before the flip.
+func scopeToOwner(w http.ResponseWriter, r *http.Request, table string, q url.Values) (url.Values, bool) {
+	if _, owned := userOwnedTables[table]; !owned {
+		return q, true
+	}
+	if isServiceCaller(r.Context()) {
+		return q, true
+	}
+	uid := userIDOf(r.Context())
+	if uid == "" {
+		if authEnforce {
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return q, false
+		}
+		log.Printf("ownership(soft): %s /api/v1/user/%s without an identity — not scoping", r.Method, table)
+		return q, true
+	}
+	if cur := q.Get("user_id"); cur != "" && cur != uid {
+		if !authEnforce {
+			log.Printf("ownership(soft): %s /api/v1/user/%s user_id=%s != owner %s — would scope; allowing as-is", r.Method, table, cur, uid)
+			return q, true
+		}
+		log.Printf("ownership: %s /api/v1/user/%s user_id=%s != owner %s — scoping to owner", r.Method, table, cur, uid)
+	}
+	if authEnforce {
+		q.Set("user_id", uid)
+	}
+	return q, true
+}
+
+// enforceUpsertOwner applies ownership to an upsert body: when enforcing, every row
+// on a user-owned table must carry the authenticated user_id (absent ones are
+// stamped, foreign ones rejected with 403). Soft mode only logs. Returns false when
+// the request was rejected (response already written).
+func enforceUpsertOwner(w http.ResponseWriter, r *http.Request, table string, rows []map[string]any) bool {
+	if _, owned := userOwnedTables[table]; !owned {
+		return true
+	}
+	if isServiceCaller(r.Context()) {
+		return true
+	}
+	uid := userIDOf(r.Context())
+	if uid == "" {
+		if authEnforce {
+			jsonError(w, "authentication required", http.StatusUnauthorized)
+			return false
+		}
+		log.Printf("ownership(soft): POST /api/v1/user/%s without an identity — allowing", table)
+		return true
+	}
+	for i, row := range rows {
+		cur, has := row["user_id"]
+		if has && fmt.Sprintf("%v", cur) != uid {
+			if authEnforce {
+				jsonError(w, fmt.Sprintf("row %d: user_id does not match the authenticated user", i), http.StatusForbidden)
+				return false
+			}
+			log.Printf("ownership(soft): POST /api/v1/user/%s row %d user_id=%v != owner %s — would reject; allowing", table, i, cur, uid)
+			continue
+		}
+		if authEnforce {
+			row["user_id"] = uid // stamp absent / re-affirm matching
+		}
+	}
+	return true
 }
 
 // userColMeta is the cached per-table schema needed to build safe SELECT/UPSERT.
@@ -103,11 +195,11 @@ func initUserDB(ctx context.Context) {
 	log.Println("user-db: connected to tranzit-user-db")
 }
 
-// withCORSWrite is withCORS but also advertises POST for the write endpoints.
+// withCORSWrite is withCORS but also advertises the write methods for these endpoints.
 func withCORSWrite(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
@@ -139,6 +231,12 @@ func handleUserData(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		handleUserUpsert(w, r, segment)
+	case http.MethodDelete:
+		if segment == "" {
+			jsonError(w, "a table must be specified, e.g. /api/v1/user/saved_addresses", http.StatusBadRequest)
+			return
+		}
+		handleUserDelete(w, r, segment)
 	default:
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
 	}
@@ -246,7 +344,11 @@ func handleUserSelect(w http.ResponseWriter, r *http.Request, table string) {
 		return
 	}
 
-	body, err := buildUserSelect(r.Context(), table, r.URL.Query())
+	q, ok := scopeToOwner(w, r, table, r.URL.Query())
+	if !ok {
+		return
+	}
+	body, err := buildUserSelect(r.Context(), table, q)
 	if err != nil {
 		log.Printf("user-db select(%s): %v", table, err)
 		jsonError(w, "query failed", http.StatusInternalServerError)
@@ -418,6 +520,10 @@ func handleUserUpsert(w http.ResponseWriter, r *http.Request, table string) {
 		return
 	}
 
+	if !enforceUpsertOwner(w, r, table, inputRows) {
+		return
+	}
+
 	m, err := userTableMeta(r.Context(), table)
 	if err != nil {
 		log.Printf("user-db meta(%s): %v", table, err)
@@ -449,7 +555,8 @@ func handleUserUpsert(w http.ResponseWriter, r *http.Request, table string) {
 		rows, err := tx.Query(r.Context(), sqlText, args...)
 		if err != nil {
 			log.Printf("user-db upsert(%s): %v", table, err)
-			jsonError(w, fmt.Sprintf("row %d: write rejected", i), http.StatusBadRequest)
+			status, msg := pgWriteError(err, i)
+			jsonError(w, msg, status)
 			return
 		}
 		fds := rows.FieldDescriptions()
@@ -474,7 +581,8 @@ func handleUserUpsert(w http.ResponseWriter, r *http.Request, table string) {
 		if err := rows.Err(); err != nil {
 			rows.Close()
 			log.Printf("user-db returning rows: %v", err)
-			jsonError(w, "internal server error", http.StatusInternalServerError)
+			status, msg := pgWriteError(err, i)
+			jsonError(w, msg, status)
 			return
 		}
 		rows.Close()
@@ -493,6 +601,86 @@ func handleUserUpsert(w http.ResponseWriter, r *http.Request, table string) {
 		"count": len(returned),
 		"data":  returned,
 	})
+}
+
+// ── DELETE: remove rows from a user table ──────────────────────────────────────
+
+// handleUserDelete deletes rows matching the query filters, reusing the same
+// PostgREST-ish filter parsing as the GET path. It refuses an unfiltered delete
+// (no WHERE) so a stray request can never wipe a whole table. On user-owned tables
+// the delete is scoped to the authenticated user (scopeToOwner) when enforcing.
+func handleUserDelete(w http.ResponseWriter, r *http.Request, table string) {
+	if _, ok := userTables[table]; !ok {
+		jsonError(w, fmt.Sprintf("unknown table %q", table), http.StatusNotFound)
+		return
+	}
+
+	m, err := userTableMeta(r.Context(), table)
+	if err != nil {
+		log.Printf("user-db meta(%s): %v", table, err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return
+	}
+
+	q, ok := scopeToOwner(w, r, table, r.URL.Query())
+	if !ok {
+		return
+	}
+
+	var conds []string
+	var args []any
+	idx := 1
+	for key, vals := range q {
+		if _, ok := m.colSet[key]; !ok {
+			continue
+		}
+		pf := parseFilterValue(vals[0])
+		if pf.isIN {
+			if len(pf.values) == 0 {
+				continue
+			}
+			placeholders := make([]string, len(pf.values))
+			for i, v := range pf.values {
+				placeholders[i] = fmt.Sprintf("$%d", idx)
+				args = append(args, strings.TrimSpace(v))
+				idx++
+			}
+			conds = append(conds, fmt.Sprintf("%s IN (%s)", quoteIdent(key), strings.Join(placeholders, ", ")))
+		} else {
+			conds = append(conds, fmt.Sprintf("%s %s $%d", quoteIdent(key), pf.sqlOp, idx))
+			args = append(args, pf.values[0])
+			idx++
+		}
+	}
+
+	if len(conds) == 0 {
+		jsonError(w, "refusing to delete without a filter", http.StatusBadRequest)
+		return
+	}
+
+	query := "DELETE FROM " + quoteIdent(table) + " WHERE " + strings.Join(conds, " AND ")
+	tag, err := userDB.Exec(r.Context(), query, args...)
+	if err != nil {
+		log.Printf("user-db delete(%s): %v", table, err)
+		status, msg := pgWriteError(err, 0)
+		jsonError(w, msg, status)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"table":   table,
+		"deleted": tag.RowsAffected(),
+	})
+}
+
+// pgWriteError maps postgres errors to an HTTP status + message for the client.
+func pgWriteError(err error, rowIdx int) (int, string) {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" {
+		return http.StatusConflict, fmt.Sprintf("row %d: conflict — %s", rowIdx, pgErr.Detail)
+	}
+	return http.StatusInternalServerError, "internal server error"
 }
 
 // buildUserUpsert builds an INSERT … ON CONFLICT … RETURNING * for one row.

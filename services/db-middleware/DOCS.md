@@ -19,6 +19,8 @@ API
 │ GET    │ /api/v1/user/{table}   │ Query a user table (same filters as /api/v1/{table}) │
 ├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
 │ POST   │ /api/v1/user/{table}   │ Upsert one row or an array of rows                   │
+├────────┼────────────────────────┼──────────────────────────────────────────────────────┤
+│ DELETE │ /api/v1/user/{table}   │ Delete rows matching the query filters (required)   │
 └────────┴────────────────────────┴──────────────────────────────────────────────────────┘
 
 Allowed tables: calgary_transit_stops, calgary_transit_routes, calgary_train_stations, trip_updates, stop_time_updates, vehicle_positions, alerts, trip_stop_delays,
@@ -127,6 +129,7 @@ is unset/unreachable these routes return 503 and the rest of the service is unaf
 │ GET    │ /api/v1/user/            │ List the user tables                       │
 │ GET    │ /api/v1/user/{table}     │ Query a user table (same filters as above) │
 │ POST   │ /api/v1/user/{table}     │ Upsert one row or an array of rows         │
+│ DELETE │ /api/v1/user/{table}     │ Delete rows matching filters (required)    │
 └────────┴──────────────────────────┴────────────────────────────────────────────┘
 
 Tables: user_info, user_defined_default_categories, user_defined_default_themes,
@@ -150,6 +153,12 @@ POST body is a single JSON object or an array of objects:
   - GENERATED ALWAYS / identity columns are ignored if supplied; unknown columns → 400.
   - All rows in one request run in a single transaction (all-or-nothing).
   - Response: { table, count, data:[…RETURNING * rows…] }.
+
+DELETE removes rows matching the query filters (same filter syntax as GET):
+  curl -X DELETE ".../api/v1/user/saved_addresses?user_id=u1&category_code=u1:home"
+  - At least one filter is required — an unfiltered DELETE is rejected (400) so a
+    stray request can never wipe a table.
+  - Response: { table, deleted: N }.
 
 Write-path safety: table + columns validated against the whitelist and the live schema;
 every value bound as a $N parameter cast to its column type (no SQL injection). NOTE:
