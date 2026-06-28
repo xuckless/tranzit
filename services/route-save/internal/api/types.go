@@ -26,9 +26,10 @@ type StartRequest struct {
 	Destination *LatLng `json:"destination,omitempty"`
 	// Mode/NumItineraries tune the OTP travel profile for source="opentrip" trips
 	// (and their reroutes); ignored on the Google path. Defaults apply when zero.
-	Mode           string  `json:"mode,omitempty"`
-	NumItineraries int     `json:"num_itineraries,omitempty"`
-	UserID         *string `json:"user_id,omitempty"`
+	Mode           string `json:"mode,omitempty"`
+	NumItineraries int    `json:"num_itineraries,omitempty"`
+	// UserID is intentionally absent: the trip owner is derived from the verified
+	// Supabase JWT (the token `sub`), never trusted from the request body.
 }
 
 // OTPStartRequest is the body of POST /tranzit-route: the server owns the directions
@@ -39,7 +40,8 @@ type OTPStartRequest struct {
 	Destination    *LatLng `json:"destination"`
 	Mode           string  `json:"mode,omitempty"`
 	NumItineraries int     `json:"num_itineraries,omitempty"`
-	UserID         *string `json:"user_id,omitempty"`
+	// UserID is intentionally absent: the trip owner is derived from the verified
+	// Supabase JWT (the token `sub`), never trusted from the request body.
 }
 
 // LatLng is a coordinate pair.

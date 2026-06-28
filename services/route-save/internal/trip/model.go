@@ -125,7 +125,7 @@ type UserLocation struct {
 // TripState is the per-session, server-held trip (§4.2).
 type TripState struct {
 	SessionID   string
-	UserID      *string // nullable until auth wired
+	UserID      *string // owner UUID from the verified Supabase JWT (token `sub`)
 	Origin      geo.LatLng
 	Destination geo.LatLng
 

@@ -3,3 +3,7 @@ TODO.md
 
 .idea
 .zed
+
+# mTLS key material — never commit. Keep the dir tracked.
+certs/*
+!certs/.gitkeep

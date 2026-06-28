@@ -41,6 +41,11 @@ type Session struct {
 	machine *state.Machine
 	trip    *trip.TripState
 
+	// owner is the authenticated user UUID that created this trip. Set once in
+	// newSession (before the actor goroutine starts) and never mutated, so it is
+	// safe to read from HTTP handlers for ownership checks without a lock.
+	owner string
+
 	// Routing setup (§18.2): a Google session reroutes via destPlaceID; an OTP
 	// session reroutes via the OTP client to the destination coords on trip, using
 	// the stored travel profile.
@@ -87,6 +92,7 @@ func newSession(ts *trip.TripState, cfg sessionConfig, deps Deps, mgr *Manager) 
 		deps:        deps,
 		mgr:         mgr,
 		trip:        ts,
+		owner:       cfg.owner,
 		destPlaceID: cfg.destPlaceID,
 		isOTP:       cfg.isOTP,
 		otpMode:     cfg.otpMode,
@@ -112,6 +118,10 @@ func newSession(ts *trip.TripState, cfg sessionConfig, deps Deps, mgr *Manager) 
 	})
 	return s
 }
+
+// Owner returns the authenticated user UUID that created this trip. Immutable
+// after construction, so it is safe to read from HTTP handlers.
+func (s *Session) Owner() string { return s.owner }
 
 // run is the event loop. It owns all TripState mutation. The 1s tick drives the
 // state machine; STATE is not pushed inline but coalesced and flushed to the

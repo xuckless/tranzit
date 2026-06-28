@@ -34,6 +34,7 @@ type Deps struct {
 // destPlaceID; an OTP session carries isOTP + the OTP travel profile (destination is
 // the coords already on TripState).
 type sessionConfig struct {
+	owner        string // authenticated owner UUID (token `sub`); set once, never mutated
 	destPlaceID  string
 	isOTP        bool
 	otpMode      string
@@ -60,16 +61,16 @@ func NewManager(deps Deps) *Manager {
 // destination place ID, launches the event loop, and returns the session.
 // initialRoute is the raw Google route the client POSTed, retained so the GET
 // /trips/{id} pull path can serve the current polyline before any reroute.
-func (m *Manager) Create(ts *trip.TripState, destPlaceID string, initialRoute json.RawMessage) *Session {
-	return m.start(ts, sessionConfig{destPlaceID: destPlaceID, initialRoute: initialRoute})
+func (m *Manager) Create(ts *trip.TripState, ownerID, destPlaceID string, initialRoute json.RawMessage) *Session {
+	return m.start(ts, sessionConfig{owner: ownerID, destPlaceID: destPlaceID, initialRoute: initialRoute})
 }
 
 // CreateOTP starts tracking an OTP-routed trip. Reroutes and GET refreshes call the
 // OTP client from the rider's position to the destination coords on TripState, using
 // the stored travel profile (mode/num). initialRoute is the raw OTP envelope
 // ({source:"opentrip", itineraries:[chosen]}) served on the GET pull path.
-func (m *Manager) CreateOTP(ts *trip.TripState, mode string, num int, initialRoute json.RawMessage) *Session {
-	return m.start(ts, sessionConfig{isOTP: true, otpMode: mode, otpNum: num, initialRoute: initialRoute})
+func (m *Manager) CreateOTP(ts *trip.TripState, ownerID, mode string, num int, initialRoute json.RawMessage) *Session {
+	return m.start(ts, sessionConfig{owner: ownerID, isOTP: true, otpMode: mode, otpNum: num, initialRoute: initialRoute})
 }
 
 func (m *Manager) start(ts *trip.TripState, cfg sessionConfig) *Session {

@@ -11,6 +11,24 @@ type Endpoints struct {
 	MiddlewareURL string
 	// RouteServiceURL is tranzit-route-service's base URL (directions /route).
 	RouteServiceURL string
+	// SupabaseURL is the Supabase project URL (https://<ref>.supabase.co) whose
+	// JWKS endpoint auth tokens are verified against. No default — it is
+	// environment-specific and auth cannot run without it.
+	SupabaseURL string
+
+	// mTLS client material for service-to-service calls (AUTH.md). Route Save is a
+	// client only. Cert paths default to the container mount; the *MTLSAddr fields
+	// are empty by default, in which case calls fall back to the Funnel URLs above.
+	MTLSCACert string
+	MTLSCert   string
+	MTLSKey    string
+	// MiddlewareMTLSAddr / RouteServiceMTLSAddr are the siblings' tailnet mTLS
+	// endpoints (host:port). Set to switch that sibling's calls from Funnel to mTLS.
+	MiddlewareMTLSAddr   string
+	RouteServiceMTLSAddr string
+	// ServerName must match a SAN on the sibling's cert (default = its service name).
+	MiddlewareMTLSServerName   string
+	RouteServiceMTLSServerName string
 }
 
 // Tailnet MagicDNS URLs of the sibling services (local Docker nodes). Route Save
@@ -28,6 +46,15 @@ func LoadEndpoints() Endpoints {
 		ServerAddr:      normalizeAddr(getenv("PORT", "8090")),
 		MiddlewareURL:   getenv("MIDDLEWARE_URL", defaultMiddlewareURL),
 		RouteServiceURL: getenv("ROUTE_SERVICE_URL", defaultRouteServiceURL),
+		SupabaseURL:     os.Getenv("SUPABASE_URL"),
+
+		MTLSCACert:                 getenv("MTLS_CA_CERT", "/certs/ca.crt"),
+		MTLSCert:                   getenv("MTLS_CERT", "/certs/tranzit-route-save.crt"),
+		MTLSKey:                    getenv("MTLS_KEY", "/certs/tranzit-route-save.key"),
+		MiddlewareMTLSAddr:         os.Getenv("MIDDLEWARE_MTLS_ADDR"),
+		RouteServiceMTLSAddr:       os.Getenv("ROUTE_SERVICE_MTLS_ADDR"),
+		MiddlewareMTLSServerName:   getenv("MIDDLEWARE_MTLS_SERVERNAME", "tranzit-db-middleware"),
+		RouteServiceMTLSServerName: getenv("ROUTE_SERVICE_MTLS_SERVERNAME", "tranzit-route-service"),
 	}
 }
 

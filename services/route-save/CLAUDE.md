@@ -4,6 +4,8 @@
 **Platform:** Go service (backend), React Native / Expo (client)
 **Status:** Build spec + in-progress implementation. Build-order steps 1–4 (trip load, state machine, WS/RT wiring, reroute) are **built and tested**; persistence onward is pending. **See §18 for the as-built code, how to run it, and where implementation diverged from this spec.** Remaining work is tracked in `TODO.md`.
 
+**Auth:** inbound Supabase JWT (hard-enforced) + outbound service-to-service mTLS — see [`AUTH.md`](./AUTH.md).
+
 ---
 
 ## 1. Overview & Scope

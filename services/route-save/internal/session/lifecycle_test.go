@@ -31,7 +31,7 @@ func TestSession_ClosesWhenNoClientAttaches(t *testing.T) {
 	// thing acting on the session.
 	deps := Deps{Data: fx, RT: &rtfeed.Fake{}, Routes: &routeclient.Fake{}, Clock: clk}
 	mgr := NewManager(deps)
-	mgr.Create(ts, "", nil) // starts the loop; no WebSocket ever attaches
+	mgr.Create(ts, "owner-1", "", nil) // starts the loop; no WebSocket ever attaches
 
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {

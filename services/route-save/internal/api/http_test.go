@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"strings"
 	"testing"
@@ -28,6 +29,27 @@ import (
 // run is an upcoming (boardable) trip rather than a departed one excluded by §5.2's
 // past-floor.
 const fixtureNow = 2_000_000_000
+
+// Test identities: the fake verifier maps opaque tokens to user ids. tokenA is the
+// default actor; tokenB is a second user used for ownership checks. Any other token
+// (or none) is rejected, mirroring the real 401 path.
+const (
+	tokenA = "tok-a"
+	userA  = "user-a"
+	tokenB = "tok-b"
+	userB  = "user-b"
+)
+
+// fakeVerifier is an in-memory auth.Verifier for tests: known token → user id, all
+// else an error (→ 401).
+type fakeVerifier map[string]string
+
+func (f fakeVerifier) Verify(_ context.Context, token string) (string, error) {
+	if uid, ok := f[token]; ok {
+		return uid, nil
+	}
+	return "", errors.New("fake verifier: unknown token")
+}
 
 // fixture matching testdata/route_single.json's entry/exit stops.
 func newFixture() *datasource.Fixture {
@@ -55,7 +77,68 @@ func newTestServer(t *testing.T) (*httptest.Server, *session.Manager, *routeclie
 		OTPRoutes: otp,
 		Clock:     &state.FakeClock{T: fixtureNow},
 	})
-	return httptest.NewServer(api.NewServer(mgr, fx, otp).Handler()), mgr, routes, otp
+	verifier := fakeVerifier{tokenA: userA, tokenB: userB}
+	return httptest.NewServer(api.NewServer(mgr, fx, otp, verifier).Handler()), mgr, routes, otp
+}
+
+// ─── auth-aware request helpers ───────────────────────────────────────────────
+// REST calls carry the token as a Bearer header; the WS upgrade carries it as the
+// ?token= query param (the RN client can't set headers on the upgrade). Pass an
+// empty token to exercise the unauthenticated path.
+
+func doPost(t *testing.T, url, token string, body []byte) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	if err != nil {
+		t.Fatalf("new POST request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("POST %s: %v", url, err)
+	}
+	return resp
+}
+
+func doGet(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, url, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("GET %s: %v", url, err)
+	}
+	return resp
+}
+
+func doDelete(t *testing.T, url, token string) *http.Response {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodDelete, url, nil)
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", url, err)
+	}
+	return resp
+}
+
+// dialWS opens the trip WebSocket, passing the token as the ?token= query param.
+// It returns the dialer's error and HTTP response so callers can assert on a
+// rejected upgrade (gorilla returns the response on ErrBadHandshake).
+func dialWS(t *testing.T, srvURL, wsPath, token string) (*websocket.Conn, *http.Response, error) {
+	t.Helper()
+	wsURL := "ws" + strings.TrimPrefix(srvURL, "http") + wsPath
+	if token != "" {
+		wsURL += "?token=" + url.QueryEscape(token)
+	}
+	return websocket.DefaultDialer.Dial(wsURL, nil)
 }
 
 func TestLifecycle_StartConnectStream(t *testing.T) {
@@ -72,10 +155,7 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 	})
 
 	// Start the trip.
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /trips: %v", err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
 	}
@@ -92,8 +172,7 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 	}
 
 	// Connect the WebSocket and read the initial STATE export.
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + start.WSURL
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := dialWS(t, srv.URL, start.WSURL, tokenA)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -140,10 +219,7 @@ func TestStart_WalkOnlyRoute(t *testing.T) {
 		"destination_place_id": "place-xyz",
 	})
 
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /trips: %v", err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201 for walk-only route", resp.StatusCode)
 	}
@@ -156,8 +232,7 @@ func TestStart_WalkOnlyRoute(t *testing.T) {
 		t.Fatalf("session not started (id=%q count=%d)", start.SessionID, mgr.Count())
 	}
 
-	wsURL := "ws" + strings.TrimPrefix(srv.URL, "http") + start.WSURL
-	conn, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	conn, _, err := dialWS(t, srv.URL, start.WSURL, tokenA)
 	if err != nil {
 		t.Fatalf("ws dial: %v", err)
 	}
@@ -196,10 +271,7 @@ func TestStart_RejectsMissingDestination(t *testing.T) {
 	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
 	body, _ := json.Marshal(map[string]any{"route": json.RawMessage(routeJSON)})
 
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for missing destination_place_id", resp.StatusCode)
@@ -236,20 +308,14 @@ func TestGetTrip_RefreshesAndReturnsRoute(t *testing.T) {
 		"route":                json.RawMessage(routeJSON),
 		"destination_place_id": "place-xyz",
 	})
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /trips: %v", err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	var start api.StartResponse
 	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
 		t.Fatalf("decode start: %v", err)
 	}
 	resp.Body.Close()
 
-	getResp, err := http.Get(srv.URL + "/trips/" + start.SessionID)
-	if err != nil {
-		t.Fatalf("GET /trips/{id}: %v", err)
-	}
+	getResp := doGet(t, srv.URL+"/trips/"+start.SessionID, tokenA)
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", getResp.StatusCode)
@@ -294,20 +360,14 @@ func TestGetTrip_FallsBackToLastRouteOnRefreshError(t *testing.T) {
 		"route":                json.RawMessage(routeJSON),
 		"destination_place_id": "place-xyz",
 	})
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /trips: %v", err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	var start api.StartResponse
 	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
 		t.Fatalf("decode start: %v", err)
 	}
 	resp.Body.Close()
 
-	getResp, err := http.Get(srv.URL + "/trips/" + start.SessionID)
-	if err != nil {
-		t.Fatalf("GET /trips/{id}: %v", err)
-	}
+	getResp := doGet(t, srv.URL+"/trips/"+start.SessionID, tokenA)
 	defer getResp.Body.Close()
 	if getResp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", getResp.StatusCode)
@@ -327,10 +387,7 @@ func TestGetTrip_UnknownSession(t *testing.T) {
 	srv, _, _, _ := newTestServer(t)
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/trips/does-not-exist")
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := doGet(t, srv.URL+"/trips/does-not-exist", tokenA)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want 404 for unknown session", resp.StatusCode)
@@ -368,10 +425,7 @@ func TestStart_OpenTripSource(t *testing.T) {
 		"destination": map[string]float64{"lat": 51.04, "lng": -114.09},
 	})
 
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /trips (otp): %v", err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
@@ -397,10 +451,7 @@ func TestStart_OpenTripSource_RejectsMissingDestination(t *testing.T) {
 	envelope := `{"source":"opentrip","itineraries":[{"duration_seconds":600,"legs":[{"mode":"BUS","trip_id":"T","from_stop_id":"e","to_stop_id":"x"}]}]}`
 	body, _ := json.Marshal(map[string]any{"source": "opentrip", "route": json.RawMessage(envelope)})
 
-	resp, err := http.Post(srv.URL+"/trips", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for missing destination on opentrip route", resp.StatusCode)
@@ -434,10 +485,7 @@ func TestTranzitRoute_StartsOTPSession(t *testing.T) {
 		"origin":      map[string]float64{"lat": 51.05, "lng": -114.07},
 		"destination": map[string]float64{"lat": 51.04, "lng": -114.09},
 	})
-	resp, err := http.Post(srv.URL+"/tranzit-route", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatalf("POST /tranzit-route: %v", err)
-	}
+	resp := doPost(t, srv.URL+"/tranzit-route", tokenA, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("status = %d, want 201", resp.StatusCode)
@@ -466,14 +514,146 @@ func TestTranzitRoute_RejectsMissingCoords(t *testing.T) {
 	defer srv.Close()
 
 	body, _ := json.Marshal(map[string]any{"origin": map[string]float64{"lat": 51.05, "lng": -114.07}})
-	resp, err := http.Post(srv.URL+"/tranzit-route", "application/json", bytes.NewReader(body))
-	if err != nil {
-		t.Fatal(err)
-	}
+	resp := doPost(t, srv.URL+"/tranzit-route", tokenA, body)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
 		t.Errorf("status = %d, want 400 for missing destination", resp.StatusCode)
 	}
+}
+
+// TestHealth_NoAuth: /health is the one open route — reachable with no token.
+func TestHealth_NoAuth(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	resp := doGet(t, srv.URL+"/health", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200 for open /health", resp.StatusCode)
+	}
+}
+
+// TestAuth_RejectsUnauthenticated: protected REST routes 401 with no token and with
+// a token the verifier rejects.
+func TestAuth_RejectsUnauthenticated(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
+	body, _ := json.Marshal(map[string]any{
+		"route":                json.RawMessage(routeJSON),
+		"destination_place_id": "place-xyz",
+	})
+
+	for _, tc := range []struct{ name, token string }{
+		{"missing token", ""},
+		{"invalid token", "garbage"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resp := doPost(t, srv.URL+"/trips", tc.token, body)
+			defer resp.Body.Close()
+			if resp.StatusCode != http.StatusUnauthorized {
+				t.Errorf("status = %d, want 401", resp.StatusCode)
+			}
+		})
+	}
+	if mgr.Count() != 0 {
+		t.Errorf("unauthenticated POSTs created %d session(s), want 0", mgr.Count())
+	}
+}
+
+// TestAuth_WSRejectsMissingToken: the WS upgrade is gated too — no ?token= → 401,
+// before any session lookup.
+func TestAuth_WSRejectsMissingToken(t *testing.T) {
+	srv, _, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
+	body, _ := json.Marshal(map[string]any{
+		"route":                json.RawMessage(routeJSON),
+		"destination_place_id": "place-xyz",
+	})
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	resp.Body.Close()
+
+	conn, wsResp, err := dialWS(t, srv.URL, start.WSURL, "")
+	if err == nil {
+		conn.Close()
+		t.Fatal("WS upgrade succeeded without a token; want rejected")
+	}
+	if wsResp == nil || wsResp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("WS upgrade status = %v, want 401", wsResp)
+	}
+}
+
+// TestOwnership_OtherUserCannotAccess: a trip started by user A is invisible to
+// user B — GET/WS 404 (not even existence is leaked) and B's DELETE is a no-op
+// (idempotent 204 without teardown). A keeps a socket open so the never-attached
+// watchdog can't be what tears the trip down.
+func TestOwnership_OtherUserCannotAccess(t *testing.T) {
+	srv, mgr, _, _ := newTestServer(t)
+	defer srv.Close()
+
+	routeJSON, _ := os.ReadFile("../../testdata/route_single.json")
+	body, _ := json.Marshal(map[string]any{
+		"route":                json.RawMessage(routeJSON),
+		"destination_place_id": "place-xyz",
+	})
+	resp := doPost(t, srv.URL+"/trips", tokenA, body)
+	var start api.StartResponse
+	if err := json.NewDecoder(resp.Body).Decode(&start); err != nil {
+		t.Fatalf("decode start: %v", err)
+	}
+	resp.Body.Close()
+
+	// Owner attaches and stays connected to keep the session alive.
+	ownerConn, _, err := dialWS(t, srv.URL, start.WSURL, tokenA)
+	if err != nil {
+		t.Fatalf("owner ws dial: %v", err)
+	}
+	defer ownerConn.Close()
+	ownerConn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, _, err := ownerConn.ReadMessage(); err != nil {
+		t.Fatalf("owner read STATE: %v", err)
+	}
+
+	// User B: GET → 404.
+	getResp := doGet(t, srv.URL+"/trips/"+start.SessionID, tokenB)
+	getResp.Body.Close()
+	if getResp.StatusCode != http.StatusNotFound {
+		t.Errorf("non-owner GET status = %d, want 404", getResp.StatusCode)
+	}
+
+	// User B: WS → rejected with 404.
+	conn, wsResp, err := dialWS(t, srv.URL, start.WSURL, tokenB)
+	if err == nil {
+		conn.Close()
+		t.Error("non-owner WS upgrade succeeded; want rejected")
+	} else if wsResp == nil || wsResp.StatusCode != http.StatusNotFound {
+		t.Errorf("non-owner WS status = %v, want 404", wsResp)
+	}
+
+	// User B: DELETE → 204 but must NOT tear the trip down.
+	delResp := doDelete(t, srv.URL+"/trips/"+start.SessionID, tokenB)
+	delResp.Body.Close()
+	if delResp.StatusCode != http.StatusNoContent {
+		t.Errorf("non-owner DELETE status = %d, want 204", delResp.StatusCode)
+	}
+	if mgr.Count() != 1 {
+		t.Fatalf("non-owner DELETE tore down the trip (count=%d)", mgr.Count())
+	}
+
+	// Owner DELETE tears it down.
+	ownerDel := doDelete(t, srv.URL+"/trips/"+start.SessionID, tokenA)
+	ownerDel.Body.Close()
+	if ownerDel.StatusCode != http.StatusNoContent {
+		t.Errorf("owner DELETE status = %d, want 204", ownerDel.StatusCode)
+	}
+	waitFor(t, 2*time.Second, func() bool { return mgr.Count() == 0 })
 }
 
 func waitFor(t *testing.T, d time.Duration, cond func() bool) {
