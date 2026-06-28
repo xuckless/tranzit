@@ -288,6 +288,21 @@ func computeVehicleDiff(prev map[string]string, newRows []map[string]any) (vehic
 	return diff, newHashes
 }
 
+// handleVehiclePositions serves the live vehicle fleet two ways on one path.
+// The app subscribes to the whole fleet as an SSE stream (it hits the bare path
+// and, being an EventSource, sends Accept: text/event-stream). Sibling services
+// (route-service) instead do a filtered point-query, e.g.
+// ?trip_id=<id>&limit=1, and want plain JSON — which the generic table API
+// (handleQuery; vehicle_positions is whitelisted) already returns as
+// {"data":[...]}. Dispatch on intent so neither caller needs to change.
+func handleVehiclePositions(w http.ResponseWriter, r *http.Request) {
+	if r.URL.RawQuery == "" || strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
+		handleVehicleSSE(w, r)
+		return
+	}
+	handleQuery(w, r)
+}
+
 func handleVehicleSSE(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		jsonError(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1056,7 +1071,7 @@ func registerRoutes() *http.ServeMux {
 	// Exact matches take precedence over the /api/v1/ prefix catch-all.
 	// SSE endpoints are not gzipped — chunked event streams and gzip buffering don't
 	// mix, and their diffs are already small.
-	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehicleSSE))
+	mux.HandleFunc("/api/v1/vehicle_positions", withCORS(handleVehiclePositions))
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
 	mux.HandleFunc("/api/v1/resolve_trip", withCORS(withGzip(handleResolveTrip)))
 	mux.HandleFunc("/api/v1/trip_stops", withCORS(withGzip(handleTripStops)))
