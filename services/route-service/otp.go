@@ -12,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	_ "time/tzdata" // embed the tz database; the alpine runtime image ships no tzdata
 )
 
 // otpClientOnce builds a dedicated HTTP client for OTP traffic. When OTP_HTTP_PROXY is
@@ -93,6 +94,9 @@ type OTPRouteRequest struct {
 	Mode string `json:"mode"`
 	// NumItineraries caps how many ranked options to return (default 5).
 	NumItineraries int `json:"num_itineraries"`
+	// DepartureTime is the desired depart-at instant as RFC3339. Empty or "now" ⇒ now. OTP plans
+	// forward from here to the next available trip (see FetchOTPRoutes).
+	DepartureTime string `json:"departure_time"`
 }
 
 // transportMode is an OTP TransportMode input value.
@@ -118,13 +122,18 @@ func otpModes(mode string) ([]transportMode, error) {
 }
 
 const otpPlanQuery = `
-query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $modes: [TransportMode!], $num: Int) {
+query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $modes: [TransportMode!], $num: Int, $date: String, $time: String, $searchWindow: Int, $arriveBy: Boolean) {
   plan(
     from: {lat: $fromLat, lon: $fromLon}
     to: {lat: $toLat, lon: $toLon}
     transportModes: $modes
     numItineraries: $num
+    date: $date
+    time: $time
+    searchWindow: $searchWindow
+    arriveBy: $arriveBy
   ) {
+    searchWindowUsed
     itineraries {
       duration
       walkDistance
@@ -154,7 +163,8 @@ query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $
 type otpResponse struct {
 	Data struct {
 		Plan struct {
-			Itineraries []otpItinerary `json:"itineraries"`
+			SearchWindowUsed int            `json:"searchWindowUsed"`
+			Itineraries      []otpItinerary `json:"itineraries"`
 		} `json:"plan"`
 	} `json:"data"`
 	Errors []struct {
@@ -236,7 +246,21 @@ type CleanLeg struct {
 	Polyline          string    `json:"polyline"`
 }
 
-// FetchOTPRoutes plans a trip via OTP and returns cleaned itineraries.
+// calgaryTZ is the transit agency timezone; OTP's plan() date/time are wall-clock in this zone.
+// Embedded via the blank "time/tzdata" import so it resolves on the tzdata-less alpine image.
+var calgaryTZ = func() *time.Location {
+	loc, err := time.LoadLocation("America/Edmonton")
+	if err != nil {
+		return time.UTC
+	}
+	return loc
+}()
+
+// FetchOTPRoutes plans a trip via OTP and returns cleaned itineraries. It searches forward from
+// the requested departure time (default: now) until it finds the next available itinerary — like
+// Google/Apple — instead of giving up when nothing departs within OTP's short default window. A
+// narrow window is tried first (fast, common case), then full-day windows advancing up to a 7-day
+// horizon so the next departure is found no matter how far off it is.
 func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 	modes, err := otpModes(req.Mode)
 	if err != nil {
@@ -247,15 +271,60 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 		num = 5
 	}
 
+	// Resolve the departure instant (default now). Accepts RFC3339 or "now".
+	depart := time.Now()
+	if s := strings.TrimSpace(req.DepartureTime); s != "" && !strings.EqualFold(s, "now") {
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			return nil, fmt.Errorf("invalid departure_time %q (want RFC3339 or \"now\"): %w", s, perr)
+		}
+		depart = t
+	}
+
+	const (
+		firstWindow = 2 * time.Hour
+		dayWindow   = 24 * time.Hour
+		horizon     = 7 * 24 * time.Hour
+	)
+	deadline := depart.Add(horizon)
+
+	cursor := depart
+	window := firstWindow
+	for cursor.Before(deadline) {
+		out, used, err := planOnce(req, modes, num, cursor, int(window/time.Second))
+		if err != nil {
+			return nil, err
+		}
+		if len(out) > 0 {
+			log.Printf("[/route/otp] %d itineraries (departAt=%s window=%s searchWindowUsed=%ds)",
+				len(out), cursor.In(calgaryTZ).Format(time.RFC3339), window, used)
+			enrichVehicleIDs(out)
+			return out, nil
+		}
+		// Nothing in this window — advance past it and widen to full days.
+		cursor = cursor.Add(window)
+		window = dayWindow
+	}
+	return nil, nil
+}
+
+// planOnce runs a single OTP plan() for the given departure instant and search window (seconds),
+// returning the mapped itineraries and the searchWindow OTP actually used (for logging).
+func planOnce(req OTPRouteRequest, modes []transportMode, num int, depart time.Time, windowSecs int) ([]CleanItinerary, int, error) {
+	local := depart.In(calgaryTZ)
 	payload := map[string]any{
 		"query": otpPlanQuery,
 		"variables": map[string]any{
-			"fromLat": req.Origin.Lat,
-			"fromLon": req.Origin.Lng,
-			"toLat":   req.Destination.Lat,
-			"toLon":   req.Destination.Lng,
-			"modes":   modes,
-			"num":     num,
+			"fromLat":      req.Origin.Lat,
+			"fromLon":      req.Origin.Lng,
+			"toLat":        req.Destination.Lat,
+			"toLon":        req.Destination.Lng,
+			"modes":        modes,
+			"num":          num,
+			"date":         local.Format("2006-01-02"),
+			"time":         local.Format("15:04:05"),
+			"searchWindow": windowSecs,
+			"arriveBy":     false,
 		},
 	}
 	body, _ := json.Marshal(payload)
@@ -263,28 +332,28 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	url := otpBaseURL() + otpGraphQLPath()
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	u := otpBaseURL() + otpGraphQLPath()
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := otpHTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("otp http %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("otp http %d", resp.StatusCode)
 	}
 
 	var parsed otpResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, err
+		return nil, 0, err
 	}
 	if len(parsed.Errors) > 0 {
-		return nil, fmt.Errorf("otp graphql error: %s", parsed.Errors[0].Message)
+		return nil, 0, fmt.Errorf("otp graphql error: %s", parsed.Errors[0].Message)
 	}
 
 	out := make([]CleanItinerary, 0, len(parsed.Data.Plan.Itineraries))
@@ -328,8 +397,7 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 		out = append(out, ci)
 	}
 
-	enrichVehicleIDs(out)
-	return out, nil
+	return out, parsed.Data.Plan.SearchWindowUsed, nil
 }
 
 // enrichVehicleIDs fills in CleanLeg.VehicleID for transit legs by looking up the live
