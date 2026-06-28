@@ -7,23 +7,23 @@ import Animated, {
     runOnJS,
 } from "react-native-reanimated";
 import { Gesture, GestureDetector } from "react-native-gesture-handler";
-import { MaterialIcons } from "@expo/vector-icons";
+import { Ionicons } from "@expo/vector-icons";
 import * as Haptics from "expo-haptics";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
 import {
-    type PlannedTrip,
+    type PlannedEvent,
     formatClock,
-    formatDuration,
+    minutesOfDay,
     HOUR_HEIGHT,
     GUTTER_WIDTH,
-    TRAVEL_MIN_HEIGHT,
     EVENT_MIN_HEIGHT,
+    DAY_MIN,
     SNAP_MIN,
 } from "./trip";
 
 type Props = {
-    trip: PlannedTrip;
+    event: PlannedEvent;
     rightInset: number;
     onPress: (id: string) => void;
     onDrag: (id: string, deltaMin: number) => void;
@@ -33,7 +33,7 @@ function triggerHaptic() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 }
 
-function TripEventCardBase({ trip, rightInset, onPress, onDrag }: Props) {
+function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
     const { theme } = useTheme();
     const { colors } = theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -41,13 +41,13 @@ function TripEventCardBase({ trip, rightInset, onPress, onDrag }: Props) {
     const translateY = useSharedValue(0);
     const active = useSharedValue(0);
 
-    const top = (trip.departMin / 60) * HOUR_HEIGHT;
-    const travelH = Math.max(
-        ((trip.arriveMin - trip.departMin) / 60) * HOUR_HEIGHT,
-        TRAVEL_MIN_HEIGHT,
-    );
-    const eventH = Math.max(
-        ((trip.eventEndMin - trip.arriveMin) / 60) * HOUR_HEIGHT,
+    const startMin = minutesOfDay(event.start);
+    let endMin = minutesOfDay(event.end);
+    if (endMin <= startMin) endMin = DAY_MIN; // ends next day → clamp to end of day
+
+    const top = (startMin / 60) * HOUR_HEIGHT;
+    const height = Math.max(
+        ((endMin - startMin) / 60) * HOUR_HEIGHT,
         EVENT_MIN_HEIGHT,
     );
 
@@ -67,7 +67,7 @@ function TripEventCardBase({ trip, rightInset, onPress, onDrag }: Props) {
             const deltaMin =
                 Math.round((e.translationY / HOUR_HEIGHT) * 60 / SNAP_MIN) *
                 SNAP_MIN;
-            runOnJS(onDrag)(trip.id, deltaMin);
+            runOnJS(onDrag)(event.eventId, deltaMin);
             translateY.value = 0;
         })
         .onFinalize(() => {
@@ -77,7 +77,7 @@ function TripEventCardBase({ trip, rightInset, onPress, onDrag }: Props) {
     const tap = Gesture.Tap()
         .maxDuration(220)
         .onEnd(() => {
-            runOnJS(onPress)(trip.id);
+            runOnJS(onPress)(event.eventId);
         });
 
     const gesture = Gesture.Exclusive(pan, tap);
@@ -87,46 +87,43 @@ function TripEventCardBase({ trip, rightInset, onPress, onDrag }: Props) {
             { translateY: translateY.value },
             { scale: 1 + active.value * 0.02 },
         ],
-        opacity: 1 - active.value * 0.06,
+        opacity: (event.pending ? 0.85 : 1) - active.value * 0.06,
     }));
 
     return (
         <GestureDetector gesture={gesture}>
             <Animated.View
                 style={[
-                    styles.tripContainer,
+                    styles.container,
                     {
                         top,
-                        height: travelH + eventH,
+                        height,
                         left: GUTTER_WIDTH + 8,
                         right: rightInset,
                     },
                     animStyle,
                 ]}
             >
-                {/* Travel-time section — dotted left rail, transit icon + duration. */}
-                <View style={[styles.travelSection, { height: travelH }]}>
-                    <MaterialIcons
-                        name="directions-transit"
-                        size={15}
-                        color={colors.primary}
-                    />
-                    <Text style={styles.travelLabel} numberOfLines={1}>
-                        {formatDuration(trip.arriveMin - trip.departMin)} travel
-                        time
+                <View style={styles.titleRow}>
+                    {event.imported && (
+                        <Ionicons
+                            name="calendar-outline"
+                            size={13}
+                            color={colors.ink2}
+                        />
+                    )}
+                    <Text style={styles.title} numberOfLines={1}>
+                        {event.name}
                     </Text>
                 </View>
-
-                {/* Destination section — solid left rail, title + arrival window. */}
-                <View style={[styles.eventSection, { height: eventH }]}>
-                    <Text style={styles.eventTitle} numberOfLines={1}>
-                        {trip.destination}
+                <Text style={styles.time} numberOfLines={1}>
+                    {formatClock(startMin)} – {formatClock(endMin)}
+                </Text>
+                {!!event.location && (
+                    <Text style={styles.location} numberOfLines={1}>
+                        {event.location}
                     </Text>
-                    <Text style={styles.eventTime} numberOfLines={1}>
-                        {formatClock(trip.arriveMin)} –{" "}
-                        {formatClock(trip.eventEndMin)}
-                    </Text>
-                </View>
+                )}
             </Animated.View>
         </GestureDetector>
     );
@@ -137,45 +134,39 @@ export const TripEventCard = memo(TripEventCardBase);
 function makeStyles(t: AppTheme) {
     const { colors, typography, radii, shadow } = t;
     return StyleSheet.create({
-        tripContainer: {
+        container: {
             position: "absolute",
+            justifyContent: "center",
             borderRadius: radii.element,
             borderWidth: 1,
             borderColor: colors.primary + "44",
+            borderLeftWidth: 4,
+            borderLeftColor: colors.primary,
             backgroundColor: colors.primary + "14",
+            paddingHorizontal: 10,
+            paddingVertical: 6,
             overflow: "hidden",
             ...shadow.card,
             shadowOpacity: 0.12,
         },
-        travelSection: {
+        titleRow: {
             flexDirection: "row",
             alignItems: "center",
-            gap: 6,
-            paddingHorizontal: 10,
-            borderLeftWidth: 3,
-            borderLeftColor: colors.primary,
-            borderStyle: "dotted",
+            gap: 5,
         },
-        travelLabel: {
-            ...typography.bodySmall,
-            color: colors.primary,
-        },
-        eventSection: {
-            justifyContent: "center",
-            paddingHorizontal: 10,
-            borderLeftWidth: 4,
-            borderLeftColor: colors.primary,
-            borderTopWidth: 1,
-            borderTopColor: colors.primary + "33",
-            backgroundColor: colors.primary + "10",
-        },
-        eventTitle: {
+        title: {
             ...typography.bodyStrong,
             color: colors.ink,
+            flexShrink: 1,
         },
-        eventTime: {
+        time: {
             ...typography.caption,
             color: colors.ink2,
+            marginTop: 1,
+        },
+        location: {
+            ...typography.caption,
+            color: colors.ink3,
             marginTop: 1,
         },
     });

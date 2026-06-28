@@ -46,6 +46,25 @@ export interface SearchHistoryMirrorRow {
   pending: number;
 }
 
+// ─── Planner-event mirror types ─────────────────────────────────────────────────
+// Local SQLite mirror of the user DB `user_defined_events`. Doubles as the outbox:
+// `pending = 1` marks an event written locally but not yet confirmed in the user DB
+// (offline / 503), retried by the orchestrator. (user_id, event_id) PK matches the
+// remote PK so saves UPSERT in place. travel_time/recurrence_rule are deferred and
+// not mirrored. Scoped by user_id so multiple identities never collide.
+
+export interface PlannedEventMirrorRow {
+  user_id: string;
+  event_id: string;
+  name: string;
+  description: string | null;
+  location: string | null;
+  start_time: string; // ISO
+  end_time: string; // ISO
+  timezone: string | null;
+  pending: number;
+}
+
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -124,6 +143,26 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   `);
   // Add common_name to mirrors created before the column existed (idempotent).
   await _addColumnIfMissing(db, "search_history_cache", "common_name", "TEXT");
+
+  // Planner events mirror / outbox (one row per user_defined_events row).
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS planner_event_cache (
+      user_id     TEXT NOT NULL,
+      event_id    TEXT NOT NULL,
+      name        TEXT NOT NULL,
+      description TEXT,
+      location    TEXT,
+      start_time  TEXT NOT NULL,
+      end_time    TEXT NOT NULL,
+      timezone    TEXT,
+      pending     INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+      PRIMARY KEY (user_id, event_id)
+    );
+  `);
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_planner_event_user
+      ON planner_event_cache (user_id, start_time)
+  `);
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS transit_stops_cache (
@@ -442,6 +481,127 @@ export async function mirrorReplaceAllSearch(
         r.origin_address,
         r.category_code,
         r.date_time
+      );
+    }
+  });
+}
+
+// ─── Planner-event mirror (offline cache / outbox of the user DB) ───────────────
+
+const EVENT_COLS = `user_id, event_id, name, description, location,
+            start_time, end_time, timezone, pending`;
+
+export async function mirrorReadEvents(
+  userId: string
+): Promise<PlannedEventMirrorRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<PlannedEventMirrorRow>(
+    `SELECT ${EVENT_COLS} FROM planner_event_cache
+      WHERE user_id = ? ORDER BY start_time ASC`,
+    userId
+  );
+}
+
+export async function mirrorReadPendingEvents(
+  userId: string
+): Promise<PlannedEventMirrorRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<PlannedEventMirrorRow>(
+    `SELECT ${EVENT_COLS} FROM planner_event_cache
+      WHERE user_id = ? AND pending = 1 ORDER BY start_time ASC`,
+    userId
+  );
+}
+
+export async function mirrorUpsertEvent(
+  row: PlannedEventMirrorRow
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO planner_event_cache
+       (user_id, event_id, name, description, location,
+        start_time, end_time, timezone, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, event_id) DO UPDATE SET
+       name        = excluded.name,
+       description = excluded.description,
+       location    = excluded.location,
+       start_time  = excluded.start_time,
+       end_time    = excluded.end_time,
+       timezone    = excluded.timezone,
+       pending     = excluded.pending`,
+    row.user_id,
+    row.event_id,
+    row.name,
+    row.description,
+    row.location,
+    row.start_time,
+    row.end_time,
+    row.timezone,
+    row.pending
+  );
+}
+
+export async function mirrorClearPendingEvent(
+  userId: string,
+  eventId: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE planner_event_cache SET pending = 0 WHERE user_id = ? AND event_id = ?",
+    userId,
+    eventId
+  );
+}
+
+export async function mirrorDeleteEvent(
+  userId: string,
+  eventId: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "DELETE FROM planner_event_cache WHERE user_id = ? AND event_id = ?",
+    userId,
+    eventId
+  );
+}
+
+/**
+ * Replace the mirror for a user with the authoritative remote rows, but never
+ * clobber rows still pending a remote write (offline saves stay until pushed).
+ */
+export async function mirrorReplaceAllEvents(
+  userId: string,
+  rows: PlannedEventMirrorRow[]
+): Promise<void> {
+  const db = await getDb();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      "DELETE FROM planner_event_cache WHERE user_id = ? AND pending = 0",
+      userId
+    );
+    for (const r of rows) {
+      await txn.runAsync(
+        `INSERT INTO planner_event_cache
+           (user_id, event_id, name, description, location,
+            start_time, end_time, timezone, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+         ON CONFLICT(user_id, event_id) DO UPDATE SET
+           name        = excluded.name,
+           description = excluded.description,
+           location    = excluded.location,
+           start_time  = excluded.start_time,
+           end_time    = excluded.end_time,
+           timezone    = excluded.timezone,
+           pending     = 0`,
+        r.user_id,
+        r.event_id,
+        r.name,
+        r.description,
+        r.location,
+        r.start_time,
+        r.end_time,
+        r.timezone
       );
     }
   });

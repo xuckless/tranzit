@@ -68,6 +68,12 @@
       "expo-notifications",
       "expo-web-browser",
       [
+        "expo-calendar",
+        {
+          "calendarPermission": "Allow Tranzit to read your calendar to show your events on the planner."
+        }
+      ],
+      [
         "expo-build-properties",
         {
           "ios": {

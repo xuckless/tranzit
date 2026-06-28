@@ -1,32 +1,71 @@
 // Shared model + helpers for the Trip Planner timeline.
 //
-// TODO(trip-planner): PlannedTrip is currently in-memory only (SAMPLE_TRIPS). Back
-// it with a user-specific trips store — a Supabase table keyed by user id, optionally
-// mirrored into expo-sqlite for offline reads — and load/persist edits there. Travel
-// times (departMin→arriveMin) should come from the Route Service ETA, and eventEndMin
-// from the linked calendar event (iCal / Google / Outlook import).
+// An event is a plain time block backed by the user DB `user_defined_events`
+// (name, location, description→notes, start_time, end_time, timezone) and mirrored
+// into expo-sqlite for offline reads (lib/plannerEvents.ts, lib/db.ts). Travel
+// time / leave-by (departMin) and recurrence are deferred — they return with the
+// route service (cached_pre_routes) and the recurring-events pass.
 
 // ─── Layout constants (shared by the screen and the card) ─────────────────────
 export const HOUR_HEIGHT = 60; // px per hour row — the timeline's vertical scale
 export const GUTTER_WIDTH = 56; // left column holding the hour labels
 export const TOTAL_HEIGHT = HOUR_HEIGHT * 24;
-export const TRAVEL_MIN_HEIGHT = 30; // floor so short travel sections stay legible
-export const EVENT_MIN_HEIGHT = 44; // floor so short destination sections stay legible
+export const EVENT_MIN_HEIGHT = 44; // floor so short events stay legible
 export const DAY_MIN = 24 * 60;
 export const SNAP_MIN = 5; // drag + steppers snap to 5-minute increments
 
 // ─── Model ────────────────────────────────────────────────────────────────────
-export type TimingMode = "leave" | "arrive";
 
-export type PlannedTrip = {
-    id: string;
-    destination: string;
-    origin: string;
-    departMin: number; // minutes from midnight — leave origin (travel starts)
-    arriveMin: number; // minutes from midnight — reach destination (travel ends)
-    eventEndMin: number; // minutes from midnight — end of the appointment
-    mode: TimingMode;
+/** A planned event. `start`/`end` are ISO 8601 timestamps (with offset). */
+export type PlannedEvent = {
+    eventId: string;
+    name: string;
+    location: string | null;
+    notes: string | null;
+    start: string; // ISO — event start
+    end: string; // ISO — event end
+    timezone: string | null;
+    /** True when the row hasn't been confirmed in the user DB yet. */
+    pending: boolean;
+    /** Derived: imported from the device calendar (event_id begins "device:"). */
+    imported: boolean;
 };
+
+// ─── Time ↔ timeline helpers ──────────────────────────────────────────────────
+
+/** Minutes from local midnight for an ISO timestamp (device-local rendering). */
+export function minutesOfDay(iso: string): number {
+    const d = new Date(iso);
+    return d.getHours() * 60 + d.getMinutes();
+}
+
+/** YYYY-MM-DD in local time — the key used to bucket events onto a day. */
+export function localDayKey(d: Date): string {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+}
+
+/** True when the event's local start date matches the given YYYY-MM-DD key. */
+export function eventOnDay(ev: PlannedEvent, dayKey: string): boolean {
+    return localDayKey(new Date(ev.start)) === dayKey;
+}
+
+/** Build an ISO timestamp for a YYYY-MM-DD day at `min` minutes local time. */
+export function isoForDay(dayKey: string, min: number): string {
+    const [y, m, d] = dayKey.split("-").map(Number);
+    return new Date(y, m - 1, d, Math.floor(min / 60), min % 60, 0, 0).toISOString();
+}
+
+/** The device's IANA timezone (e.g. "America/Edmonton"), or null if unavailable. */
+export function deviceTimezone(): string | null {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || null;
+    } catch {
+        return null;
+    }
+}
 
 // ─── Formatters ───────────────────────────────────────────────────────────────
 export function formatHourLabel(hour: number): string {
@@ -56,38 +95,25 @@ export function formatDuration(min: number): string {
 
 // ─── Mutations (pure) ─────────────────────────────────────────────────────────
 
-/** Shift the whole trip block by deltaMin, clamped so it stays within the day. */
-export function shiftTrip(trip: PlannedTrip, deltaMin: number): PlannedTrip {
-    let d = deltaMin;
-    d = Math.max(d, -trip.departMin); // can't start before 00:00
-    d = Math.min(d, DAY_MIN - trip.eventEndMin); // can't end after 24:00
-    if (d === 0) return trip;
-    return {
-        ...trip,
-        departMin: trip.departMin + d,
-        arriveMin: trip.arriveMin + d,
-        eventEndMin: trip.eventEndMin + d,
-    };
+/** Minutes between start and end. */
+export function durationMin(ev: PlannedEvent): number {
+    return Math.round(
+        (new Date(ev.end).getTime() - new Date(ev.start).getTime()) / 60000,
+    );
 }
 
-// ─── Sample data (skeleton only) ──────────────────────────────────────────────
-export const SAMPLE_TRIPS: PlannedTrip[] = [
-    {
-        id: "1",
-        destination: "Downtown — 7th Ave Office",
-        origin: "Current location",
-        departMin: 8 * 60, // 08:00 leave
-        arriveMin: 8 * 60 + 45, // 08:45 arrive (45 min travel)
-        eventEndMin: 9 * 60 + 45, // 09:45
-        mode: "arrive",
-    },
-    {
-        id: "2",
-        destination: "University of Calgary",
-        origin: "Downtown — 7th Ave Office",
-        departMin: 17 * 60 + 15, // 17:15 leave
-        arriveMin: 18 * 60 + 5, // 18:05 arrive (50 min travel)
-        eventEndMin: 19 * 60 + 5, // 19:05
-        mode: "leave",
-    },
-];
+/**
+ * Shift the event by deltaMin, clamped so it stays within its start day (drag is
+ * single-day). Preserves the calendar date and the event's duration.
+ */
+export function shiftEvent(ev: PlannedEvent, deltaMin: number): PlannedEvent {
+    const startMin = minutesOfDay(ev.start);
+    const dur = durationMin(ev);
+    let d = deltaMin;
+    d = Math.max(d, -startMin); // can't start before 00:00
+    d = Math.min(d, DAY_MIN - (startMin + dur)); // keep the block within the day
+    if (d === 0) return ev;
+    const newStart = new Date(new Date(ev.start).getTime() + d * 60000);
+    const newEnd = new Date(newStart.getTime() + dur * 60000);
+    return { ...ev, start: newStart.toISOString(), end: newEnd.toISOString() };
+}

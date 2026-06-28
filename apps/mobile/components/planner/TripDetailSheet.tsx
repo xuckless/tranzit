@@ -7,29 +7,33 @@ import BottomSheet, {
     type BottomSheetBackdropProps,
 } from "@gorhom/bottom-sheet";
 import { Ionicons, MaterialIcons } from "@expo/vector-icons";
-import AntDesign from "@expo/vector-icons/AntDesign";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
+import type { SaveEventInput } from "@/lib/plannerEvents";
 import { Stepper } from "./Stepper";
 import {
-    type PlannedTrip,
+    type PlannedEvent,
     formatClock,
     formatDuration,
+    minutesOfDay,
+    durationMin,
+    localDayKey,
+    isoForDay,
     DAY_MIN,
     SNAP_MIN,
 } from "./trip";
 
 type Props = {
-    trip: PlannedTrip | null;
+    event: PlannedEvent | null;
     onClose: () => void;
-    onSave: (trip: PlannedTrip) => void;
+    onSave: (event: SaveEventInput) => void;
     onDelete: (id: string) => void;
 };
 
 const clamp = (v: number, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, v));
 
-export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
+export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
     const { theme } = useTheme();
     const { colors } = theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -39,23 +43,23 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
     const [editing, setEditing] = useState(false);
 
     // Editable draft (decomposed so steppers are simple). Repopulated whenever a
-    // different trip is selected.
-    const [destination, setDestination] = useState("");
-    const [origin, setOrigin] = useState("");
-    const [departMin, setDepartMin] = useState(0);
-    const [travelMin, setTravelMin] = useState(0);
-    const [eventDurMin, setEventDurMin] = useState(0);
+    // different event is selected.
+    const [name, setName] = useState("");
+    const [location, setLocation] = useState("");
+    const [notes, setNotes] = useState("");
+    const [startMin, setStartMin] = useState(0);
+    const [durMin, setDurMin] = useState(60);
 
     useEffect(() => {
-        if (!trip) return;
-        setDestination(trip.destination);
-        setOrigin(trip.origin);
-        setDepartMin(trip.departMin);
-        setTravelMin(trip.arriveMin - trip.departMin);
-        setEventDurMin(trip.eventEndMin - trip.arriveMin);
+        if (!event) return;
+        setName(event.name);
+        setLocation(event.location ?? "");
+        setNotes(event.notes ?? "");
+        setStartMin(minutesOfDay(event.start));
+        setDurMin(durationMin(event));
         setEditing(false);
         sheetRef.current?.snapToIndex(0);
-    }, [trip]);
+    }, [event]);
 
     const renderBackdrop = useCallback(
         (props: BottomSheetBackdropProps) => (
@@ -77,25 +81,25 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
     );
 
     const handleSave = useCallback(() => {
-        if (!trip) return;
-        const arriveMin = departMin + travelMin;
-        // TODO(trip-planner): persist this edit to the per-user trips store and, if
-        // times changed, re-request the Route Service ETA and reschedule the
-        // leave-by local notification (lib/leaveByNotifications.ts).
+        if (!event) return;
+        const dayKey = localDayKey(new Date(event.start));
+        const start = isoForDay(dayKey, startMin);
+        const end = new Date(
+            new Date(start).getTime() + durMin * 60000,
+        ).toISOString();
         onSave({
-            ...trip,
-            destination: destination.trim() || trip.destination,
-            origin: origin.trim() || trip.origin,
-            departMin,
-            arriveMin,
-            eventEndMin: arriveMin + eventDurMin,
+            eventId: event.eventId,
+            name: name.trim() || event.name,
+            location: location.trim() || null,
+            notes: notes.trim() || null,
+            start,
+            end,
+            timezone: event.timezone,
         });
         setEditing(false);
-    }, [trip, destination, origin, departMin, travelMin, eventDurMin, onSave]);
+    }, [event, name, location, notes, startMin, durMin, onSave]);
 
-    const arriveMin = departMin + travelMin;
-    const eventEndMin = arriveMin + eventDurMin;
-    const modeLabel = trip?.mode === "leave" ? "Leave by" : "Arrive by";
+    const endMin = startMin + durMin;
 
     return (
         <BottomSheet
@@ -113,13 +117,13 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
                 contentContainerStyle={styles.content}
                 showsVerticalScrollIndicator={false}
             >
-                {trip && (
+                {event && (
                     <>
                         {/* Header */}
                         <View style={styles.headerRow}>
                             <View style={styles.headerIcon}>
                                 <MaterialIcons
-                                    name="directions-transit"
+                                    name="event"
                                     size={20}
                                     color={colors.onPrimary}
                                 />
@@ -128,9 +132,9 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
                                 {editing ? (
                                     <BottomSheetTextInput
                                         style={styles.titleInput}
-                                        value={destination}
-                                        onChangeText={setDestination}
-                                        placeholder="Destination"
+                                        value={name}
+                                        onChangeText={setName}
+                                        placeholder="Event name"
                                         placeholderTextColor={colors.ink3}
                                     />
                                 ) : (
@@ -138,189 +142,142 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
                                         style={styles.title}
                                         numberOfLines={2}
                                     >
-                                        {trip.destination}
+                                        {event.name}
                                     </Text>
                                 )}
                                 <Text style={styles.subtitle}>
-                                    {modeLabel} ·{" "}
-                                    {formatDuration(travelMin)} travel
+                                    {formatDuration(durMin)}
+                                    {event.imported ? " · from calendar" : ""}
                                 </Text>
                             </View>
                         </View>
 
-                        {/* Origin (edit only — read view folds it into the row list) */}
-                        {editing && (
-                            <View style={styles.fieldBlock}>
-                                <Text style={styles.fieldLabel}>From</Text>
-                                <BottomSheetTextInput
-                                    style={styles.input}
-                                    value={origin}
-                                    onChangeText={setOrigin}
-                                    placeholder="Origin"
-                                    placeholderTextColor={colors.ink3}
-                                />
-                            </View>
-                        )}
-
-                        {/* Detail / editable rows */}
+                        {/* Editable rows */}
                         {editing ? (
-                            <View style={styles.steppers}>
-                                <Stepper
-                                    label="Leave"
-                                    value={formatClock(departMin)}
-                                    onDec={() =>
-                                        setDepartMin((v) =>
-                                            clamp(
-                                                v - SNAP_MIN,
-                                                0,
-                                                DAY_MIN -
-                                                    travelMin -
-                                                    eventDurMin,
-                                            ),
-                                        )
-                                    }
-                                    onInc={() =>
-                                        setDepartMin((v) =>
-                                            clamp(
-                                                v + SNAP_MIN,
-                                                0,
-                                                DAY_MIN -
-                                                    travelMin -
-                                                    eventDurMin,
-                                            ),
-                                        )
-                                    }
-                                />
-                                {/* Travel time is auto-generated by the route
-                                    service, so it is shown read-only here (not a
-                                    stepper) and recomputed when times change. */}
-                                <View style={styles.readonlyRow}>
-                                    <Text style={styles.readonlyLabel}>
-                                        Travel
+                            <>
+                                <View style={styles.fieldBlock}>
+                                    <Text style={styles.fieldLabel}>
+                                        Location
                                     </Text>
-                                    <Text style={styles.readonlyValue}>
-                                        {formatDuration(travelMin)} · auto
-                                    </Text>
-                                </View>
-                                <Stepper
-                                    label="Stay"
-                                    value={formatDuration(eventDurMin)}
-                                    onDec={() =>
-                                        setEventDurMin((v) =>
-                                            clamp(
-                                                v - SNAP_MIN,
-                                                SNAP_MIN,
-                                                DAY_MIN -
-                                                    departMin -
-                                                    travelMin,
-                                            ),
-                                        )
-                                    }
-                                    onInc={() =>
-                                        setEventDurMin((v) =>
-                                            clamp(
-                                                v + SNAP_MIN,
-                                                SNAP_MIN,
-                                                DAY_MIN -
-                                                    departMin -
-                                                    travelMin,
-                                            ),
-                                        )
-                                    }
-                                />
-                            </View>
-                        ) : (
-                            <View style={styles.detailList}>
-                                <DetailRow
-                                    styles={styles}
-                                    colors={colors}
-                                    icon={
-                                        <AntDesign
-                                            name="aim"
-                                            size={16}
-                                            color={colors.ink3}
-                                        />
-                                    }
-                                    label="From"
-                                    value={trip.origin}
-                                />
-                                <DetailRow
-                                    styles={styles}
-                                    colors={colors}
-                                    icon={
-                                        <Ionicons
-                                            name="location"
-                                            size={16}
-                                            color={colors.ink3}
-                                        />
-                                    }
-                                    label="To"
-                                    value={trip.destination}
-                                />
-                                <DetailRow
-                                    styles={styles}
-                                    colors={colors}
-                                    icon={
-                                        <Ionicons
-                                            name="walk"
-                                            size={16}
-                                            color={colors.ink3}
-                                        />
-                                    }
-                                    label="Leave"
-                                    value={formatClock(departMin)}
-                                />
-                                <DetailRow
-                                    styles={styles}
-                                    colors={colors}
-                                    icon={
-                                        <Ionicons
-                                            name="flag"
-                                            size={16}
-                                            color={colors.ink3}
-                                        />
-                                    }
-                                    label="Arrive"
-                                    value={formatClock(arriveMin)}
-                                />
-                                <DetailRow
-                                    styles={styles}
-                                    colors={colors}
-                                    icon={
-                                        <Ionicons
-                                            name="time-outline"
-                                            size={16}
-                                            color={colors.ink3}
-                                        />
-                                    }
-                                    label="Ends"
-                                    value={formatClock(eventEndMin)}
-                                />
-                            </View>
-                        )}
-
-                        {/* Deep-detail placeholder.
-                            TODO(trip-planner): render the step-by-step route, live ETA
-                            and the leave-by reminder status here once wired to the
-                            Route Service (services/TranzitApiService.ts) + tripWebSocket. */}
-                        {!editing && (
-                            <View style={styles.routeCard}>
-                                <View style={styles.routeCardHeader}>
-                                    <Ionicons
-                                        name="git-branch-outline"
-                                        size={15}
-                                        color={colors.ink2}
+                                    <BottomSheetTextInput
+                                        style={styles.input}
+                                        value={location}
+                                        onChangeText={setLocation}
+                                        placeholder="Where"
+                                        placeholderTextColor={colors.ink3}
                                     />
-                                    <Text style={styles.routeCardTitle}>
-                                        Route details
-                                    </Text>
                                 </View>
-                                <Text style={styles.routeCardBody}>
-                                    Step-by-step directions, live arrival times
-                                    and a leave-by reminder will appear here once
-                                    this trip is wired to the route service.
-                                </Text>
-                            </View>
+
+                                <View style={styles.steppers}>
+                                    <Stepper
+                                        label="Start"
+                                        value={formatClock(startMin)}
+                                        onDec={() =>
+                                            setStartMin((v) =>
+                                                clamp(
+                                                    v - SNAP_MIN,
+                                                    0,
+                                                    DAY_MIN - durMin,
+                                                ),
+                                            )
+                                        }
+                                        onInc={() =>
+                                            setStartMin((v) =>
+                                                clamp(
+                                                    v + SNAP_MIN,
+                                                    0,
+                                                    DAY_MIN - durMin,
+                                                ),
+                                            )
+                                        }
+                                    />
+                                    <Stepper
+                                        label="Duration"
+                                        value={formatDuration(durMin)}
+                                        onDec={() =>
+                                            setDurMin((v) =>
+                                                clamp(
+                                                    v - SNAP_MIN,
+                                                    SNAP_MIN,
+                                                    DAY_MIN - startMin,
+                                                ),
+                                            )
+                                        }
+                                        onInc={() =>
+                                            setDurMin((v) =>
+                                                clamp(
+                                                    v + SNAP_MIN,
+                                                    SNAP_MIN,
+                                                    DAY_MIN - startMin,
+                                                ),
+                                            )
+                                        }
+                                    />
+                                </View>
+
+                                <View style={styles.fieldBlock}>
+                                    <Text style={styles.fieldLabel}>Notes</Text>
+                                    <BottomSheetTextInput
+                                        style={[styles.input, styles.notesInput]}
+                                        value={notes}
+                                        onChangeText={setNotes}
+                                        placeholder="Add notes"
+                                        placeholderTextColor={colors.ink3}
+                                        multiline
+                                    />
+                                </View>
+                            </>
+                        ) : (
+                            <>
+                                <View style={styles.detailList}>
+                                    {!!event.location && (
+                                        <DetailRow
+                                            styles={styles}
+                                            icon={
+                                                <Ionicons
+                                                    name="location"
+                                                    size={16}
+                                                    color={colors.ink3}
+                                                />
+                                            }
+                                            label="Where"
+                                            value={event.location}
+                                        />
+                                    )}
+                                    <DetailRow
+                                        styles={styles}
+                                        icon={
+                                            <Ionicons
+                                                name="time-outline"
+                                                size={16}
+                                                color={colors.ink3}
+                                            />
+                                        }
+                                        label="Start"
+                                        value={formatClock(startMin)}
+                                    />
+                                    <DetailRow
+                                        styles={styles}
+                                        icon={
+                                            <Ionicons
+                                                name="flag"
+                                                size={16}
+                                                color={colors.ink3}
+                                            />
+                                        }
+                                        label="End"
+                                        value={formatClock(endMin)}
+                                    />
+                                </View>
+
+                                {!!event.notes && (
+                                    <View style={styles.notesCard}>
+                                        <Text style={styles.notesText}>
+                                            {event.notes}
+                                        </Text>
+                                    </View>
+                                )}
+                            </>
                         )}
 
                         {/* Footer actions */}
@@ -328,7 +285,7 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
                             <View style={styles.footer}>
                                 <TouchableOpacity
                                     style={styles.deleteBtn}
-                                    onPress={() => onDelete(trip.id)}
+                                    onPress={() => onDelete(event.eventId)}
                                     activeOpacity={0.85}
                                 >
                                     <Ionicons
@@ -361,7 +318,7 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
                                         color={colors.onPrimary}
                                     />
                                     <Text style={styles.primaryBtnText}>
-                                        Edit Trip
+                                        Edit Event
                                     </Text>
                                 </TouchableOpacity>
                             </View>
@@ -369,8 +326,8 @@ export function TripDetailSheet({ trip, onClose, onSave, onDelete }: Props) {
 
                         {!editing && (
                             <Text style={styles.hint}>
-                                Tip: long-press a trip on the timeline to drag it
-                                to a new time.
+                                Tip: long-press an event on the timeline to drag
+                                it to a new time.
                             </Text>
                         )}
                     </>
@@ -388,7 +345,6 @@ function DetailRow({
     value,
 }: {
     styles: ReturnType<typeof makeStyles>;
-    colors: AppTheme["colors"];
     icon: React.ReactNode;
     label: string;
     value: string;
@@ -460,6 +416,10 @@ function makeStyles(t: AppTheme) {
             paddingHorizontal: 12,
             paddingVertical: 10,
         },
+        notesInput: {
+            minHeight: 72,
+            textAlignVertical: "top",
+        },
 
         detailList: {
             backgroundColor: colors.surface2,
@@ -500,44 +460,17 @@ function makeStyles(t: AppTheme) {
             borderColor: colors.border,
             paddingHorizontal: spacing.card,
         },
-        readonlyRow: {
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            paddingVertical: 14,
-            borderBottomWidth: StyleSheet.hairlineWidth,
-            borderBottomColor: colors.divider,
-        },
-        readonlyLabel: {
-            ...typography.body,
-            color: colors.ink2,
-        },
-        readonlyValue: {
-            ...typography.bodyStrong,
-            color: colors.ink3,
-        },
 
-        routeCard: {
+        notesCard: {
             backgroundColor: colors.surface2,
             borderRadius: radii.card,
             borderWidth: 1,
             borderColor: colors.border,
-            borderStyle: "dashed",
             padding: spacing.card,
-            gap: 6,
         },
-        routeCardHeader: {
-            flexDirection: "row",
-            alignItems: "center",
-            gap: 6,
-        },
-        routeCardTitle: {
-            ...typography.bodyStrong,
+        notesText: {
+            ...typography.body,
             color: colors.ink2,
-        },
-        routeCardBody: {
-            ...typography.caption,
-            color: colors.ink3,
         },
 
         footer: {

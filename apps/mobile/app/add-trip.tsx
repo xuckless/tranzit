@@ -7,18 +7,19 @@ import {
     TouchableOpacity,
     ScrollView,
 } from "react-native";
-import { MaterialIcons } from "@expo/vector-icons";
-import AntDesign from "@expo/vector-icons/AntDesign";
+import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
-import { useRouter } from "expo-router";
+import { useRouter, useLocalSearchParams } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
+import { useAuth } from "@/contexts/AuthContext";
+import { saveEvent } from "@/lib/plannerEvents";
 import { Stepper } from "@/components/planner/Stepper";
 import {
-    type PlannedTrip,
-    type TimingMode,
     formatClock,
     formatDuration,
+    isoForDay,
+    localDayKey,
     DAY_MIN,
     SNAP_MIN,
 } from "@/components/planner/trip";
@@ -26,55 +27,57 @@ import {
 const clamp = (v: number, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, v));
 
-// Placeholder travel estimate used until the route service computes the real one.
-const PLACEHOLDER_TRAVEL_MIN = 30;
-
 export default function AddTripScreen() {
     const router = useRouter();
     const insets = useSafeAreaInsets();
     const { theme } = useTheme();
     const { colors } = theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
+    const { user } = useAuth();
 
-    const [destination, setDestination] = useState("");
-    const [origin, setOrigin] = useState("");
-    const [mode, setMode] = useState<TimingMode>("leave");
-    const [stayMin, setStayMin] = useState(60);
+    // The day this event lands on — passed by the planner (the viewed day).
+    const params = useLocalSearchParams<{ date?: string }>();
+    const dayKey =
+        typeof params.date === "string" && params.date
+            ? params.date
+            : localDayKey(new Date());
 
-    // The single editable time means "leave at" or "arrive by" depending on mode;
-    // travel time is auto-generated, so the other end is derived, not entered.
-    const [targetMin, setTargetMin] = useState(() => {
+    const [name, setName] = useState("");
+    const [location, setLocation] = useState("");
+    const [notes, setNotes] = useState("");
+    const [durMin, setDurMin] = useState(60);
+    const [saving, setSaving] = useState(false);
+
+    const [startMin, setStartMin] = useState(() => {
         const now = new Date();
         const mins = now.getHours() * 60 + now.getMinutes();
         return clamp(Math.round(mins / SNAP_MIN) * SNAP_MIN, 0, DAY_MIN);
     });
 
-    const handleCreate = () => {
-        // TODO(trip-planner): compute the real travel time + leave-by via the Route
-        // Service (services/TranzitApiService.ts) for the chosen mode, persist the
-        // trip to the per-user trips store, schedule the leave-by notification
-        // (lib/leaveByNotifications.ts), and surface it on the planner timeline.
-        // PLACEHOLDER_TRAVEL_MIN stands in until that wiring exists.
-        const departMin =
-            mode === "leave"
-                ? targetMin
-                : Math.max(0, targetMin - PLACEHOLDER_TRAVEL_MIN);
-        const arriveMin =
-            mode === "leave" ? targetMin + PLACEHOLDER_TRAVEL_MIN : targetMin;
-        const trip: PlannedTrip = {
-            id: Date.now().toString(),
-            destination: destination.trim() || "New trip",
-            origin: origin.trim() || "Current location",
-            departMin,
-            arriveMin,
-            eventEndMin: arriveMin + stayMin,
-            mode,
-        };
-        console.log("create trip", trip);
-        router.back();
+    const handleCreate = async () => {
+        if (saving) return;
+        setSaving(true);
+        try {
+            if (user) {
+                const start = isoForDay(dayKey, startMin);
+                const end = new Date(
+                    new Date(start).getTime() + durMin * 60000,
+                ).toISOString();
+                await saveEvent({
+                    user,
+                    event: {
+                        name: name.trim() || "New event",
+                        location: location.trim() || null,
+                        notes: notes.trim() || null,
+                        start,
+                        end,
+                    },
+                });
+            }
+        } finally {
+            router.back();
+        }
     };
-
-    const timeLabel = mode === "leave" ? "Leave" : "Arrive";
 
     return (
         <View style={styles.screen}>
@@ -87,7 +90,7 @@ export default function AddTripScreen() {
                 >
                     <Text style={styles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
-                <Text style={styles.headerTitle}>Add Trip</Text>
+                <Text style={styles.headerTitle}>Add Event</Text>
                 <View style={styles.headerSide} />
             </View>
 
@@ -96,11 +99,11 @@ export default function AddTripScreen() {
                 keyboardShouldPersistTaps="handled"
                 showsVerticalScrollIndicator={false}
             >
-                {/* Header row — transit icon + destination input (mirrors detail) */}
+                {/* Header row — event icon + name input */}
                 <View style={styles.headerRow}>
                     <View style={styles.headerIcon}>
                         <MaterialIcons
-                            name="directions-transit"
+                            name="event"
                             size={20}
                             color={colors.onPrimary}
                         />
@@ -108,104 +111,76 @@ export default function AddTripScreen() {
                     <View style={{ flex: 1 }}>
                         <TextInput
                             style={styles.titleInput}
-                            value={destination}
-                            onChangeText={setDestination}
-                            placeholder="Destination"
+                            value={name}
+                            onChangeText={setName}
+                            placeholder="Event name"
                             placeholderTextColor={colors.ink3}
                         />
-                        <Text style={styles.subtitle}>
-                            Travel time is added automatically
-                        </Text>
                     </View>
                 </View>
 
-                {/* From */}
+                {/* Location */}
                 <View style={styles.fieldBlock}>
-                    <Text style={styles.fieldLabel}>From</Text>
+                    <Text style={styles.fieldLabel}>Location</Text>
                     <View style={styles.inputRow}>
-                        <AntDesign
-                            name="aim"
+                        <Ionicons
+                            name="location-outline"
                             size={16}
                             color={colors.ink3}
                             style={styles.rowIcon}
                         />
                         <TextInput
                             style={styles.input}
-                            value={origin}
-                            onChangeText={setOrigin}
-                            placeholder="Origin"
+                            value={location}
+                            onChangeText={setLocation}
+                            placeholder="Where"
                             placeholderTextColor={colors.ink3}
                         />
                     </View>
                 </View>
 
-                {/* Leave By / Arrive By toggle */}
-                <View style={styles.segment}>
-                    <TouchableOpacity
-                        style={[
-                            styles.segmentBtn,
-                            mode === "leave" && styles.segmentBtnActive,
-                        ]}
-                        onPress={() => setMode("leave")}
-                        activeOpacity={0.85}
-                    >
-                        <Text
-                            style={[
-                                styles.segmentText,
-                                mode === "leave" && styles.segmentTextActive,
-                            ]}
-                        >
-                            Leave By
-                        </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                        style={[
-                            styles.segmentBtn,
-                            mode === "arrive" && styles.segmentBtnActive,
-                        ]}
-                        onPress={() => setMode("arrive")}
-                        activeOpacity={0.85}
-                    >
-                        <Text
-                            style={[
-                                styles.segmentText,
-                                mode === "arrive" && styles.segmentTextActive,
-                            ]}
-                        >
-                            Arrive By
-                        </Text>
-                    </TouchableOpacity>
-                </View>
-
-                {/* Steppers — same control as the detail edit sheet */}
+                {/* Start + Duration */}
                 <View style={styles.steppers}>
                     <Stepper
-                        label={timeLabel}
-                        value={formatClock(targetMin)}
+                        label="Start"
+                        value={formatClock(startMin)}
                         onDec={() =>
-                            setTargetMin((v) =>
-                                clamp(v - SNAP_MIN, 0, DAY_MIN),
+                            setStartMin((v) =>
+                                clamp(v - SNAP_MIN, 0, DAY_MIN - durMin),
                             )
                         }
                         onInc={() =>
-                            setTargetMin((v) =>
-                                clamp(v + SNAP_MIN, 0, DAY_MIN),
+                            setStartMin((v) =>
+                                clamp(v + SNAP_MIN, 0, DAY_MIN - durMin),
                             )
                         }
                     />
                     <Stepper
-                        label="Stay"
-                        value={formatDuration(stayMin)}
+                        label="Duration"
+                        value={formatDuration(durMin)}
                         onDec={() =>
-                            setStayMin((v) =>
-                                clamp(v - SNAP_MIN, SNAP_MIN, DAY_MIN),
+                            setDurMin((v) =>
+                                clamp(v - SNAP_MIN, SNAP_MIN, DAY_MIN - startMin),
                             )
                         }
                         onInc={() =>
-                            setStayMin((v) =>
-                                clamp(v + SNAP_MIN, SNAP_MIN, DAY_MIN),
+                            setDurMin((v) =>
+                                clamp(v + SNAP_MIN, SNAP_MIN, DAY_MIN - startMin),
                             )
                         }
+                    />
+                </View>
+
+                {/* Notes */}
+                <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>Notes</Text>
+                    <TextInput
+                        style={[styles.input, styles.notesInput]}
+                        value={notes}
+                        onChangeText={setNotes}
+                        placeholder="Add notes"
+                        placeholderTextColor={colors.ink3}
+                        multiline
                     />
                 </View>
             </ScrollView>
@@ -218,11 +193,12 @@ export default function AddTripScreen() {
                 ]}
             >
                 <TouchableOpacity
-                    style={styles.createBtn}
+                    style={[styles.createBtn, saving && { opacity: 0.6 }]}
                     onPress={handleCreate}
+                    disabled={saving}
                     activeOpacity={0.85}
                 >
-                    <Text style={styles.createBtnText}>Create Trip</Text>
+                    <Text style={styles.createBtnText}>Create Event</Text>
                 </TouchableOpacity>
             </View>
         </View>
@@ -279,11 +255,6 @@ function makeStyles(t: AppTheme) {
             borderBottomColor: colors.border,
             paddingVertical: 2,
         },
-        subtitle: {
-            ...typography.caption,
-            color: colors.primary,
-            marginTop: 4,
-        },
 
         fieldBlock: { gap: 6 },
         fieldLabel: {
@@ -307,29 +278,14 @@ function makeStyles(t: AppTheme) {
             color: colors.ink,
             paddingVertical: 10,
         },
-
-        segment: {
-            flexDirection: "row",
+        notesInput: {
             backgroundColor: colors.surface2,
-            borderRadius: radii.button,
-            padding: 4,
-            gap: 4,
-        },
-        segmentBtn: {
-            flex: 1,
-            alignItems: "center",
-            paddingVertical: 10,
-            borderRadius: radii.chip,
-        },
-        segmentBtnActive: {
-            backgroundColor: colors.secondary,
-        },
-        segmentText: {
-            ...typography.bodyStrong,
-            color: colors.ink2,
-        },
-        segmentTextActive: {
-            color: colors.selected,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: radii.element,
+            paddingHorizontal: 12,
+            minHeight: 72,
+            textAlignVertical: "top",
         },
 
         steppers: {
