@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback } from "react";
+import { AppState } from "react-native";
 import type { TripStateMsg, TripRerouteMsg, TripNotifyMsg, ServerStopStatus } from "@/types/trip";
 import { ROUTE_SAVE_URL } from "@/lib/config";
 import { getAccessToken } from "@/lib/supabase";
@@ -218,8 +219,36 @@ export function useTripWebSocket(
 
     void connect();
 
+    // The OS suspends the socket when the app backgrounds, often without delivering an onclose, so
+    // no reconnect gets armed and live STATE silently stalls. On return to foreground, force a single
+    // clean reconnect if the socket isn't healthy.
+    const appStateSub = AppState.addEventListener("change", (s) => {
+      if (s !== "active" || cancelledRef.current) return;
+      const ws = wsRef.current;
+      if (ws && ws.readyState === WebSocket.OPEN) return; // still alive — nothing to do
+      // Detach the old socket so its late onclose can't double-schedule, then reconnect once
+      // (onopen sends RESUME because retryCount > 0).
+      if (retryTimerRef.current) {
+        clearTimeout(retryTimerRef.current);
+        retryTimerRef.current = null;
+      }
+      if (ws) {
+        ws.onclose = null;
+        ws.onerror = null;
+        try {
+          ws.close();
+        } catch {
+          // ignore
+        }
+      }
+      wsRef.current = null;
+      if (retryCountRef.current === 0) retryCountRef.current = 1;
+      void connect();
+    });
+
     return () => {
       cancelledRef.current = true;
+      appStateSub.remove();
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current);
         retryTimerRef.current = null;

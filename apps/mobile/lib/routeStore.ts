@@ -1,7 +1,7 @@
 import type { Route } from "@/types/places";
 import type { TripSession } from "@/types/trip";
 
-interface StoredLocation {
+export interface StoredLocation {
   label: string;
   lat: number;
   lng: number;

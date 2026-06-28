@@ -41,6 +41,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
+import { saveActiveTrip } from "@/lib/activeTrip";
 import { ROUTE_SAVE_URL } from "@/lib/config";
 import { getAccessToken } from "@/lib/supabase";
 import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
@@ -717,20 +718,27 @@ export default function RouteScreen() {
                 ws_url: string;
             };
 
-            routeStore.setSelectedRoute(selectedRoute);
-            routeStore.setDestination({
+            const destinationInfo = {
                 label: destinationLabel,
                 lat: destination.lat,
                 lng: destination.lng,
                 placeId: destination.placeId,
-            });
-            routeStore.setOrigin({
+            };
+            const originInfo = {
                 label: originLabel,
                 lat: effectiveOrigin.lat,
                 lng: effectiveOrigin.lng,
                 placeId: origin?.placeId,
-            });
-            routeStore.setTripSession({ sessionId: session_id, wsUrl: ws_url });
+            };
+            const session = { sessionId: session_id, wsUrl: ws_url };
+
+            routeStore.setSelectedRoute(selectedRoute);
+            routeStore.setDestination(destinationInfo);
+            routeStore.setOrigin(originInfo);
+            routeStore.setTripSession(session);
+
+            // Persist a durable pointer so Commute can restore the trip after a cold start.
+            await saveActiveTrip({ session, destination: destinationInfo, origin: originInfo });
 
             router.navigate("/(tabs)/commute" as never);
         } catch (err) {

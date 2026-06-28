@@ -14,6 +14,7 @@ import {
   StyleSheet,
   TouchableOpacity,
   Animated,
+  ActivityIndicator,
 } from "react-native";
 import {
   Map,
@@ -42,6 +43,7 @@ import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { useTheme } from "@/contexts/ThemeContext";
 import { routeStore } from "@/lib/routeStore";
+import { loadActiveTrip, clearActiveTrip } from "@/lib/activeTrip";
 import { parseRoute } from "@/lib/routeParser";
 import { decodePolyline } from "@/utils/decodePolyline";
 import {
@@ -682,6 +684,9 @@ export default function CommuteScreen() {
   } | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [wsPath, setWsPath] = useState<string | null>(null);
+  // True while a cold-start restore (durable pointer → backend snapshot) is in flight, so the
+  // gate shows "Restoring…" instead of a false "No Active Journey".
+  const [restoring, setRestoring] = useState(false);
 
   const [notifyBanner, setNotifyBanner] = useState<string | null>(null);
   const [boardingConfirmStop, setBoardingConfirmStop] = useState<string | null>(
@@ -742,19 +747,80 @@ export default function CommuteScreen() {
       const storedOrigin = routeStore.getOrigin();
       const storedSession = routeStore.getTripSession();
 
-      setRoute(storedRoute);
-      if (storedDest) setDestinationInfo(storedDest);
-      if (storedOrigin) setOriginInfo(storedOrigin);
-      if (storedSession) {
-        setSessionId(storedSession.sessionId);
-        setWsPath(storedSession.wsUrl);
-      }
+      // Warm path: routeStore is populated (fresh start, or a tab switch back). Mirror it and bail.
       if (storedRoute) {
+        setRoute(storedRoute);
+        if (storedDest) setDestinationInfo(storedDest);
+        if (storedOrigin) setOriginInfo(storedOrigin);
+        if (storedSession) {
+          setSessionId(storedSession.sessionId);
+          setWsPath(storedSession.wsUrl);
+        }
         setReportSelected(null);
         setReportSeverity(1);
         setReportSent(false);
         activityStartedRef.current = false;
+        return;
       }
+
+      // Cold path: in-memory store is empty (process was killed while backgrounded). Try to restore
+      // from the durable pointer + the authoritative backend snapshot. Note we intentionally do NOT
+      // setRoute(null) up front — that would flash the "No Active Journey" empty state.
+      let cancelled = false;
+      (async () => {
+        const saved = await loadActiveTrip();
+        if (cancelled) return;
+        if (!saved) {
+          setRoute(null); // genuinely no active trip
+          return;
+        }
+
+        // Rehydrate both the in-memory store (keeps the rest of the app consistent) and local state.
+        // Setting wsPath makes useTripWebSocket dial → live STATE resumes.
+        routeStore.setDestination(saved.destination);
+        routeStore.setOrigin(saved.origin);
+        routeStore.setTripSession(saved.session);
+        setDestinationInfo(saved.destination);
+        setOriginInfo(saved.origin);
+        setSessionId(saved.session.sessionId);
+        setWsPath(saved.session.wsUrl);
+        setRestoring(true);
+
+        try {
+          const token = await getAccessToken();
+          const resp = await fetch(
+            `${ROUTE_SAVE_URL}/trips/${saved.session.sessionId}`,
+            { headers: token ? { Authorization: `Bearer ${token}` } : {} },
+          );
+          if (cancelled) return;
+          if (resp.status === 404) {
+            // Trip was closed/completed while the app was dead — drop the stale pointer.
+            await clearActiveTrip();
+            routeStore.clearJourney();
+            setWsPath(null);
+            setSessionId(null);
+            setRoute(null);
+            return;
+          }
+          if (!resp.ok) throw new Error(`snapshot ${resp.status}`);
+          const snapshot = (await resp.json()) as TripSnapshotMsg;
+          if (cancelled) return;
+          const parsed = parseRoute(snapshot.route);
+          if (parsed) {
+            routeStore.setSelectedRoute(parsed); // next focus takes the warm path
+            setRoute(parsed);
+            activityStartedRef.current = false;
+          }
+        } catch (e) {
+          console.error("[commute] trip restore failed:", e);
+        } finally {
+          if (!cancelled) setRestoring(false);
+        }
+      })();
+
+      return () => {
+        cancelled = true;
+      };
     }, []),
   );
 
@@ -1585,6 +1651,7 @@ export default function CommuteScreen() {
       }).catch(() => {});
     }
     routeStore.clearJourney();
+    void clearActiveTrip();
     router.navigate("/(tabs)/routes" as never);
   }, [disconnect, sessionId, router]);
 
@@ -1618,13 +1685,24 @@ export default function CommuteScreen() {
   if (!route) {
     return (
       <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
-        <Ionicons name="navigate-outline" size={48} color={colors.ink2} />
-        <Text style={[styles.emptyTitle, { color: colors.ink }]}>
-          No Active Journey
-        </Text>
-        <Text style={[styles.emptySubtitle, { color: colors.ink2 }]}>
-          Go to Routes, select a route, and tap &ldquo;Start Journey&rdquo;.
-        </Text>
+        {restoring ? (
+          <>
+            <ActivityIndicator size="large" color={colors.ink2} />
+            <Text style={[styles.emptyTitle, { color: colors.ink }]}>
+              Restoring your journey…
+            </Text>
+          </>
+        ) : (
+          <>
+            <Ionicons name="navigate-outline" size={48} color={colors.ink2} />
+            <Text style={[styles.emptyTitle, { color: colors.ink }]}>
+              No Active Journey
+            </Text>
+            <Text style={[styles.emptySubtitle, { color: colors.ink2 }]}>
+              Go to Routes, select a route, and tap &ldquo;Start Journey&rdquo;.
+            </Text>
+          </>
+        )}
       </View>
     );
   }
