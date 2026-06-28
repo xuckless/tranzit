@@ -37,6 +37,9 @@ services:
     depends_on:
       - tailscale
     network_mode: service:tailscale
+    # Run as the host user that owns ./certs (uid 1000) so the distroless image's
+    # default 'nonroot' (65532) can read the 0600 mTLS key mounted read-only below.
+    user: "1000:1000"
     environment:
       - PORT=8090
       - LOG_STATE=1
