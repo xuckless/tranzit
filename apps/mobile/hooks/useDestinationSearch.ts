@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import type { PlacesSearchResponse, SearchSuggestion } from "../types/places";
+import { authHeader } from "../lib/supabase";
 
 const BASE_URL =
   "https://tranzit-route-service.tailnet-example.ts.net";
@@ -87,7 +88,10 @@ export function useDestinationSearch(userLocation?: UserLocation | null) {
             if (userLocation) {
               url += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
             }
-            const res = await fetch(url, { signal: controller.signal });
+            const res = await fetch(url, {
+              headers: await authHeader(),
+              signal: controller.signal,
+            });
             if (controller.signal.aborted) return;
             if (res.ok) {
               const data: PlacesSearchResponse = await res.json();
@@ -115,7 +119,7 @@ export function useDestinationSearch(userLocation?: UserLocation | null) {
           try {
             const res = await fetch(
               `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(trimmed)}`,
-              { signal: controller.signal },
+              { headers: await authHeader(), signal: controller.signal },
             );
             if (controller.signal.aborted) return;
             if (res.ok) {
