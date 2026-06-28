@@ -5,6 +5,7 @@ import * as WebBrowser from "expo-web-browser";
 import { AuthProvider } from "@/contexts/AuthContext";
 import { ThemeProvider } from "@/contexts/ThemeContext";
 import { UserSync } from "@/components/auth/UserSync";
+import { useSearchHistorySync } from "@/hooks/useSearchHistory";
 import * as Notifications from "expo-notifications";
 import {
   BOARDING_CATEGORY,
@@ -29,6 +30,13 @@ Notifications.setNotificationHandler({
     shouldSetBadge: false,
   }),
 });
+
+// Drains the offline search-history outbox and prunes remote history to the cap
+// once a user is available. Renders nothing; mounted inside AuthProvider.
+function SearchHistorySync() {
+  useSearchHistorySync();
+  return null;
+}
 
 // Main component
 export default function RootLayout() {
@@ -72,6 +80,7 @@ export default function RootLayout() {
       <AuthProvider>
         <ThemeProvider>
           <UserSync />
+          <SearchHistorySync />
           <Stack screenOptions={{ headerShown: false }} />
         </ThemeProvider>
       </AuthProvider>

@@ -31,6 +31,8 @@ import * as Location from "expo-location";
 import { useTheme } from "@/contexts/ThemeContext";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import { useDestinationSearch } from "@/hooks/useDestinationSearch";
+import { useSearchHistory, useRecentSearches } from "@/hooks/useSearchHistory";
+import { recentToSuggestion } from "@/lib/searchHistory";
 import { DestinationSuggestionsList } from "@/components/search/DestinationSuggestionsList";
 import {
     RoutePickerSheet,
@@ -105,6 +107,8 @@ export default function RouteScreen() {
 
     const originSearch = useDestinationSearch(gpsLocation);
     const destinationSearch = useDestinationSearch(gpsLocation);
+    const { record: recordSearch } = useSearchHistory();
+    const { recents, refresh: refreshRecents } = useRecentSearches();
 
     // ── Location ─────────────────────────────────────────────────────────────────
     useEffect(() => {
@@ -557,22 +561,23 @@ export default function RouteScreen() {
             setSelectedRoute(null);
             setRouteError(null);
             routeStore.setRoutes([]);
+            let coords: { lat: number; lng: number } | null = null;
             if (suggestion.location) {
-                setDestination({
-                    placeId: suggestion.placeId,
+                coords = {
                     lat: suggestion.location.latitude,
                     lng: suggestion.location.longitude,
-                });
+                };
+                setDestination({ placeId: suggestion.placeId, ...coords });
             } else {
                 try {
                     const details = await TranzitApiService.getPlaceDetails(
                         suggestion.placeId,
                     );
-                    setDestination({
-                        placeId: suggestion.placeId,
+                    coords = {
                         lat: details.location.latitude,
                         lng: details.location.longitude,
-                    });
+                    };
+                    setDestination({ placeId: suggestion.placeId, ...coords });
                 } catch (e) {
                     console.error(
                         "[routes] destination details fetch failed:",
@@ -583,8 +588,21 @@ export default function RouteScreen() {
                     );
                 }
             }
+            if (coords) {
+                recordSearch({
+                    placeId: suggestion.placeId,
+                    address: suggestion.secondaryText
+                        ? `${suggestion.mainText}, ${suggestion.secondaryText}`
+                        : suggestion.mainText,
+                    lat: coords.lat,
+                    lng: coords.lng,
+                    originLat: origin?.lat ?? null,
+                    originLng: origin?.lng ?? null,
+                    originAddress: origin ? originLabel : null,
+                });
+            }
         },
-        [destinationSearch],
+        [destinationSearch, recordSearch, origin, originLabel],
     );
 
     // Sticky "Current Location" action for the origin search — guarantees the
@@ -935,6 +953,7 @@ export default function RouteScreen() {
                             onChangeText={handleOriginChange}
                             onFocus={() => {
                                 setFocusedField("origin");
+                                refreshRecents();
                                 if (originLabel === "Current Location")
                                     setOriginLabel("");
                             }}
@@ -1005,6 +1024,7 @@ export default function RouteScreen() {
                             onChangeText={handleDestChange}
                             onFocus={() => {
                                 setFocusedField("destination");
+                                refreshRecents();
                                 originSearch.reset();
                             }}
                             placeholder="Where to?"
@@ -1112,6 +1132,14 @@ export default function RouteScreen() {
                             onSelect={handleSelectDest}
                         />
                     )}
+                    {destinationSearch.status === "idle" &&
+                        recents.length > 0 && (
+                            <DestinationSuggestionsList
+                                variant="recent"
+                                suggestions={recents.map(recentToSuggestion)}
+                                onSelect={handleSelectDest}
+                            />
+                        )}
                     {destinationSearch.status === "empty" && (
                         <Text style={styles.emptyText}>No results found</Text>
                     )}
@@ -1149,6 +1177,13 @@ export default function RouteScreen() {
                     {originSearch.status === "success" && (
                         <DestinationSuggestionsList
                             suggestions={originSearch.suggestions}
+                            onSelect={handleSelectOrigin}
+                        />
+                    )}
+                    {originSearch.status === "idle" && recents.length > 0 && (
+                        <DestinationSuggestionsList
+                            variant="recent"
+                            suggestions={recents.map(recentToSuggestion)}
                             onSelect={handleSelectOrigin}
                         />
                     )}

@@ -22,6 +22,7 @@ import {
 } from "@maplibre/maplibre-react-native";
 import type { NativeSyntheticEvent } from "react-native";
 import { SearchSheet } from "@/components/search/SearchSheet";
+import { SearchOverlay } from "@/components/search/SearchOverlay";
 import { StopDetailsPanel, parseWKTPoint } from "@/components/stopViews";
 import { BusDetailsPanel } from "@/components/busViews";
 import { PlaceDetailsPanel } from "@/components/placeViews";
@@ -39,6 +40,7 @@ import { useRouter } from "expo-router";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { PlaceDetails } from "@/types/places";
 import { useQuickAccess } from "@/hooks/useSavedPlaces";
+import { useSearchHistory } from "@/hooks/useSearchHistory";
 import type { SavedPlace } from "@/lib/savedPlaces";
 import {
   SavePlaceModal,
@@ -134,6 +136,7 @@ export default function MapScreen() {
     [],
   );
   const { data: quickAccessPlaces, refresh: refreshQuickAccess } = useQuickAccess();
+  const { record: recordSearch } = useSearchHistory();
   const [showSaveModal, setShowSaveModal] = useState(false);
 
   const [userLocation, setUserLocation] = useState<Coordinate | null>(null);
@@ -145,6 +148,7 @@ export default function MapScreen() {
   const [isExpanded, setIsExpanded] = useState(false);
 
   const [isSearchActive, setIsSearchActive] = useState(false);
+  const [searchRestingY, setSearchRestingY] = useState(-1);
   const [placeDetails, setPlaceDetails] = useState<{
     place: PlaceDetails;
     isFetching: boolean;
@@ -420,14 +424,25 @@ export default function MapScreen() {
         isFetching: true,
       });
 
+      let address = dest.displayText;
       try {
         const full = await TranzitApiService.getPlaceDetails(dest.placeId);
         setPlaceDetails({ place: full, isFetching: false });
+        if (full.formattedAddress) address = full.formattedAddress;
       } catch {
         setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
       }
+
+      recordSearch({
+        placeId: dest.placeId,
+        address,
+        lat: dest.coordinate.latitude,
+        lng: dest.coordinate.longitude,
+        originLat: userLocation?.latitude ?? null,
+        originLng: userLocation?.longitude ?? null,
+      });
     },
-    [flyTo],
+    [flyTo, recordSearch, userLocation],
   );
 
   const handleClear = useCallback(() => {
@@ -512,25 +527,39 @@ export default function MapScreen() {
     setDestination(null);
   }, []);
 
-  const handleNearbyPlaceTap = useCallback(async (place: PlaceResult) => {
-    setPlaceDetails({
-      place: {
-        id: place.id,
-        displayName: place.displayName,
-        formattedAddress: place.formattedAddress,
-        location: place.location,
-      },
-      isFetching: true,
-      fromNearby: true,
-    });
+  const handleNearbyPlaceTap = useCallback(
+    async (place: PlaceResult) => {
+      setPlaceDetails({
+        place: {
+          id: place.id,
+          displayName: place.displayName,
+          formattedAddress: place.formattedAddress,
+          location: place.location,
+        },
+        isFetching: true,
+        fromNearby: true,
+      });
 
-    try {
-      const full = await TranzitApiService.getPlaceDetails(place.id);
-      setPlaceDetails({ place: full, isFetching: false, fromNearby: true });
-    } catch {
-      setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
-    }
-  }, []);
+      let address = place.formattedAddress || place.displayName.text;
+      try {
+        const full = await TranzitApiService.getPlaceDetails(place.id);
+        setPlaceDetails({ place: full, isFetching: false, fromNearby: true });
+        if (full.formattedAddress) address = full.formattedAddress;
+      } catch {
+        setPlaceDetails((prev) => (prev ? { ...prev, isFetching: false } : null));
+      }
+
+      recordSearch({
+        placeId: place.id,
+        address,
+        lat: place.location.latitude,
+        lng: place.location.longitude,
+        originLat: userLocation?.latitude ?? null,
+        originLng: userLocation?.longitude ?? null,
+      });
+    },
+    [recordSearch, userLocation],
+  );
 
   // ── Map gestures (MapLibre) ──────────────────────────────────────────────────
   const onMapPress = useCallback(
@@ -891,13 +920,10 @@ export default function MapScreen() {
         )}
 
         <SearchSheet
-          userLocation={userLocation}
-          onDestinationSelected={handleDestinationSelected}
-          onSearchActiveChange={(active) => {
-            setIsSearchActive(active);
-            if (active) snapTo(SNAP_EXPANDED);
+          onActivate={(restingY) => {
+            setSearchRestingY(restingY);
+            setIsSearchActive(true);
           }}
-          onClear={handleClear}
         />
 
         {!isSearchActive && (
@@ -923,6 +949,16 @@ export default function MapScreen() {
                       };
                       setDestination(coord);
                       flyTo(coord, 14, 900);
+                      recordSearch({
+                        placeId: item.googlePlaceId,
+                        address: item.address || item.categoryName,
+                        lat: item.latitude,
+                        lng: item.longitude,
+                        city: item.city,
+                        country: item.country,
+                        originLat: userLocation?.latitude ?? null,
+                        originLng: userLocation?.longitude ?? null,
+                      });
                       router.navigate({
                         pathname: "/(tabs)/routes",
                         params: {
@@ -1045,6 +1081,15 @@ export default function MapScreen() {
             : null
         }
       />
+
+      {isSearchActive && (
+        <SearchOverlay
+          userLocation={userLocation}
+          restingY={searchRestingY}
+          onDestinationSelected={handleDestinationSelected}
+          onClose={() => setIsSearchActive(false)}
+        />
+      )}
     </View>
   );
 }

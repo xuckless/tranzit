@@ -15,11 +15,14 @@ import type { SearchSuggestion } from "@/types/places";
 interface Props {
   suggestions: SearchSuggestion[];
   onSelect: (suggestion: SearchSuggestion) => void;
+  /** "recent" swaps the leading icon for a clock to mark search-history rows. */
+  variant?: "default" | "recent";
 }
 
 export const DestinationSuggestionsList: React.FC<Props> = ({
   suggestions,
   onSelect,
+  variant = "default",
 }) => {
   const { theme } = useTheme();
   const { colors, typography, semantic } = theme;
@@ -28,6 +31,12 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
   const renderItem = useCallback(
     ({ item, index }: ListRenderItemInfo<SearchSuggestion>) => {
       const isAddress = /^\d/.test(item.mainText);
+      const iconName =
+        variant === "recent"
+          ? "time-outline"
+          : isAddress
+            ? "navigate-outline"
+            : "location-outline";
       return (
         <>
           <TouchableOpacity
@@ -39,7 +48,7 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
           >
             <View style={styles.iconWrap}>
               <Ionicons
-                name={isAddress ? "navigate-outline" : "location-outline"}
+                name={iconName}
                 size={16}
                 color={semantic.primaryChipBlue}
               />
@@ -59,7 +68,7 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
         </>
       );
     },
-    [onSelect, suggestions.length, styles, colors.ink, colors.ink3, semantic.primaryChipBlue],
+    [onSelect, variant, suggestions.length, styles, colors.ink, colors.ink3, semantic.primaryChipBlue],
   );
 
   return (

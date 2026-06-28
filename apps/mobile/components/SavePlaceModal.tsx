@@ -14,10 +14,14 @@ import {
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Animated, { FadeIn } from "react-native-reanimated";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useAuth } from "@/contexts/AuthContext";
+import { useRecentSearches } from "@/hooks/useSearchHistory";
 import { TranzitApiService } from "@/services/TranzitApiService";
 import type { AutocompletePrediction } from "@/types/places";
+import type { RecentSearch } from "@/lib/searchHistory";
 import {
   fetchSavedPlaces,
   savePlace,
@@ -62,6 +66,8 @@ export function SavePlaceModal({
 }: Props) {
   const { theme } = useTheme();
   const { user } = useAuth();
+  const insets = useSafeAreaInsets();
+  const { recents, refresh: refreshRecents } = useRecentSearches();
   const { colors, typography, semantic, spacing, radii, shadow } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
@@ -110,8 +116,9 @@ export function SavePlaceModal({
     setIsCreatingCategory(false);
     setNewCategoryName("");
     setSaveError(null);
+    refreshRecents();
     if (user) fetchSavedPlaces(user).then(setCategories).catch(() => {});
-  }, [visible, preselectedPlace, user]);
+  }, [visible, preselectedPlace, user, refreshRecents]);
 
   // ─── Search debounce ─────────────────────────────────────────────────────────
 
@@ -167,6 +174,28 @@ export function SavePlaceModal({
       setIsResolvingSelection(false);
     }
   }, []);
+
+  // Tapping a recent skips the network — coords are already stored.
+  const handleSelectRecent = useCallback((r: RecentSearch) => {
+    if (r.lat == null || r.lng == null) return;
+    setChosenPlace({
+      googlePlaceId: r.placeId ?? "",
+      displayName: r.mainText,
+      address: r.address,
+      latitude: r.lat,
+      longitude: r.lng,
+    });
+    setSearchQuery("");
+    setSearchResults([]);
+    setPhase("details");
+  }, []);
+
+  const recentsWithCoords = useMemo(
+    () => recents.filter((r) => r.lat != null && r.lng != null),
+    [recents],
+  );
+  const showRecents =
+    searchQuery.trim() === "" && recentsWithCoords.length > 0;
 
   const handleSelectCategory = useCallback((name: string) => {
     setSelectedCategoryName(name);
@@ -237,7 +266,17 @@ export function SavePlaceModal({
         style={styles.keyboardView}
         pointerEvents="box-none"
       >
-        <View style={[styles.sheet, { backgroundColor: colors.card }]}>
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: colors.card },
+            phase === "search" && {
+              flex: 1,
+              marginTop: insets.top,
+              maxHeight: "100%",
+            },
+          ]}
+        >
           {/* Handle */}
           <View style={styles.handleRow}>
             <View style={[styles.handle, { backgroundColor: semantic.handle }]} />
@@ -315,12 +354,45 @@ export function SavePlaceModal({
                   color={colors.primary}
                   style={{ marginTop: 32 }}
                 />
+              ) : showRecents ? (
+                <FlatList
+                  data={recentsWithCoords}
+                  keyExtractor={(r) => r.placeKey}
+                  keyboardShouldPersistTaps="handled"
+                  style={[styles.resultsList, { flex: 1, maxHeight: "100%" }]}
+                  renderItem={({ item }) => (
+                    <TouchableOpacity
+                      style={[styles.resultRow, { borderBottomColor: colors.divider }]}
+                      onPress={() => handleSelectRecent(item)}
+                      activeOpacity={0.75}
+                    >
+                      <View style={styles.resultIconBox}>
+                        <Ionicons
+                          name="time-outline"
+                          size={16}
+                          color={colors.primary}
+                        />
+                      </View>
+                      <View style={styles.resultText}>
+                        <Text style={[styles.resultName, { color: colors.ink }]} numberOfLines={1}>
+                          {item.mainText}
+                        </Text>
+                        <Text style={[styles.resultAddress, { color: colors.ink3 }]} numberOfLines={1}>
+                          {item.secondaryText ?? item.address}
+                        </Text>
+                      </View>
+                    </TouchableOpacity>
+                  )}
+                />
               ) : (
                 <FlatList
                   data={searchResults}
                   keyExtractor={(r) => r.place_id}
                   keyboardShouldPersistTaps="handled"
-                  style={styles.resultsList}
+                  style={[
+                    styles.resultsList,
+                    phase === "search" && { flex: 1, maxHeight: "100%" },
+                  ]}
                   renderItem={({ item }) => (
                     <TouchableOpacity
                       style={[styles.resultRow, { borderBottomColor: colors.divider }]}
@@ -364,7 +436,10 @@ export function SavePlaceModal({
               showsVerticalScrollIndicator={false}
             >
               {/* Selected place card */}
-              <View style={styles.placeCard}>
+              <Animated.View
+                entering={FadeIn.duration(220)}
+                style={styles.placeCard}
+              >
                 <View style={styles.placeIconBox}>
                   <Ionicons
                     name="location"
@@ -380,7 +455,7 @@ export function SavePlaceModal({
                     {chosenPlace.address}
                   </Text>
                 </View>
-              </View>
+              </Animated.View>
 
               {/* Category picker */}
               <View style={styles.field}>

@@ -12,8 +12,10 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import { useMemo, useState } from "react";
+import { useRouter } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useSavedPlaces } from "@/hooks/useSavedPlaces";
+import { useSearchHistory } from "@/hooks/useSearchHistory";
 import type { SavedPlace } from "@/lib/savedPlaces";
 import { SavePlaceModal } from "@/components/SavePlaceModal";
 import { categoryStyle } from "@/styles/categoryStyle";
@@ -24,9 +26,11 @@ import type { AppTheme } from "@/styles/themes";
 function PlaceRow({
   place,
   onDelete,
+  onOpen,
 }: {
   place: SavedPlace;
   onDelete: (categoryCode: string, categoryName: string) => void;
+  onOpen: (place: SavedPlace) => void;
 }) {
   const { theme } = useTheme();
   const { colors } = theme;
@@ -49,7 +53,12 @@ function PlaceRow({
 
   return (
     <Swipeable renderRightActions={renderRightActions} overshootRight={false}>
-      <View style={[styles.rowWrap, { backgroundColor: colors.card }]}>
+      <TouchableOpacity
+        style={[styles.rowWrap, { backgroundColor: colors.card }]}
+        activeOpacity={0.85}
+        onPress={() => onOpen(place)}
+        disabled={place.latitude == null || place.longitude == null}
+      >
         <View style={styles.placeRow}>
           <View style={[styles.placeIconBox, { backgroundColor: p.bg }]}>
             <FontAwesome5
@@ -82,7 +91,7 @@ function PlaceRow({
             />
           ) : null}
         </View>
-      </View>
+      </TouchableOpacity>
     </Swipeable>
   );
 }
@@ -115,7 +124,30 @@ export default function SavedScreen() {
   const { colors } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const { data, loading, error, refresh, remove } = useSavedPlaces();
+  const { record: recordSearch } = useSearchHistory();
+  const router = useRouter();
   const [showSaveModal, setShowSaveModal] = useState(false);
+
+  const onOpen = (place: SavedPlace) => {
+    if (place.latitude == null || place.longitude == null) return;
+    recordSearch({
+      placeId: place.googlePlaceId,
+      address: place.address || place.categoryName,
+      lat: place.latitude,
+      lng: place.longitude,
+      city: place.city,
+      country: place.country,
+    });
+    router.navigate({
+      pathname: "/(tabs)/routes",
+      params: {
+        destinationId: place.googlePlaceId ?? "",
+        destinationLat: String(place.latitude),
+        destinationLng: String(place.longitude),
+        destinationName: place.categoryName,
+      },
+    } as never);
+  };
 
   const onDelete = (categoryCode: string, categoryName: string) => {
     Alert.alert(
@@ -171,7 +203,9 @@ export default function SavedScreen() {
           </View>
         }
         ListEmptyComponent={<EmptyState />}
-        renderItem={({ item }) => <PlaceRow place={item} onDelete={onDelete} />}
+        renderItem={({ item }) => (
+          <PlaceRow place={item} onDelete={onDelete} onOpen={onOpen} />
+        )}
         ItemSeparatorComponent={() => <View style={{ height: 10 }} />}
       />
 

@@ -21,6 +21,30 @@ export interface SavedPlaceMirrorRow {
   pending: number;
 }
 
+// ─── Search-history mirror types ────────────────────────────────────────────────
+// Local SQLite mirror of the user DB `user_history`. It doubles as the outbox:
+// `pending = 1` marks a search recorded locally but not yet confirmed in the user
+// DB (offline / 503), retried by the orchestrator. The (user_id, place_key) PK
+// gives free per-place dedup — re-searching a place updates its row and bumps
+// date_time. Scoped by user_id so multiple identities never collide.
+
+export interface SearchHistoryMirrorRow {
+  user_id: string;
+  place_key: string;
+  google_place_id: string | null;
+  destination_full_formatted_address: string;
+  destination_city: string | null;
+  destination_country: string | null;
+  destination_lat: number | null;
+  destination_lng: number | null;
+  origin_lat: number | null;
+  origin_lng: number | null;
+  origin_address: string | null;
+  category_code: string | null;
+  date_time: string; // ISO; used for ordering/cap
+  pending: number;
+}
+
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
@@ -69,6 +93,32 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await db.execAsync(`
     CREATE INDEX IF NOT EXISTS idx_saved_place_user
       ON saved_place_cache (user_id)
+  `);
+
+  // Search history mirror / outbox (one row per recently-searched place, deduped
+  // by place_key, capped to the newest N per user by the orchestrator).
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS search_history_cache (
+      user_id                            TEXT NOT NULL,
+      place_key                          TEXT NOT NULL,
+      google_place_id                    TEXT,
+      destination_full_formatted_address TEXT NOT NULL,
+      destination_city                   TEXT,
+      destination_country                TEXT,
+      destination_lat                    REAL,
+      destination_lng                    REAL,
+      origin_lat                         REAL,
+      origin_lng                         REAL,
+      origin_address                     TEXT,
+      category_code                      TEXT,
+      date_time                          TEXT NOT NULL,
+      pending                            INTEGER NOT NULL DEFAULT 0 CHECK (pending IN (0, 1)),
+      PRIMARY KEY (user_id, place_key)
+    );
+  `);
+  await db.execAsync(`
+    CREATE INDEX IF NOT EXISTS idx_search_history_user
+      ON search_history_cache (user_id, date_time)
   `);
 
   await db.execAsync(`
@@ -211,6 +261,163 @@ export async function mirrorReplaceAll(
         r.lat,
         r.lng,
         r.google_place_id
+      );
+    }
+  });
+}
+
+// ─── Search-history mirror (offline outbox of the user DB) ──────────────────────
+
+const SEARCH_COLS = `user_id, place_key, google_place_id,
+            destination_full_formatted_address, destination_city, destination_country,
+            destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
+            category_code, date_time, pending`;
+
+export async function mirrorUpsertSearch(
+  row: SearchHistoryMirrorRow
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `INSERT INTO search_history_cache
+       (user_id, place_key, google_place_id,
+        destination_full_formatted_address, destination_city, destination_country,
+        destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
+        category_code, date_time, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(user_id, place_key) DO UPDATE SET
+       google_place_id                    = excluded.google_place_id,
+       destination_full_formatted_address = excluded.destination_full_formatted_address,
+       destination_city                   = excluded.destination_city,
+       destination_country                = excluded.destination_country,
+       destination_lat                    = excluded.destination_lat,
+       destination_lng                    = excluded.destination_lng,
+       origin_lat                         = excluded.origin_lat,
+       origin_lng                         = excluded.origin_lng,
+       origin_address                     = excluded.origin_address,
+       category_code                      = excluded.category_code,
+       date_time                          = excluded.date_time,
+       pending                            = excluded.pending`,
+    row.user_id,
+    row.place_key,
+    row.google_place_id,
+    row.destination_full_formatted_address,
+    row.destination_city,
+    row.destination_country,
+    row.destination_lat,
+    row.destination_lng,
+    row.origin_lat,
+    row.origin_lng,
+    row.origin_address,
+    row.category_code,
+    row.date_time,
+    row.pending
+  );
+}
+
+export async function mirrorReadPendingSearch(
+  userId: string
+): Promise<SearchHistoryMirrorRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<SearchHistoryMirrorRow>(
+    `SELECT ${SEARCH_COLS} FROM search_history_cache
+      WHERE user_id = ? AND pending = 1 ORDER BY date_time ASC`,
+    userId
+  );
+}
+
+export async function mirrorClearPendingSearch(
+  userId: string,
+  placeKey: string
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    "UPDATE search_history_cache SET pending = 0 WHERE user_id = ? AND place_key = ?",
+    userId,
+    placeKey
+  );
+}
+
+/** Trim the mirror to the newest `limit` rows for a user (by date_time). */
+export async function mirrorCapSearch(
+  userId: string,
+  limit: number
+): Promise<void> {
+  const db = await getDb();
+  await db.runAsync(
+    `DELETE FROM search_history_cache
+      WHERE user_id = ?
+        AND place_key NOT IN (
+          SELECT place_key FROM search_history_cache
+           WHERE user_id = ? ORDER BY date_time DESC LIMIT ?
+        )`,
+    userId,
+    userId,
+    limit
+  );
+}
+
+/** Read the newest `limit` searches for display (regardless of pending state). */
+export async function mirrorListRecentSearch(
+  userId: string,
+  limit: number
+): Promise<SearchHistoryMirrorRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<SearchHistoryMirrorRow>(
+    `SELECT ${SEARCH_COLS} FROM search_history_cache
+      WHERE user_id = ? ORDER BY date_time DESC LIMIT ?`,
+    userId,
+    limit
+  );
+}
+
+/**
+ * Replace the mirror for a user with the authoritative remote rows, but never
+ * clobber rows still pending a remote write (offline records stay until pushed).
+ */
+export async function mirrorReplaceAllSearch(
+  userId: string,
+  rows: SearchHistoryMirrorRow[]
+): Promise<void> {
+  const db = await getDb();
+  await db.withExclusiveTransactionAsync(async (txn) => {
+    await txn.runAsync(
+      "DELETE FROM search_history_cache WHERE user_id = ? AND pending = 0",
+      userId
+    );
+    for (const r of rows) {
+      await txn.runAsync(
+        `INSERT INTO search_history_cache
+           (user_id, place_key, google_place_id,
+            destination_full_formatted_address, destination_city, destination_country,
+            destination_lat, destination_lng, origin_lat, origin_lng, origin_address,
+            category_code, date_time, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+         ON CONFLICT(user_id, place_key) DO UPDATE SET
+           google_place_id                    = excluded.google_place_id,
+           destination_full_formatted_address = excluded.destination_full_formatted_address,
+           destination_city                   = excluded.destination_city,
+           destination_country                = excluded.destination_country,
+           destination_lat                    = excluded.destination_lat,
+           destination_lng                    = excluded.destination_lng,
+           origin_lat                         = excluded.origin_lat,
+           origin_lng                         = excluded.origin_lng,
+           origin_address                     = excluded.origin_address,
+           category_code                      = excluded.category_code,
+           date_time                          = excluded.date_time,
+           pending                            = 0`,
+        r.user_id,
+        r.place_key,
+        r.google_place_id,
+        r.destination_full_formatted_address,
+        r.destination_city,
+        r.destination_country,
+        r.destination_lat,
+        r.destination_lng,
+        r.origin_lat,
+        r.origin_lng,
+        r.origin_address,
+        r.category_code,
+        r.date_time
       );
     }
   });
