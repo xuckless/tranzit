@@ -1,3 +1,5 @@
+import { authHeader } from "@/lib/supabase";
+
 const MIDDLEWARE_BASE =
   "https://tranzit-db-middleware.tailnet-example.ts.net";
 
@@ -18,7 +20,10 @@ export async function middlewareQuery<T>(
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url.toString(), signal ? { signal } : undefined);
+  const res = await fetch(url.toString(), {
+    headers: await authHeader(),
+    ...(signal ? { signal } : {}),
+  });
   if (!res.ok) throw new Error(`[middleware] ${table} → ${res.status}`);
   const json: Envelope<T> = await res.json();
   return json.data;
@@ -40,7 +45,10 @@ export async function middlewareUserQuery<T>(
   for (const [k, v] of Object.entries(params)) {
     url.searchParams.set(k, String(v));
   }
-  const res = await fetch(url.toString(), signal ? { signal } : undefined);
+  const res = await fetch(url.toString(), {
+    headers: await authHeader(),
+    ...(signal ? { signal } : {}),
+  });
   if (!res.ok) throw new Error(`[middleware] user/${table} → ${res.status}`);
   const json: Envelope<T> = await res.json();
   return json.data;
@@ -64,7 +72,7 @@ export async function middlewareUpsert<T>(
 ): Promise<T[]> {
   const res = await fetch(`${USER_BASE}/${table}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await authHeader()) },
     body: JSON.stringify(body),
     ...(signal ? { signal } : {}),
   });
@@ -101,6 +109,7 @@ export async function middlewareUserDelete(
   }
   const res = await fetch(url.toString(), {
     method: "DELETE",
+    headers: await authHeader(),
     ...(signal ? { signal } : {}),
   });
   if (!res.ok) {

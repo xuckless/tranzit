@@ -14,6 +14,13 @@ Tranzit is a Calgary public-transit app built in **React Native (Expo, New Arch 
 - **DB Middleware** — REST+SSE over the PostgreSQL transit DB (`lib/middleware.ts`, `lib/vehicleSSE.ts`, `lib/routeSSE.ts`).
 - **Route Save** — WebSocket+REST for active trip sessions, tracking, rerouting, boarding confirmation, and countdown timings (`lib/tripWebSocket.ts`, `lib/config.ts`).
 
+> **Backend auth:** all three verify the Supabase JWT. The app attaches it as
+> `Authorization: Bearer` on every REST/SSE call (via `authHeader()` in `lib/supabase.ts`;
+> Route Save's WS uses `?token=`). Route Save hard-enforces; Middleware + Route Service are
+> rolling out **log-first** (`AUTH_ENFORCE`), so a missing token is tolerated for now but
+> will become a 401 — keep the header on any new backend call. Service-to-service calls use
+> mTLS, not the JWT. Backend details: each Go repo's `AUTH.md`.
+
 **Core flows:**
 1. **Journey Flow:** Search a destination (Map/Routes) → compute route via OTP (Google Maps fallback) → start journey → server creates a trip session → Commute screen takes over with live WebSocket tracking, push notifications, iOS Live Activities, and community reporting.
 2. **Planner Flow:** Map out trips on a 24-hour visual schedule → calculate leave-by warnings and schedule local push notifications (`lib/leaveByNotifications.ts`).

@@ -8,6 +8,7 @@ import type {
   AutocompletePrediction,
 } from "../types/places";
 import { parseRouteResponse } from "@/lib/routeParser";
+import { authHeader } from "@/lib/supabase";
 
 // Set EXPO_PUBLIC_USE_LOCAL=true in .env.local to target localhost:3100
 const BASE_URL =
@@ -25,7 +26,7 @@ export const TranzitApiService = {
     if (userLocation) {
       url += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
     }
-    const res = await fetch(url, { signal });
+    const res = await fetch(url, { headers: await authHeader(), signal });
     if (res.status === 404) return [];
     if (!res.ok) throw new Error(`Search failed: ${res.status}`);
     const data: PlacesSearchResponse = await res.json();
@@ -38,7 +39,7 @@ export const TranzitApiService = {
   ): Promise<PlaceDetails> {
     const res = await fetch(`${BASE_URL}/details`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify({ place_id: placeId }),
       signal,
     });
@@ -54,7 +55,7 @@ export const TranzitApiService = {
   ): Promise<RouteResponse> {
     const res = await fetch(`${BASE_URL}/route`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify(request),
       signal,
     });
@@ -73,7 +74,7 @@ export const TranzitApiService = {
   ): Promise<RouteResponse> {
     const res = await fetch(`${BASE_URL}/route/otp`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify(request),
       signal,
     });
@@ -89,7 +90,7 @@ export const TranzitApiService = {
   ): Promise<AutocompletePrediction[]> {
     const res = await fetch(
       `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(query)}`,
-      { signal },
+      { headers: await authHeader(), signal },
     );
     if (!res.ok) return [];
     const data = await res.json();
@@ -102,6 +103,7 @@ export const TranzitApiService = {
     signal?: AbortSignal,
   ): Promise<PlaceResult[]> {
     const res = await fetch(`${BASE_URL}/searchnearby?lat=${lat}&lng=${lng}`, {
+      headers: await authHeader(),
       signal,
     });
     if (res.status === 404) return [];

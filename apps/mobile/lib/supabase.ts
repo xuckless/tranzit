@@ -84,3 +84,25 @@ export const supabase = createClient<Database>(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 });
+
+/**
+ * The current Supabase access token (JWT), or null when signed out. Backends that
+ * verify auth (e.g. Route Save) expect this as `Authorization: Bearer <token>` on
+ * REST calls and as the `?token=` query param on the trip WebSocket. getSession()
+ * transparently refreshes a near-expired token, so callers should fetch it fresh
+ * per request/connection rather than caching it.
+ */
+export async function getAccessToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token ?? null;
+}
+
+/**
+ * `Authorization: Bearer <token>` header for backend REST calls, or an empty
+ * object when signed out (so callers can spread it unconditionally). The backends
+ * are rolling out auth log-first, so an absent header is tolerated for now.
+ */
+export async function authHeader(): Promise<Record<string, string>> {
+  const token = await getAccessToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}

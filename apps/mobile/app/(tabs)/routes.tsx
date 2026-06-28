@@ -40,6 +40,7 @@ import {
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
 import { ROUTE_SAVE_URL } from "@/lib/config";
+import { getAccessToken } from "@/lib/supabase";
 import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
 import type { Route, RouteStop, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
@@ -674,9 +675,14 @@ export default function RouteScreen() {
                       },
                   };
 
+            // Route Save authenticates the trip owner from this Supabase JWT.
+            const token = await getAccessToken();
             const resp = await fetch(`${ROUTE_SAVE_URL}/trips`, {
                 method: "POST",
-                headers: { "Content-Type": "application/json" },
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
                 body: JSON.stringify(body),
             });
 

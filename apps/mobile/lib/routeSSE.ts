@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import EventSource from "react-native-sse";
+import { authHeader } from "@/lib/supabase";
 
 const MIDDLEWARE_BASE =
   "https://tranzit-db-middleware.tailnet-example.ts.net";
@@ -32,35 +33,50 @@ export function useRouteLiveStops(
   useEffect(() => {
     if (!routeId || !timeEpoch) return;
 
-    const url = `${MIDDLEWARE_BASE}/api/v1/stream/route?route_id=${encodeURIComponent(routeId)}&time=${timeEpoch}`;
-    const es = new EventSource<"snapshot" | "update">(url, {
-      pollingInterval: 3000,
-    });
+    let es: EventSource<"snapshot" | "update"> | null = null;
+    let cancelled = false;
 
-    es.addEventListener("snapshot", (e) => {
-      if (!e.data) return;
-      const { data } = JSON.parse(e.data) as { data: RouteSSEStop[] };
-      const map = new Map<string, RouteSSEStop>();
-      for (const stop of data) map.set(stop.stop_id, stop);
-      setStops(map);
-    });
-
-    es.addEventListener("update", (e) => {
-      if (!e.data) return;
-      const { added, updated, removed } = JSON.parse(e.data) as {
-        added?: RouteSSEStop[];
-        updated?: RouteSSEStop[];
-        removed?: string[];
-      };
-      setStops((prev) => {
-        const next = new Map(prev);
-        for (const id of removed ?? []) next.delete(id);
-        for (const s of [...(updated ?? []), ...(added ?? [])]) next.set(s.stop_id, s);
-        return next;
+    // Fetch the Supabase token before connecting (the EventSource is built with
+    // headers up front). react-native-sse reuses these headers on auto-reconnect,
+    // so a token expiring mid-stream would fail to reconnect once the middleware
+    // hard-enforces — fine while it is log-first; revisit before the flip.
+    void (async () => {
+      const headers = await authHeader();
+      if (cancelled) return;
+      const url = `${MIDDLEWARE_BASE}/api/v1/stream/route?route_id=${encodeURIComponent(routeId)}&time=${timeEpoch}`;
+      es = new EventSource<"snapshot" | "update">(url, {
+        headers,
+        pollingInterval: 3000,
       });
-    });
 
-    return () => es.close();
+      es.addEventListener("snapshot", (e) => {
+        if (!e.data) return;
+        const { data } = JSON.parse(e.data) as { data: RouteSSEStop[] };
+        const map = new Map<string, RouteSSEStop>();
+        for (const stop of data) map.set(stop.stop_id, stop);
+        setStops(map);
+      });
+
+      es.addEventListener("update", (e) => {
+        if (!e.data) return;
+        const { added, updated, removed } = JSON.parse(e.data) as {
+          added?: RouteSSEStop[];
+          updated?: RouteSSEStop[];
+          removed?: string[];
+        };
+        setStops((prev) => {
+          const next = new Map(prev);
+          for (const id of removed ?? []) next.delete(id);
+          for (const s of [...(updated ?? []), ...(added ?? [])]) next.set(s.stop_id, s);
+          return next;
+        });
+      });
+    })();
+
+    return () => {
+      cancelled = true;
+      es?.close();
+    };
   }, [routeId, timeEpoch]);
 
   return stops;

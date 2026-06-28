@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import EventSource from "react-native-sse";
 import type { VehiclePosition } from "@/types/database";
+import { authHeader } from "@/lib/supabase";
 
 const SSE_URL =
   "https://tranzit-db-middleware.tailnet-example.ts.net/api/v1/vehicle_positions";
@@ -12,6 +13,7 @@ const SSE_URL =
 // side. Subscribers receive a fresh VehiclePosition[] reference on every event.
 
 let _es: EventSource<"snapshot" | "update"> | null = null;
+let _opening = false;
 let _refCount = 0;
 
 const _vehicleMap = new Map<string, VehiclePosition>();
@@ -162,36 +164,53 @@ function applyUpdate(
 }
 
 function openSSE(): void {
-  if (_es) return;
-  const es = new EventSource<"snapshot" | "update">(SSE_URL, {
-    pollingInterval: 3000,
-  });
-  _es = es;
+  if (_es || _opening) return;
+  _opening = true;
+  // Fetch the Supabase token before building the EventSource (headers are set at
+  // construction). The _opening flag prevents a double-open across the await; the
+  // _refCount/_es re-checks abort if every subscriber left while we waited.
+  // react-native-sse reuses these headers on auto-reconnect, so a token expiring
+  // on this long-lived stream would fail to reconnect once the middleware hard-
+  // enforces — acceptable while it is log-first; revisit before the flip.
+  void (async () => {
+    const headers = await authHeader();
+    if (_refCount === 0 || _es) {
+      _opening = false;
+      return;
+    }
+    const es = new EventSource<"snapshot" | "update">(SSE_URL, {
+      headers,
+      pollingInterval: 3000,
+    });
+    _es = es;
+    _opening = false;
 
-  es.addEventListener("error", (e) => console.warn("[vehicleSSE] error", e));
+    es.addEventListener("error", (e) => console.warn("[vehicleSSE] error", e));
 
-  es.addEventListener("snapshot", (e) => {
-    if (!e.data) return;
-    const { data } = JSON.parse(e.data) as { count: number; data: VehiclePosition[] };
-    applySnapshot(data);
-    scheduleBroadcast();
-  });
+    es.addEventListener("snapshot", (e) => {
+      if (!e.data) return;
+      const { data } = JSON.parse(e.data) as { count: number; data: VehiclePosition[] };
+      applySnapshot(data);
+      scheduleBroadcast();
+    });
 
-  es.addEventListener("update", (e) => {
-    if (!e.data) return;
-    const { added, updated, removed } = JSON.parse(e.data) as {
-      added?: VehiclePosition[];
-      updated?: VehiclePosition[];
-      removed?: string[];
-    };
-    applyUpdate(added, updated, removed);
-    scheduleBroadcast();
-  });
+    es.addEventListener("update", (e) => {
+      if (!e.data) return;
+      const { added, updated, removed } = JSON.parse(e.data) as {
+        added?: VehiclePosition[];
+        updated?: VehiclePosition[];
+        removed?: string[];
+      };
+      applyUpdate(added, updated, removed);
+      scheduleBroadcast();
+    });
+  })();
 }
 
 function closeSSE(): void {
   _es?.close();
   _es = null;
+  _opening = false;
   if (_broadcastTimer != null) {
     clearTimeout(_broadcastTimer);
     _broadcastTimer = null;

@@ -55,6 +55,7 @@ import type {
 } from "@/types/trip";
 import type { AppTheme, PastelKey } from "@/styles/themes";
 import { ROUTE_SAVE_URL } from "@/lib/config";
+import { getAccessToken } from "@/lib/supabase";
 
 const CALGARY_CENTER: [number, number] = [-114.0719, 51.0447];
 const MIN_MARKER_ZOOM = 12;
@@ -1485,7 +1486,10 @@ export default function CommuteScreen() {
     let cancelled = false;
     (async () => {
       try {
-        const resp = await fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`);
+        const token = await getAccessToken();
+        const resp = await fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, {
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        });
         if (resp.status === 404) {
           console.warn("[commute] trip snapshot 404 — session unknown/closed");
           return;
@@ -1526,9 +1530,12 @@ export default function CommuteScreen() {
       lastScheduledLeaveByRef.current = null;
     }
     if (sessionId && ROUTE_SAVE_URL) {
-      fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, { method: "DELETE" }).catch(
-        () => {},
-      );
+      // Owner token required: Route Save only tears the trip down for its owner.
+      const token = await getAccessToken();
+      fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      }).catch(() => {});
     }
     routeStore.clearJourney();
     router.navigate("/(tabs)/routes" as never);

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import type { TripStateMsg, TripRerouteMsg, TripNotifyMsg, ServerStopStatus } from "@/types/trip";
 import { ROUTE_SAVE_URL } from "@/lib/config";
+import { getAccessToken } from "@/lib/supabase";
 
 const ROUTE_SAVE_WS = ROUTE_SAVE_URL.replace(/^http/, "ws");
 
@@ -105,10 +106,30 @@ export function useTripWebSocket(
     cancelledRef.current = false;
     retryCountRef.current = 0;
 
-    function connect() {
+    function scheduleReconnect() {
+      if (cancelledRef.current) return;
+      const delay = BACKOFF_MS[Math.min(retryCountRef.current, BACKOFF_MS.length - 1)];
+      retryCountRef.current += 1;
+      retryTimerRef.current = setTimeout(() => void connect(), delay);
+    }
+
+    async function connect() {
       if (cancelledRef.current) return;
 
-      const url = `${ROUTE_SAVE_WS}${wsPath}`;
+      // Route Save verifies the Supabase JWT on the WS upgrade via ?token= — the RN
+      // WebSocket can't set an Authorization header, so it rides the query string.
+      // Fetched fresh per (re)connect so a long-running trip never dials with a
+      // stale token.
+      const token = await getAccessToken();
+      if (cancelledRef.current) return;
+      if (!token) {
+        // Signed out / session not ready — back off and retry rather than dialing
+        // unauthenticated (the server would reject the upgrade anyway).
+        scheduleReconnect();
+        return;
+      }
+
+      const url = `${ROUTE_SAVE_WS}${wsPath}?token=${encodeURIComponent(token)}`;
       const ws = new WebSocket(url);
       wsRef.current = ws;
       _activeWs = ws;
@@ -191,13 +212,11 @@ export function useTripWebSocket(
 
         if (cancelledRef.current) return;
 
-        const delay = BACKOFF_MS[Math.min(retryCountRef.current, BACKOFF_MS.length - 1)];
-        retryCountRef.current += 1;
-        retryTimerRef.current = setTimeout(connect, delay);
+        scheduleReconnect();
       };
     }
 
-    connect();
+    void connect();
 
     return () => {
       cancelledRef.current = true;
