@@ -7,7 +7,9 @@ import {
     TouchableOpacity,
     ScrollView,
     Keyboard,
+    Platform,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useLocalSearchParams } from "expo-router";
@@ -32,6 +34,13 @@ import {
 
 const clamp = (v: number, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, v));
+
+/** Minutes-of-day → Date (today's date, time-of-day only matters). */
+const dateFromMin = (min: number): Date => {
+    const d = new Date();
+    d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+    return d;
+};
 
 export default function AddTripScreen() {
     const router = useRouter();
@@ -79,6 +88,7 @@ export default function AddTripScreen() {
         const mins = now.getHours() * 60 + now.getMinutes();
         return clamp(Math.round(mins / SNAP_MIN) * SNAP_MIN, 0, DAY_MIN);
     });
+    const [showStartPicker, setShowStartPicker] = useState(false);
 
     // Location search: picking a suggestion attaches coordinates (enables
     // pre-routing + leave-now reminders); free text stays a plain label.
@@ -225,11 +235,12 @@ export default function AddTripScreen() {
                     )}
                 </View>
 
-                {/* Start + Duration */}
+                {/* Start + Duration — tap the start time for the native picker */}
                 <View style={styles.steppers}>
                     <Stepper
                         label="Start"
                         value={formatClock(startMin)}
+                        onPressValue={() => setShowStartPicker((v) => !v)}
                         onDec={() =>
                             setStartMin((v) =>
                                 clamp(v - SNAP_MIN, 0, DAY_MIN - durMin),
@@ -241,6 +252,28 @@ export default function AddTripScreen() {
                             )
                         }
                     />
+                    {showStartPicker && (
+                        <DateTimePicker
+                            value={dateFromMin(startMin)}
+                            mode="time"
+                            display={
+                                Platform.OS === "ios" ? "spinner" : "default"
+                            }
+                            minuteInterval={SNAP_MIN}
+                            onChange={(event, date) => {
+                                if (Platform.OS === "android")
+                                    setShowStartPicker(false);
+                                if (event.type === "set" && date) {
+                                    const mins =
+                                        date.getHours() * 60 +
+                                        date.getMinutes();
+                                    setStartMin(
+                                        clamp(mins, 0, DAY_MIN - durMin),
+                                    );
+                                }
+                            }}
+                        />
+                    )}
                     <Stepper
                         label="Duration"
                         value={formatDuration(durMin)}

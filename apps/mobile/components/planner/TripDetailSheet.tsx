@@ -1,5 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
+import {
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    Platform,
+} from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import BottomSheet, {
     BottomSheetScrollView,
     BottomSheetBackdrop,
@@ -33,6 +40,13 @@ type Props = {
 const clamp = (v: number, lo: number, hi: number) =>
     Math.max(lo, Math.min(hi, v));
 
+/** Minutes-of-day → Date (today's date, time-of-day only matters). */
+const dateFromMin = (min: number): Date => {
+    const d = new Date();
+    d.setHours(Math.floor(min / 60), min % 60, 0, 0);
+    return d;
+};
+
 export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
     const { theme } = useTheme();
     const { colors } = theme;
@@ -49,6 +63,7 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
     const [notes, setNotes] = useState("");
     const [startMin, setStartMin] = useState(0);
     const [durMin, setDurMin] = useState(60);
+    const [showStartPicker, setShowStartPicker] = useState(false);
 
     useEffect(() => {
         if (!event) return;
@@ -58,6 +73,7 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
         setStartMin(minutesOfDay(event.start));
         setDurMin(durationMin(event));
         setEditing(false);
+        setShowStartPicker(false);
         sheetRef.current?.snapToIndex(0);
     }, [event]);
 
@@ -179,6 +195,9 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                                     <Stepper
                                         label="Start"
                                         value={formatClock(startMin)}
+                                        onPressValue={() =>
+                                            setShowStartPicker((v) => !v)
+                                        }
                                         onDec={() =>
                                             setStartMin((v) =>
                                                 clamp(
@@ -198,6 +217,37 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                                             )
                                         }
                                     />
+                                    {showStartPicker && (
+                                        <DateTimePicker
+                                            value={dateFromMin(startMin)}
+                                            mode="time"
+                                            display={
+                                                Platform.OS === "ios"
+                                                    ? "spinner"
+                                                    : "default"
+                                            }
+                                            minuteInterval={SNAP_MIN}
+                                            onChange={(event, date) => {
+                                                if (Platform.OS === "android")
+                                                    setShowStartPicker(false);
+                                                if (
+                                                    event.type === "set" &&
+                                                    date
+                                                ) {
+                                                    const mins =
+                                                        date.getHours() * 60 +
+                                                        date.getMinutes();
+                                                    setStartMin(
+                                                        clamp(
+                                                            mins,
+                                                            0,
+                                                            DAY_MIN - durMin,
+                                                        ),
+                                                    );
+                                                }
+                                            }}
+                                        />
+                                    )}
                                     <Stepper
                                         label="Duration"
                                         value={formatDuration(durMin)}

@@ -815,23 +815,6 @@ export default function RouteScreen() {
                     <View style={styles.footerRow}>
                         <TouchableOpacity
                             style={[
-                                styles.leaveLaterBtn,
-                                !selectedRoute?.otpItinerary &&
-                                    styles.startBtnDisabled,
-                            ]}
-                            onPress={handleLeaveLater}
-                            disabled={!selectedRoute?.otpItinerary || isStarting}
-                            activeOpacity={0.85}
-                        >
-                            <Ionicons
-                                name="calendar-outline"
-                                size={18}
-                                color={colors.primary}
-                            />
-                            <Text style={styles.leaveLaterText}>Leave Later</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                            style={[
                                 styles.startBtn,
                                 isStarting && styles.startBtnDisabled,
                             ]}
@@ -854,6 +837,23 @@ export default function RouteScreen() {
                             <Text style={styles.startBtnText}>
                                 {isStarting ? "Starting…" : "Start Journey"}
                             </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.leaveLaterBtn,
+                                !selectedRoute?.otpItinerary &&
+                                    styles.startBtnDisabled,
+                            ]}
+                            onPress={handleLeaveLater}
+                            disabled={!selectedRoute?.otpItinerary || isStarting}
+                            activeOpacity={0.85}
+                        >
+                            <Ionicons
+                                name="calendar-outline"
+                                size={18}
+                                color={colors.primary}
+                            />
+                            <Text style={styles.leaveLaterText}>Leave Later</Text>
                         </TouchableOpacity>
                     </View>
                 </View>
@@ -1556,11 +1556,9 @@ function makeStyles(t: AppTheme) {
             borderTopColor: colors.divider,
         },
         footerRow: {
-            flexDirection: "row",
             gap: 10,
         },
         startBtn: {
-            flex: 2,
             backgroundColor: colors.primary,
             borderRadius: radii.button,
             paddingVertical: 16,
@@ -1570,11 +1568,10 @@ function makeStyles(t: AppTheme) {
             gap: 10,
         },
         leaveLaterBtn: {
-            flex: 1,
             borderWidth: 1.5,
             borderColor: colors.primary,
             borderRadius: radii.button,
-            paddingVertical: 16,
+            paddingVertical: 13,
             flexDirection: "row",
             justifyContent: "center",
             alignItems: "center",

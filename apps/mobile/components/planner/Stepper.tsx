@@ -5,17 +5,21 @@ import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
 
 // A labelled −/+ stepper row. Shared by the Trip Details edit sheet and the Add
-// Trip screen so both adjust times the same way.
+// Trip screen so both adjust times the same way. When `onPressValue` is given
+// the value itself is tappable (used to open the native time picker; −/+ stay
+// for fine 5-minute nudges).
 export function Stepper({
     label,
     value,
     onDec,
     onInc,
+    onPressValue,
 }: {
     label: string;
     value: string;
     onDec: () => void;
     onInc: () => void;
+    onPressValue?: () => void;
 }) {
     const { theme } = useTheme();
     const { colors } = theme;
@@ -32,7 +36,15 @@ export function Stepper({
                 >
                     <Ionicons name="remove" size={18} color={colors.ink} />
                 </TouchableOpacity>
-                <Text style={styles.value}>{value}</Text>
+                {onPressValue ? (
+                    <TouchableOpacity onPress={onPressValue} activeOpacity={0.7}>
+                        <Text style={[styles.value, styles.valueTappable]}>
+                            {value}
+                        </Text>
+                    </TouchableOpacity>
+                ) : (
+                    <Text style={styles.value}>{value}</Text>
+                )}
                 <TouchableOpacity
                     style={styles.btn}
                     onPress={onInc}
@@ -80,6 +92,10 @@ function makeStyles(t: AppTheme) {
             color: colors.ink,
             minWidth: 76,
             textAlign: "center",
+        },
+        valueTappable: {
+            color: colors.primary,
+            textDecorationLine: "underline",
         },
     });
 }

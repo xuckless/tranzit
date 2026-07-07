@@ -7,7 +7,9 @@ import {
     TouchableOpacity,
     Alert,
     Linking,
+    Platform,
 } from "react-native";
+import DateTimePicker from "@react-native-community/datetimepicker";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
@@ -46,6 +48,7 @@ export default function PlannerScreen() {
 
     const [selectedDate, setSelectedDate] = useState(() => new Date());
     const [selectedId, setSelectedId] = useState<string | null>(null);
+    const [showDatePicker, setShowDatePicker] = useState(false);
 
     const dayKey = localDayKey(selectedDate);
     const dayEvents = useMemo(
@@ -183,12 +186,18 @@ export default function PlannerScreen() {
                     </TouchableOpacity>
                     <TouchableOpacity
                         activeOpacity={0.85}
-                        onPress={() => setSelectedDate(new Date())}
+                        style={styles.dateBtn}
+                        onPress={() => setShowDatePicker((v) => !v)}
                     >
                         <Text style={styles.dateLabel}>
                             {isToday ? "Today · " : ""}
                             {dateLabel}
                         </Text>
+                        <Ionicons
+                            name="chevron-down"
+                            size={14}
+                            color={colors.ink2}
+                        />
                     </TouchableOpacity>
                     <TouchableOpacity
                         style={styles.navBtn}
@@ -229,6 +238,22 @@ export default function PlannerScreen() {
                     </TouchableOpacity>
                 </View>
             </View>
+
+            {/* Native date picker — dialog on Android, inline calendar on iOS */}
+            {showDatePicker && (
+                <View style={styles.datePickerWrap}>
+                    <DateTimePicker
+                        value={selectedDate}
+                        mode="date"
+                        display={Platform.OS === "ios" ? "inline" : "default"}
+                        onChange={(event, date) => {
+                            setShowDatePicker(false);
+                            if (event.type === "set" && date)
+                                setSelectedDate(date);
+                        }}
+                    />
+                </View>
+            )}
 
             <ScrollView
                 ref={scrollRef}
@@ -409,6 +434,19 @@ function makeStyles(t: AppTheme) {
             textAlign: "right",
             ...typography.caption,
             color: colors.ink3,
+        },
+
+        dateBtn: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+        },
+        datePickerWrap: {
+            backgroundColor: colors.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.divider,
+            paddingHorizontal: spacing.screen,
+            alignItems: "center",
         },
 
         // Faded pre-routed travel window rendered above its event card
