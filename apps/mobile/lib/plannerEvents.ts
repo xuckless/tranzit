@@ -32,7 +32,11 @@ import {
   mirrorUpsertEvent,
   type PlannedEventMirrorRow,
 } from "@/lib/db";
-import { deviceTimezone, type PlannedEvent } from "@/components/planner/trip";
+import {
+  allDayLocalMidnight,
+  deviceTimezone,
+  type PlannedEvent,
+} from "@/components/planner/trip";
 import { cancelLeaveNow } from "@/lib/leaveNowNotifications";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -331,8 +335,23 @@ export async function importDeviceEvents(user: User): Promise<ImportResult> {
     let imported = 0;
     for (const e of events) {
       if (!e.startDate || !e.endDate) continue;
-      const startISO = new Date(e.startDate).toISOString();
-      const endISO = new Date(e.endDate).toISOString();
+      let startD = new Date(e.startDate);
+      let endD = new Date(e.endDate);
+      if (e.allDay) {
+        // Normalize to local midnight(s) so isAllDay() derives it at render
+        // time and the plaque lands on the intended calendar day. Day count
+        // from raw duration is robust to both platform end conventions
+        // (Android exclusive next-midnight, iOS inclusive ~23:59:59) and DST.
+        const s = allDayLocalMidnight(startD);
+        const days = Math.max(
+          1,
+          Math.round((endD.getTime() - startD.getTime()) / 86_400_000),
+        );
+        startD = s;
+        endD = new Date(s.getFullYear(), s.getMonth(), s.getDate() + days);
+      }
+      const startISO = startD.toISOString();
+      const endISO = endD.toISOString();
       // user_defined_events enforces end_time > start_time.
       if (new Date(endISO).getTime() <= new Date(startISO).getTime()) continue;
       await saveEvent({

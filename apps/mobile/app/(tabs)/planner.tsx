@@ -21,6 +21,7 @@ import { usePlannerEvents } from "@/hooks/usePlannerEvents";
 import type { SaveEventInput } from "@/lib/plannerEvents";
 import {
     eventOnDay,
+    isAllDay,
     localDayKey,
     minutesOfDay,
     shiftEvent,
@@ -28,6 +29,7 @@ import {
     HOUR_HEIGHT,
     GUTTER_WIDTH,
     TOTAL_HEIGHT,
+    type PlannedEvent,
 } from "@/components/planner/trip";
 
 const addDays = (d: Date, n: number): Date => {
@@ -51,10 +53,17 @@ export default function PlannerScreen() {
     const [showDatePicker, setShowDatePicker] = useState(false);
 
     const dayKey = localDayKey(selectedDate);
-    const dayEvents = useMemo(
-        () => data.filter((e) => eventOnDay(e, dayKey)),
-        [data, dayKey],
-    );
+    // All-day events render as plaques pinned above the timeline; only timed
+    // events go onto the hour grid (cards + travel lead-ins).
+    const { allDayEvents, timedEvents } = useMemo(() => {
+        const allDayEvents: PlannedEvent[] = [];
+        const timedEvents: PlannedEvent[] = [];
+        for (const e of data) {
+            if (!eventOnDay(e, dayKey)) continue;
+            (isAllDay(e) ? allDayEvents : timedEvents).push(e);
+        }
+        return { allDayEvents, timedEvents };
+    }, [data, dayKey]);
     const selectedEvent = useMemo(
         () => data.find((e) => e.eventId === selectedId) ?? null,
         [data, selectedId],
@@ -255,6 +264,32 @@ export default function PlannerScreen() {
                 </View>
             )}
 
+            {/* All-day plaques — pinned above the scrolling timeline (iOS-Calendar style) */}
+            {allDayEvents.length > 0 && (
+                <View style={styles.allDayStrip}>
+                    <Text style={styles.allDayGutterLabel}>all-day</Text>
+                    {/* ponytail: strip isn't scrollable; if many all-day events
+                        shrink the timeline, wrap this in a ScrollView maxHeight ~96 */}
+                    <View style={styles.allDayPlaques}>
+                        {allDayEvents.map((event) => (
+                            <TouchableOpacity
+                                key={event.eventId}
+                                style={styles.allDayPlaque}
+                                activeOpacity={0.85}
+                                onPress={() => handleSelect(event.eventId)}
+                            >
+                                <Text
+                                    style={styles.allDayName}
+                                    numberOfLines={1}
+                                >
+                                    {event.name}
+                                </Text>
+                            </TouchableOpacity>
+                        ))}
+                    </View>
+                </View>
+            )}
+
             <ScrollView
                 ref={scrollRef}
                 contentContainerStyle={{
@@ -287,7 +322,7 @@ export default function PlannerScreen() {
                     ))}
 
                     {/* Faded travel lead-ins — the pre-routed window before each event */}
-                    {dayEvents.map((event) => {
+                    {timedEvents.map((event) => {
                         if (!event.travelTime) return null;
                         const startMin = minutesOfDay(event.start);
                         const top = Math.max(
@@ -322,7 +357,7 @@ export default function PlannerScreen() {
                     })}
 
                     {/* Event blocks — tap to open detail, long-press + drag to move */}
-                    {dayEvents.map((event) => (
+                    {timedEvents.map((event) => (
                         <TripEventCard
                             key={event.eventId}
                             event={event}
@@ -447,6 +482,44 @@ function makeStyles(t: AppTheme) {
             borderBottomColor: colors.divider,
             paddingHorizontal: spacing.screen,
             alignItems: "center",
+        },
+
+        // All-day plaque strip pinned between the toolbar and the timeline
+        allDayStrip: {
+            flexDirection: "row",
+            alignItems: "flex-start",
+            paddingVertical: 6,
+            paddingRight: spacing.screen,
+            backgroundColor: colors.surface,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.divider,
+        },
+        allDayGutterLabel: {
+            width: GUTTER_WIDTH - 10,
+            textAlign: "right",
+            paddingTop: 5,
+            ...typography.caption,
+            color: colors.ink3,
+        },
+        // 18 = (GUTTER_WIDTH + 8) − label width, so plaques align with event cards
+        allDayPlaques: {
+            flex: 1,
+            marginLeft: 18,
+            gap: 4,
+        },
+        allDayPlaque: {
+            borderRadius: radii.element,
+            borderWidth: 1,
+            borderColor: colors.primary + "44",
+            borderLeftWidth: 4,
+            borderLeftColor: colors.primary,
+            backgroundColor: colors.primary + "14",
+            paddingHorizontal: 10,
+            paddingVertical: 5,
+        },
+        allDayName: {
+            ...typography.captionStrong,
+            color: colors.ink,
         },
 
         // Faded pre-routed travel window rendered above its event card

@@ -58,6 +58,32 @@ export function eventOnDay(ev: PlannedEvent, dayKey: string): boolean {
     return localDayKey(new Date(ev.start)) === dayKey;
 }
 
+/**
+ * Derived all-day: starts at local midnight and ends exactly on a later local
+ * midnight. No stored flag — matches what the import normalizer writes.
+ * Midnight-to-midnight (not duration >= 1440) so DST days (23/25h) still count.
+ */
+export function isAllDay(ev: PlannedEvent): boolean {
+    return (
+        minutesOfDay(ev.start) === 0 &&
+        minutesOfDay(ev.end) === 0 &&
+        new Date(ev.end).getTime() > new Date(ev.start).getTime()
+    );
+}
+
+/**
+ * Local midnight of the calendar day an all-day device event means.
+ * Android CalendarContract stores all-day events at UTC midnight, iOS EventKit
+ * at local midnight — take date parts from whichever frame the timestamp is
+ * midnight-aligned in.
+ */
+export function allDayLocalMidnight(d: Date): Date {
+    const utcAligned = d.getUTCHours() === 0 && d.getUTCMinutes() === 0;
+    return utcAligned
+        ? new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate())
+        : new Date(d.getFullYear(), d.getMonth(), d.getDate());
+}
+
 /** Build an ISO timestamp for a YYYY-MM-DD day at `min` minutes local time. */
 export function isoForDay(dayKey: string, min: number): string {
     const [y, m, d] = dayKey.split("-").map(Number);

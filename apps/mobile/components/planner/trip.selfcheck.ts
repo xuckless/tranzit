@@ -9,6 +9,8 @@ import {
     eventOnDay,
     durationMin,
     shiftEvent,
+    isAllDay,
+    allDayLocalMidnight,
     DAY_MIN,
 } from "./trip";
 
@@ -61,5 +63,23 @@ assert.strictEqual(durationMin(e4), 60);
 
 // no-op shift returns the same reference.
 assert.strictEqual(shiftEvent(e1, 0), e1);
+
+// isAllDay: midnight→next-midnight yes; multi-day midnight span yes;
+// 00:00→23:59 no; timed event no.
+assert.strictEqual(isAllDay(ev(0, DAY_MIN)), true);
+assert.strictEqual(isAllDay(ev(0, 3 * DAY_MIN)), true);
+assert.strictEqual(isAllDay(ev(0, DAY_MIN - 1)), false);
+assert.strictEqual(isAllDay(e1), false);
+
+// allDayLocalMidnight: UTC-midnight-aligned (Android) and local-midnight-aligned
+// (iOS) inputs both land on local midnight of the same calendar day.
+assert.strictEqual(
+    allDayLocalMidnight(new Date(Date.UTC(2026, 6, 10))).getTime(),
+    new Date(2026, 6, 10).getTime(),
+);
+assert.strictEqual(
+    allDayLocalMidnight(new Date(2026, 6, 10)).getTime(),
+    new Date(2026, 6, 10).getTime(),
+);
 
 console.log("trip.selfcheck: OK");

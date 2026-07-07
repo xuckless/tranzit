@@ -23,7 +23,7 @@ import {
 } from "@/lib/leaveNowNotifications";
 import { mirrorReadSavedPlaces } from "@/lib/db";
 import { slugCode } from "@/lib/savedPlaces";
-import { localDayKey, type PlannedEvent } from "@/components/planner/trip";
+import { isAllDay, localDayKey, type PlannedEvent } from "@/components/planner/trip";
 import { routeStore, type StoredLocation } from "@/lib/routeStore";
 import { saveActiveTrip } from "@/lib/activeTrip";
 import { getAccessToken } from "@/lib/supabase";
@@ -135,7 +135,12 @@ export async function computePreRoute(
   all: PlannedEvent[],
 ): Promise<boolean> {
   try {
-    if (!hasCoords(event) || new Date(event.start).getTime() <= Date.now()) {
+    // All-day events have no meaningful arrive-by time — never route or notify.
+    if (
+      !hasCoords(event) ||
+      isAllDay(event) ||
+      new Date(event.start).getTime() <= Date.now()
+    ) {
       await cancelLeaveNow(event.eventId);
       return false;
     }
@@ -202,6 +207,7 @@ async function syncSchedules(events: PlannedEvent[]): Promise<void> {
     .filter(
       (e) =>
         hasCoords(e) &&
+        !isAllDay(e) &&
         e.travelTime != null &&
         new Date(e.start).getTime() > now &&
         new Date(e.start).getTime() - now < SCHEDULE_HORIZON_MS,
@@ -214,7 +220,10 @@ async function syncSchedules(events: PlannedEvent[]): Promise<void> {
 
   const keep = new Set(
     events
-      .filter((e) => hasCoords(e) && new Date(e.start).getTime() > now)
+      .filter(
+        (e) =>
+          hasCoords(e) && !isAllDay(e) && new Date(e.start).getTime() > now,
+      )
       .map((e) => e.eventId),
   );
   try {
