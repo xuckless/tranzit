@@ -18,7 +18,7 @@ import { supabase } from "@/lib/supabase";
 export default function ResetPasswordScreen() {
   const { theme } = useTheme();
   const styles = makeAuthStyles(theme);
-  const { clearRecoveryMode } = useAuth();
+  const { clearRecoveryMode, signOut } = useAuth();
 
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
@@ -54,6 +54,13 @@ export default function ResetPasswordScreen() {
     <AuthScaffold
       title="Set a new password"
       subtitle="Choose a new password to finish resetting your account."
+      onBack={async () => {
+        // Abandoning mid-reset: drop the recovery session so the user isn't
+        // left signed in with a password they don't know. SIGNED_OUT clears
+        // recoveryMode in AuthContext.
+        await signOut();
+        router.replace("/(auth)/sign-in");
+      }}
     >
       <PasswordField
         label="New password"

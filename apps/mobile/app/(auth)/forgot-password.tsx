@@ -1,19 +1,20 @@
 import { useState } from "react";
 import { View, Text } from "react-native";
 import { router } from "expo-router";
-import { makeRedirectUri } from "expo-auth-session";
 import { useTheme } from "@/contexts/ThemeContext";
 import { makeAuthStyles } from "@/components/auth/authStyles";
 import { AuthScaffold } from "@/components/auth/AuthScaffold";
 import { AuthField } from "@/components/auth/AuthField";
 import { AuthButton } from "@/components/auth/AuthButton";
+import { OtpStep } from "@/components/auth/OtpStep";
 import { authErrorMessage } from "@/components/auth/authError";
 import { supabase } from "@/lib/supabase";
 
 /**
- * Password reset via Supabase email link: `resetPasswordForEmail` sends a link
- * that deep-links back into the app; the recovery session routes to
- * `reset-password.tsx`, where the user sets a new password.
+ * Password reset via emailed one-time code: `resetPasswordForEmail` sends a
+ * 6-digit token (the dashboard Recovery template uses {{ .Token }}), `verifyOtp`
+ * exchanges it for a recovery session, and `reset-password.tsx` sets the new
+ * password. Fully in-app — no links, works across devices.
  */
 export default function ForgotPasswordScreen() {
   const { theme } = useTheme();
@@ -31,7 +32,6 @@ export default function ForgotPasswordScreen() {
     try {
       const { error: resetError } = await supabase.auth.resetPasswordForEmail(
         email.trim(),
-        { redirectTo: makeRedirectUri() },
       );
       if (resetError) {
         setError(authErrorMessage(resetError));
@@ -45,17 +45,34 @@ export default function ForgotPasswordScreen() {
     }
   };
 
+  const onVerify = async (token: string) => {
+    const { error: verifyError } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token,
+      type: "recovery",
+    });
+    if (verifyError) throw verifyError;
+    // verifyOtp fires PASSWORD_RECOVERY (sets recoveryMode) before resolving;
+    // replace explicitly so landing on the set-password screen doesn't depend
+    // on gate render order.
+    router.replace("/reset-password");
+  };
+
+  const onResend = async () => {
+    const { error: resendError } = await supabase.auth.resetPasswordForEmail(
+      email.trim(),
+    );
+    if (resendError) throw resendError;
+  };
+
   if (submitted) {
     return (
       <AuthScaffold
-        title="Check your email"
-        subtitle={`If an account exists for ${email.trim()}, we sent a password-reset link. Tap it to choose a new password.`}
-        onBack={() => router.replace("/(auth)/sign-in")}
+        title="Enter your code"
+        subtitle={`If an account exists for ${email.trim()}, we sent a 6-digit code. Enter it below to reset your password.`}
+        onBack={() => setSubmitted(false)}
       >
-        <AuthButton
-          label="Back to sign in"
-          onPress={() => router.replace("/(auth)/sign-in")}
-        />
+        <OtpStep onVerify={onVerify} onResend={onResend} />
       </AuthScaffold>
     );
   }
@@ -63,7 +80,7 @@ export default function ForgotPasswordScreen() {
   return (
     <AuthScaffold
       title="Forgot password?"
-      subtitle="Enter your email and we'll send you a reset link."
+      subtitle="Enter your email and we'll send you a 6-digit reset code."
       onBack={() => router.back()}
     >
       <AuthField
@@ -78,7 +95,7 @@ export default function ForgotPasswordScreen() {
         autoFocus
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <AuthButton label="Send reset link" onPress={onRequest} loading={loading} />
+      <AuthButton label="Send reset code" onPress={onRequest} loading={loading} />
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>Remembered it? </Text>

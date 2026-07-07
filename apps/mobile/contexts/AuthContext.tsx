@@ -21,7 +21,11 @@ interface AuthContextValue {
   isGuest: boolean;
   session: Session | null;
   user: User | null;
-  /** True between a password-recovery deep link and the user setting a new password. */
+  /**
+   * True between password-recovery verification (verifyOtp fires
+   * PASSWORD_RECOVERY; legacy recovery deep links too) and the user setting a
+   * new password.
+   */
   recoveryMode: boolean;
   clearRecoveryMode: () => void;
   signOut: () => Promise<void>;
@@ -86,8 +90,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     };
   }, []);
 
-  // Complete auth deep links (email confirmation / password recovery) opened from
-  // the Mail app — cold start and warm. OAuth redirects are handled inline by
+  // Safety net for auth deep links — cold start and warm. Email flows are
+  // OTP-based now, so this only covers OAuth edge cases (cold-start redirects,
+  // Android returning "dismiss" while the link still opens the app) and stale
+  // recovery links from old emails. Normal OAuth completes inline in
   // SocialButtons via openAuthSessionAsync.
   useEffect(() => {
     const handle = (url: string | null) => {

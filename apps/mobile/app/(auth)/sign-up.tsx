@@ -1,13 +1,13 @@
 import { useState } from "react";
 import { View, Text } from "react-native";
 import { Link, router } from "expo-router";
-import { makeRedirectUri } from "expo-auth-session";
 import { useTheme } from "@/contexts/ThemeContext";
 import { makeAuthStyles } from "@/components/auth/authStyles";
 import { AuthScaffold } from "@/components/auth/AuthScaffold";
 import { AuthField } from "@/components/auth/AuthField";
 import { PasswordField } from "@/components/auth/PasswordField";
 import { AuthButton } from "@/components/auth/AuthButton";
+import { OtpStep } from "@/components/auth/OtpStep";
 import { SocialButtons } from "@/components/auth/SocialButtons";
 import { authErrorMessage } from "@/components/auth/authError";
 import { supabase } from "@/lib/supabase";
@@ -30,7 +30,6 @@ export default function SignUpScreen() {
       const { data, error: signUpError } = await supabase.auth.signUp({
         email: email.trim(),
         password,
-        options: { emailRedirectTo: makeRedirectUri() },
       });
       if (signUpError) {
         setError(authErrorMessage(signUpError));
@@ -41,6 +40,7 @@ export default function SignUpScreen() {
         router.replace("/");
         return;
       }
+      // Confirmations on: a 6-digit code was emailed; verify it in-app.
       setSubmitted(true);
     } catch (err) {
       setError(authErrorMessage(err));
@@ -49,20 +49,36 @@ export default function SignUpScreen() {
     }
   };
 
+  const onVerify = async (token: string) => {
+    const { error: verifyError } = await supabase.auth.verifyOtp({
+      email: email.trim(),
+      token,
+      type: "signup",
+    });
+    if (verifyError) throw verifyError;
+    // verifyOtp fires SIGNED_IN before resolving; the index gate forwards to tabs.
+    router.replace("/");
+  };
+
+  const onResend = async () => {
+    const { error: resendError } = await supabase.auth.resend({
+      type: "signup",
+      email: email.trim(),
+    });
+    if (resendError) throw resendError;
+  };
+
   if (submitted) {
     return (
       <AuthScaffold
-        title="Check your email"
-        subtitle={`We sent a confirmation link to ${email.trim()}. Tap it to finish creating your account, then sign in.`}
+        title="Verify your email"
+        subtitle={`We sent a 6-digit code to ${email.trim()}. Enter it to finish creating your account.`}
         onBack={() => {
           setSubmitted(false);
           setError("");
         }}
       >
-        <AuthButton
-          label="Back to sign in"
-          onPress={() => router.replace("/(auth)/sign-in")}
-        />
+        <OtpStep onVerify={onVerify} onResend={onResend} />
       </AuthScaffold>
     );
   }

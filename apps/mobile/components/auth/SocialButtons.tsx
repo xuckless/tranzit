@@ -46,7 +46,14 @@ export function SocialButtons() {
       if (pending) return;
       setPending(provider);
       try {
-        const redirectTo = makeRedirectUri();
+        // Dev client / standalone → tranzit://auth/callback; Expo Go →
+        // exp://<ip>:8081/--/auth/callback. Both must be in the Supabase
+        // dashboard redirect allow-list. Email flows are OTP-based, so this is
+        // the app's only redirect URL.
+        const redirectTo = makeRedirectUri({
+          scheme: "tranzit",
+          path: "auth/callback",
+        });
         const { data, error } = await supabase.auth.signInWithOAuth({
           provider,
           options: { redirectTo, skipBrowserRedirect: true },
