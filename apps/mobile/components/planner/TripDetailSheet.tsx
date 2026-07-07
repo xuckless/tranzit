@@ -87,10 +87,17 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
         const end = new Date(
             new Date(start).getTime() + durMin * 60000,
         ).toISOString();
+        // Coords belong to the location label: keep them while the text is
+        // unchanged, drop them when the user retypes it (stale coords are worse
+        // than none — they'd pre-route to the old place).
+        const sameLocation = location.trim() === (event.location ?? "");
         onSave({
             eventId: event.eventId,
             name: name.trim() || event.name,
             location: location.trim() || null,
+            locationLat: sameLocation ? event.locationLat : null,
+            locationLng: sameLocation ? event.locationLng : null,
+            placeId: sameLocation ? event.placeId : null,
             notes: notes.trim() || null,
             start,
             end,
@@ -268,6 +275,22 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                                         label="End"
                                         value={formatClock(endMin)}
                                     />
+                                    {!!event.travelTime && (
+                                        <DetailRow
+                                            styles={styles}
+                                            icon={
+                                                <Ionicons
+                                                    name="walk-outline"
+                                                    size={16}
+                                                    color={colors.ink3}
+                                                />
+                                            }
+                                            label="Travel"
+                                            value={formatDuration(
+                                                event.travelTime,
+                                            )}
+                                        />
+                                    )}
                                 </View>
 
                                 {!!event.notes && (

@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
     View,
     Text,
@@ -6,6 +6,7 @@ import {
     TextInput,
     TouchableOpacity,
     ScrollView,
+    Keyboard,
 } from "react-native";
 import { MaterialIcons, Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -14,6 +15,11 @@ import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
 import { useAuth } from "@/contexts/AuthContext";
 import { saveEvent } from "@/lib/plannerEvents";
+import { computePreRoute, persistPreRoute, takePlannedRoute } from "@/lib/preRoutes";
+import { useDestinationSearch } from "@/hooks/useDestinationSearch";
+import { DestinationSuggestionsList } from "@/components/search/DestinationSuggestionsList";
+import { TranzitApiService } from "@/services/TranzitApiService";
+import type { SearchSuggestion } from "@/types/places";
 import { Stepper } from "@/components/planner/Stepper";
 import {
     formatClock,
@@ -35,15 +41,35 @@ export default function AddTripScreen() {
     const styles = useMemo(() => makeStyles(theme), [theme]);
     const { user } = useAuth();
 
-    // The day this event lands on — passed by the planner (the viewed day).
-    const params = useLocalSearchParams<{ date?: string }>();
+    // The day this event lands on — passed by the planner (the viewed day). The
+    // Routes screen's "Leave Later" also prefills name/location/coords here.
+    const params = useLocalSearchParams<{
+        date?: string;
+        name?: string;
+        locationLabel?: string;
+        lat?: string;
+        lng?: string;
+        placeId?: string;
+    }>();
     const dayKey =
         typeof params.date === "string" && params.date
             ? params.date
             : localDayKey(new Date());
 
-    const [name, setName] = useState("");
-    const [location, setLocation] = useState("");
+    const [name, setName] = useState(params.name ?? "");
+    const [location, setLocation] = useState(params.locationLabel ?? "");
+    const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+        () => {
+            const lat = parseFloat(params.lat ?? "");
+            const lng = parseFloat(params.lng ?? "");
+            return Number.isFinite(lat) && Number.isFinite(lng)
+                ? { lat, lng }
+                : null;
+        },
+    );
+    const [placeId, setPlaceId] = useState<string | null>(
+        params.placeId || null,
+    );
     const [notes, setNotes] = useState("");
     const [durMin, setDurMin] = useState(60);
     const [saving, setSaving] = useState(false);
@@ -54,6 +80,44 @@ export default function AddTripScreen() {
         return clamp(Math.round(mins / SNAP_MIN) * SNAP_MIN, 0, DAY_MIN);
     });
 
+    // Location search: picking a suggestion attaches coordinates (enables
+    // pre-routing + leave-now reminders); free text stays a plain label.
+    const locationSearch = useDestinationSearch(null);
+
+    const handleLocationChange = useCallback(
+        (text: string) => {
+            setLocation(text);
+            setCoords(null);
+            setPlaceId(null);
+            locationSearch.search(text);
+        },
+        [locationSearch],
+    );
+
+    const handleSelectLocation = useCallback(
+        async (s: SearchSuggestion) => {
+            Keyboard.dismiss();
+            locationSearch.reset();
+            setLocation(s.mainText);
+            setPlaceId(s.placeId);
+            if (s.location) {
+                setCoords({ lat: s.location.latitude, lng: s.location.longitude });
+                return;
+            }
+            try {
+                const details = await TranzitApiService.getPlaceDetails(s.placeId);
+                setCoords({
+                    lat: details.location.latitude,
+                    lng: details.location.longitude,
+                });
+            } catch (e) {
+                if (__DEV__) console.warn("[add-trip] details fetch failed", e);
+                // keep the label as free text — no coords, no travel features
+            }
+        },
+        [locationSearch],
+    );
+
     const handleCreate = async () => {
         if (saving) return;
         setSaving(true);
@@ -63,16 +127,29 @@ export default function AddTripScreen() {
                 const end = new Date(
                     new Date(start).getTime() + durMin * 60000,
                 ).toISOString();
-                await saveEvent({
+                const saved = await saveEvent({
                     user,
                     event: {
                         name: name.trim() || "New event",
                         location: location.trim() || null,
+                        locationLat: coords?.lat ?? null,
+                        locationLng: coords?.lng ?? null,
+                        placeId,
                         notes: notes.trim() || null,
                         start,
                         end,
                     },
                 });
+                // "Leave Later" flow: the route the user already picked becomes the
+                // pre-route as-is; otherwise compute one in the background.
+                const stash = takePlannedRoute();
+                if (stash && coords) {
+                    await persistPreRoute(user, saved, stash.itinerary).catch(
+                        () => {},
+                    );
+                } else if (coords) {
+                    void computePreRoute(user, saved, []).catch(() => {});
+                }
             }
         } finally {
             router.back();
@@ -119,24 +196,33 @@ export default function AddTripScreen() {
                     </View>
                 </View>
 
-                {/* Location */}
+                {/* Location — search attaches coords; free text stays a label */}
                 <View style={styles.fieldBlock}>
                     <Text style={styles.fieldLabel}>Location</Text>
                     <View style={styles.inputRow}>
                         <Ionicons
-                            name="location-outline"
+                            name={coords ? "location" : "location-outline"}
                             size={16}
-                            color={colors.ink3}
+                            color={coords ? colors.primary : colors.ink3}
                             style={styles.rowIcon}
                         />
                         <TextInput
                             style={styles.input}
                             value={location}
-                            onChangeText={setLocation}
-                            placeholder="Where"
+                            onChangeText={handleLocationChange}
+                            placeholder="Search a place or address"
                             placeholderTextColor={colors.ink3}
+                            autoCorrect={false}
                         />
                     </View>
+                    {locationSearch.suggestions.length > 0 && (
+                        <View style={styles.suggestions}>
+                            <DestinationSuggestionsList
+                                suggestions={locationSearch.suggestions}
+                                onSelect={handleSelectLocation}
+                            />
+                        </View>
+                    )}
                 </View>
 
                 {/* Start + Duration */}
@@ -272,6 +358,14 @@ function makeStyles(t: AppTheme) {
             paddingHorizontal: 12,
         },
         rowIcon: { width: 20, textAlign: "center" },
+        suggestions: {
+            maxHeight: 280,
+            backgroundColor: colors.surface2,
+            borderWidth: 1,
+            borderColor: colors.border,
+            borderRadius: radii.element,
+            paddingHorizontal: 8,
+        },
         input: {
             flex: 1,
             ...typography.body,

@@ -6,6 +6,7 @@ import {
     ScrollView,
     TouchableOpacity,
     Alert,
+    Linking,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -19,6 +20,7 @@ import type { SaveEventInput } from "@/lib/plannerEvents";
 import {
     eventOnDay,
     localDayKey,
+    minutesOfDay,
     shiftEvent,
     formatHourLabel,
     HOUR_HEIGHT,
@@ -97,6 +99,9 @@ export default function PlannerScreen() {
                 eventId: ev.eventId,
                 name: ev.name,
                 location: ev.location,
+                locationLat: ev.locationLat,
+                locationLng: ev.locationLng,
+                placeId: ev.placeId,
                 notes: ev.notes,
                 start: shifted.start,
                 end: shifted.end,
@@ -124,11 +129,33 @@ export default function PlannerScreen() {
     const handleImport = useCallback(async () => {
         const res = await importDevice();
         if (!res?.granted) {
-            Alert.alert(
-                "Calendar access needed",
-                "Enable calendar permission in Settings to import your events.",
-            );
-            return;
+            switch (res?.reason) {
+                case "module-missing":
+                    Alert.alert(
+                        "Calendar unavailable",
+                        "This build doesn't include the calendar module yet. Rebuild the app (expo prebuild + run) and try again.",
+                    );
+                    return;
+                case "denied-forever":
+                    Alert.alert(
+                        "Calendar access needed",
+                        "Calendar permission is turned off. Enable it in Settings to import your events.",
+                        [
+                            { text: "Cancel", style: "cancel" },
+                            {
+                                text: "Open Settings",
+                                onPress: () => Linking.openSettings(),
+                            },
+                        ],
+                    );
+                    return;
+                default:
+                    Alert.alert(
+                        "Calendar access needed",
+                        "Allow calendar access to import your events.",
+                    );
+                    return;
+            }
         }
         Alert.alert(
             "Calendar import",
@@ -234,6 +261,41 @@ export default function PlannerScreen() {
                         </View>
                     ))}
 
+                    {/* Faded travel lead-ins — the pre-routed window before each event */}
+                    {dayEvents.map((event) => {
+                        if (!event.travelTime) return null;
+                        const startMin = minutesOfDay(event.start);
+                        const top = Math.max(
+                            0,
+                            ((startMin - event.travelTime) / 60) * HOUR_HEIGHT,
+                        );
+                        const height = (startMin / 60) * HOUR_HEIGHT - top;
+                        if (height <= 0) return null;
+                        return (
+                            <View
+                                key={`${event.eventId}-lead`}
+                                pointerEvents="none"
+                                style={[
+                                    styles.travelLeadIn,
+                                    {
+                                        top,
+                                        height,
+                                        right: theme.spacing.screen,
+                                    },
+                                ]}
+                            >
+                                {height >= 22 && (
+                                    <Text
+                                        style={styles.travelLeadInText}
+                                        numberOfLines={1}
+                                    >
+                                        ⊙ {event.travelTime} min travel
+                                    </Text>
+                                )}
+                            </View>
+                        );
+                    })}
+
                     {/* Event blocks — tap to open detail, long-press + drag to move */}
                     {dayEvents.map((event) => (
                         <TripEventCard
@@ -271,7 +333,7 @@ export default function PlannerScreen() {
 }
 
 function makeStyles(t: AppTheme) {
-    const { colors, typography, spacing, shadow } = t;
+    const { colors, typography, spacing, shadow, radii } = t;
     return StyleSheet.create({
         screen: { flex: 1, backgroundColor: colors.surface },
 
@@ -345,6 +407,26 @@ function makeStyles(t: AppTheme) {
             left: 0,
             width: GUTTER_WIDTH - 10,
             textAlign: "right",
+            ...typography.caption,
+            color: colors.ink3,
+        },
+
+        // Faded pre-routed travel window rendered above its event card
+        travelLeadIn: {
+            position: "absolute",
+            left: GUTTER_WIDTH + 8,
+            borderWidth: 1,
+            borderStyle: "dashed",
+            borderColor: colors.primary + "55",
+            backgroundColor: colors.primary + "0D",
+            borderTopLeftRadius: radii.element,
+            borderTopRightRadius: radii.element,
+            opacity: 0.7,
+            justifyContent: "flex-start",
+            paddingHorizontal: 10,
+            paddingTop: 3,
+        },
+        travelLeadInText: {
             ...typography.caption,
             color: colors.ink3,
         },

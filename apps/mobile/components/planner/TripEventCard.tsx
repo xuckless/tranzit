@@ -124,6 +124,11 @@ function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
                         {event.location}
                     </Text>
                 )}
+                {!!event.travelTime && (
+                    <Text style={styles.travel} numberOfLines={1}>
+                        ⏱ {event.travelTime} min travel
+                    </Text>
+                )}
             </Animated.View>
         </GestureDetector>
     );
@@ -168,6 +173,12 @@ function makeStyles(t: AppTheme) {
             ...typography.caption,
             color: colors.ink3,
             marginTop: 1,
+        },
+        travel: {
+            ...typography.caption,
+            color: colors.ink3,
+            marginTop: 1,
+            opacity: 0.8,
         },
     });
 }

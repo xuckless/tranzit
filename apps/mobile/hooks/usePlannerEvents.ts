@@ -5,8 +5,11 @@ import {
   fetchEvents,
   importDeviceEvents,
   saveEvent,
+  type ImportResult,
   type SaveEventInput,
 } from "@/lib/plannerEvents";
+import { computePreRoute, recomputeUpcoming } from "@/lib/preRoutes";
+import { cancelLeaveNow } from "@/lib/leaveNowNotifications";
 import type { PlannedEvent } from "@/components/planner/trip";
 
 /**
@@ -21,6 +24,9 @@ export function usePlannerEvents() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const mounted = useRef(true);
+  // Latest event list for the pre-route origin chain, without churning callbacks.
+  const dataRef = useRef<PlannedEvent[]>([]);
+  dataRef.current = data;
 
   useEffect(() => {
     mounted.current = true;
@@ -39,6 +45,13 @@ export function usePlannerEvents() {
     try {
       const next = await fetchEvents(user);
       if (mounted.current) setData(next);
+      // Silent pre-route refresh for today's upcoming events (planner calls
+      // refresh() on focus). TTL-throttled inside; re-read only when changed.
+      void recomputeUpcoming(user, next).then(async (changed) => {
+        if (!changed || !mounted.current) return;
+        const rows = await fetchEvents(user);
+        if (mounted.current) setData(rows);
+      });
     } catch {
       if (mounted.current) setError("Failed to load events.");
     } finally {
@@ -64,10 +77,14 @@ export function usePlannerEvents() {
                   ...e,
                   name: event.name,
                   location: event.location,
+                  locationLat: event.locationLat ?? null,
+                  locationLng: event.locationLng ?? null,
+                  placeId: event.placeId ?? null,
                   notes: event.notes,
                   start: event.start,
                   end: event.end,
                   timezone: event.timezone ?? e.timezone,
+                  travelTime: null, // invalidated until the pre-route recomputes
                   pending: true,
                 }
               : e,
@@ -82,9 +99,17 @@ export function usePlannerEvents() {
         next[i] = saved;
         return next;
       });
+      // Fire-and-forget pre-route (covers create, edit and drag — all land here).
+      if (saved.locationLat != null) {
+        void computePreRoute(user, saved, dataRef.current).then((changed) => {
+          if (changed && mounted.current) void load();
+        });
+      } else {
+        void cancelLeaveNow(saved.eventId); // coords removed → no reminder
+      }
       return saved;
     },
-    [user],
+    [user, load],
   );
 
   const remove = useCallback(
@@ -100,7 +125,7 @@ export function usePlannerEvents() {
     [user, load],
   );
 
-  const importDevice = useCallback(async () => {
+  const importDevice = useCallback(async (): Promise<ImportResult> => {
     if (!user) return { granted: false, imported: 0 };
     const res = await importDeviceEvents(user);
     if (res.imported > 0) await load();

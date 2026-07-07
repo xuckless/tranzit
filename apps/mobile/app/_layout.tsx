@@ -1,5 +1,12 @@
-import { useEffect } from "react";
-import { Stack } from "expo-router";
+import { useEffect, useState } from "react";
+import { router, Stack } from "expo-router";
+import {
+  ActivityIndicator,
+  Alert,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 import * as WebBrowser from "expo-web-browser";
 import { AuthProvider } from "@/contexts/AuthContext";
@@ -15,6 +22,8 @@ import {
   cancelBoarding,
 } from "@/lib/boardingNotifications";
 import { setupLeaveByChannel } from "@/lib/leaveByNotifications";
+import type { LeaveNowData } from "@/lib/leaveNowNotifications";
+import { startTripFromLeaveNow } from "@/lib/preRoutes";
 import { setupTripProgressChannel } from "@/lib/liveActivity";
 import { submitUnsureResponse } from "@/lib/tripWebSocket";
 
@@ -40,15 +49,53 @@ function SearchHistorySync() {
 
 // Main component
 export default function RootLayout() {
+  const [startingTrip, setStartingTrip] = useState(false);
+
   useEffect(() => {
     setupBoardingChannel();
     registerBoardingCategory();
     setupLeaveByChannel();
     setupTripProgressChannel();
 
+    // Tapping a leave-now reminder: fresh arrive-by route → POST /trips →
+    // Commute live. On any failure, land on Routes prefilled so the user can
+    // pick a route themselves.
+    async function handleLeaveNow(data: LeaveNowData) {
+      setStartingTrip(true);
+      try {
+        if (await startTripFromLeaveNow(data)) {
+          router.navigate("/(tabs)/commute" as never);
+          return;
+        }
+        throw new Error("start failed");
+      } catch {
+        Alert.alert("Couldn't start your trip", "Pick a route to get going.");
+        router.navigate({
+          pathname: "/(tabs)/routes",
+          params: {
+            destinationLat: String(data.lat),
+            destinationLng: String(data.lng),
+            destinationName: data.name,
+          },
+        } as never);
+      } finally {
+        setStartingTrip(false);
+      }
+    }
+
     const sub = Notifications.addNotificationResponseReceivedListener(
       (response) => {
         const { actionIdentifier, notification } = response;
+
+        const raw = notification.request.content.data as Record<
+          string,
+          unknown
+        > | null;
+        if (raw?.kind === "leave-now") {
+          void handleLeaveNow(raw as unknown as LeaveNowData);
+          return;
+        }
+
         if (
           notification.request.content.categoryIdentifier !== BOARDING_CATEGORY
         )
@@ -84,6 +131,24 @@ export default function RootLayout() {
           <Stack screenOptions={{ headerShown: false }} />
         </ThemeProvider>
       </AuthProvider>
+      {startingTrip && (
+        <View style={styles.startingOverlay} pointerEvents="auto">
+          <ActivityIndicator size="large" color="#fff" />
+          <Text style={styles.startingText}>Starting your trip…</Text>
+        </View>
+      )}
     </GestureHandlerRootView>
   );
 }
+
+// Theme-agnostic: this overlay can render before ThemeProvider settles.
+const styles = StyleSheet.create({
+  startingOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 12,
+  },
+  startingText: { color: "#fff", fontWeight: "700" },
+});

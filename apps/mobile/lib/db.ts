@@ -50,8 +50,8 @@ export interface SearchHistoryMirrorRow {
 // Local SQLite mirror of the user DB `user_defined_events`. Doubles as the outbox:
 // `pending = 1` marks an event written locally but not yet confirmed in the user DB
 // (offline / 503), retried by the orchestrator. (user_id, event_id) PK matches the
-// remote PK so saves UPSERT in place. travel_time/recurrence_rule are deferred and
-// not mirrored. Scoped by user_id so multiple identities never collide.
+// remote PK so saves UPSERT in place. recurrence_rule is deferred and not mirrored.
+// Scoped by user_id so multiple identities never collide.
 
 export interface PlannedEventMirrorRow {
   user_id: string;
@@ -59,9 +59,13 @@ export interface PlannedEventMirrorRow {
   name: string;
   description: string | null;
   location: string | null;
+  location_lat: number | null;
+  location_lng: number | null;
+  place_id: string | null;
   start_time: string; // ISO
   end_time: string; // ISO
   timezone: string | null;
+  travel_time: number | null; // minutes, from the cached pre-route
   pending: number;
 }
 
@@ -163,6 +167,11 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
     CREATE INDEX IF NOT EXISTS idx_planner_event_user
       ON planner_event_cache (user_id, start_time)
   `);
+  // Location coords + pre-routed travel time, added after the first planner batch.
+  await _addColumnIfMissing(db, "planner_event_cache", "location_lat", "REAL");
+  await _addColumnIfMissing(db, "planner_event_cache", "location_lng", "REAL");
+  await _addColumnIfMissing(db, "planner_event_cache", "place_id", "TEXT");
+  await _addColumnIfMissing(db, "planner_event_cache", "travel_time", "INTEGER");
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS transit_stops_cache (
@@ -489,7 +498,8 @@ export async function mirrorReplaceAllSearch(
 // ─── Planner-event mirror (offline cache / outbox of the user DB) ───────────────
 
 const EVENT_COLS = `user_id, event_id, name, description, location,
-            start_time, end_time, timezone, pending`;
+            location_lat, location_lng, place_id,
+            start_time, end_time, timezone, travel_time, pending`;
 
 export async function mirrorReadEvents(
   userId: string
@@ -520,24 +530,33 @@ export async function mirrorUpsertEvent(
   await db.runAsync(
     `INSERT INTO planner_event_cache
        (user_id, event_id, name, description, location,
-        start_time, end_time, timezone, pending)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        location_lat, location_lng, place_id,
+        start_time, end_time, timezone, travel_time, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, event_id) DO UPDATE SET
-       name        = excluded.name,
-       description = excluded.description,
-       location    = excluded.location,
-       start_time  = excluded.start_time,
-       end_time    = excluded.end_time,
-       timezone    = excluded.timezone,
-       pending     = excluded.pending`,
+       name         = excluded.name,
+       description  = excluded.description,
+       location     = excluded.location,
+       location_lat = excluded.location_lat,
+       location_lng = excluded.location_lng,
+       place_id     = excluded.place_id,
+       start_time   = excluded.start_time,
+       end_time     = excluded.end_time,
+       timezone     = excluded.timezone,
+       travel_time  = excluded.travel_time,
+       pending      = excluded.pending`,
     row.user_id,
     row.event_id,
     row.name,
     row.description,
     row.location,
+    row.location_lat,
+    row.location_lng,
+    row.place_id,
     row.start_time,
     row.end_time,
     row.timezone,
+    row.travel_time,
     row.pending
   );
 }
@@ -584,24 +603,33 @@ export async function mirrorReplaceAllEvents(
       await txn.runAsync(
         `INSERT INTO planner_event_cache
            (user_id, event_id, name, description, location,
-            start_time, end_time, timezone, pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)
+            location_lat, location_lng, place_id,
+            start_time, end_time, timezone, travel_time, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
          ON CONFLICT(user_id, event_id) DO UPDATE SET
-           name        = excluded.name,
-           description = excluded.description,
-           location    = excluded.location,
-           start_time  = excluded.start_time,
-           end_time    = excluded.end_time,
-           timezone    = excluded.timezone,
-           pending     = 0`,
+           name         = excluded.name,
+           description  = excluded.description,
+           location     = excluded.location,
+           location_lat = excluded.location_lat,
+           location_lng = excluded.location_lng,
+           place_id     = excluded.place_id,
+           start_time   = excluded.start_time,
+           end_time     = excluded.end_time,
+           timezone     = excluded.timezone,
+           travel_time  = excluded.travel_time,
+           pending      = 0`,
         r.user_id,
         r.event_id,
         r.name,
         r.description,
         r.location,
+        r.location_lat,
+        r.location_lng,
+        r.place_id,
         r.start_time,
         r.end_time,
-        r.timezone
+        r.timezone,
+        r.travel_time
       );
     }
   });

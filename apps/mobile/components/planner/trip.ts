@@ -1,10 +1,10 @@
 // Shared model + helpers for the Trip Planner timeline.
 //
 // An event is a plain time block backed by the user DB `user_defined_events`
-// (name, location, description→notes, start_time, end_time, timezone) and mirrored
-// into expo-sqlite for offline reads (lib/plannerEvents.ts, lib/db.ts). Travel
-// time / leave-by (departMin) and recurrence are deferred — they return with the
-// route service (cached_pre_routes) and the recurring-events pass.
+// (name, location + coords, description→notes, start_time, end_time, timezone,
+// travel_time) and mirrored into expo-sqlite for offline reads (lib/plannerEvents.ts,
+// lib/db.ts). travelTime is pre-routed via lib/preRoutes.ts (cached_pre_routes);
+// recurrence is deferred to the recurring-events pass.
 
 // ─── Layout constants (shared by the screen and the card) ─────────────────────
 export const HOUR_HEIGHT = 60; // px per hour row — the timeline's vertical scale
@@ -21,10 +21,16 @@ export type PlannedEvent = {
     eventId: string;
     name: string;
     location: string | null;
+    /** Coordinates from location search; null for free-text locations (no routing). */
+    locationLat: number | null;
+    locationLng: number | null;
+    placeId: string | null;
     notes: string | null;
     start: string; // ISO — event start
     end: string; // ISO — event end
     timezone: string | null;
+    /** Pre-routed door-to-door minutes (arrive-by event start); null = not computed. */
+    travelTime: number | null;
     /** True when the row hasn't been confirmed in the user DB yet. */
     pending: boolean;
     /** Derived: imported from the device calendar (event_id begins "device:"). */

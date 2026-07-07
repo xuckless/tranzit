@@ -161,6 +161,9 @@ export interface OTPRouteRequest {
   // Desired depart-at instant (ISO 8601). Omit (or "now") to leave now; the server then plans
   // forward to the next available trip. No UI surface yet — wired for a future "leave at…" picker.
   departure_time?: string;
+  // Desired arrive-by instant (ISO 8601). When set the server plans arriveBy (itineraries
+  // ending at/before this time) and departure_time is ignored. Used by planner pre-routing.
+  arrival_time?: string;
 }
 
 // One leg of an OTP itinerary (mirrors the Go CleanLeg struct, snake_case JSON).

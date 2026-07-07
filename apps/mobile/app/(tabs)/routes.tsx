@@ -41,6 +41,7 @@ import {
 } from "@/components/routes/RoutePickerSheet";
 import { decodePolyline } from "@/utils/decodePolyline";
 import { routeStore } from "@/lib/routeStore";
+import { stashPlannedRoute } from "@/lib/preRoutes";
 import { saveActiveTrip } from "@/lib/activeTrip";
 import { ROUTE_SAVE_URL } from "@/lib/config";
 import { getAccessToken } from "@/lib/supabase";
@@ -647,12 +648,52 @@ export default function RouteScreen() {
         router.navigate("/(tabs)/map" as never);
     }, [originSearch, destinationSearch, gpsLocation, router]);
 
-    // TODO(trip-planner): add a secondary "Leave Later" action alongside Start
-    // Journey in the sheet footer. Instead of POSTing /trips and navigating to
-    // Commute immediately, it should stash the selected route/origin/destination
-    // (routeStore) and route the user into the Trip Planner / Add Trip flow
-    // (router.push("/add-trip")) so the trip can be scheduled with a leave-by
-    // reminder rather than started now.
+    // "Leave Later": instead of starting the trip now, stash the picked route and
+    // hand off to Add Trip — the event is arrival-anchored (start = arrival) and
+    // the stashed itinerary becomes its cached pre-route (lib/preRoutes.ts).
+    const handleLeaveLater = useCallback(() => {
+        const effectiveOrigin =
+            origin ??
+            (gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null);
+        // OTP routes only — the raw itinerary is what Route Save + the planner need.
+        if (!selectedRoute?.otpItinerary || !destination || !effectiveOrigin)
+            return;
+        stashPlannedRoute({
+            itinerary: selectedRoute.otpItinerary,
+            origin: {
+                label: originLabel,
+                lat: effectiveOrigin.lat,
+                lng: effectiveOrigin.lng,
+            },
+            destination: {
+                label: destinationLabel,
+                lat: destination.lat,
+                lng: destination.lng,
+                placeId: destination.placeId,
+            },
+        });
+        router.push({
+            pathname: "/add-trip",
+            params: {
+                name: `Trip to ${destinationLabel}`,
+                locationLabel: destinationLabel,
+                lat: String(destination.lat),
+                lng: String(destination.lng),
+                ...(destination.placeId ? { placeId: destination.placeId } : {}),
+            },
+        });
+    }, [
+        selectedRoute,
+        destination,
+        origin,
+        gpsLocation,
+        originLabel,
+        destinationLabel,
+        router,
+    ]);
+
     const handleStart = useCallback(async () => {
         const effectiveOrigin =
             origin ??
@@ -771,31 +812,50 @@ export default function RouteScreen() {
                     {startError && (
                         <Text style={styles.startErrorText}>{startError}</Text>
                     )}
-                    <TouchableOpacity
-                        style={[
-                            styles.startBtn,
-                            isStarting && styles.startBtnDisabled,
-                        ]}
-                        onPress={handleStart}
-                        disabled={isStarting}
-                        activeOpacity={0.85}
-                    >
-                        {isStarting ? (
-                            <ActivityIndicator
-                                size="small"
-                                color={colors.onPrimary}
-                            />
-                        ) : (
+                    <View style={styles.footerRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.leaveLaterBtn,
+                                !selectedRoute?.otpItinerary &&
+                                    styles.startBtnDisabled,
+                            ]}
+                            onPress={handleLeaveLater}
+                            disabled={!selectedRoute?.otpItinerary || isStarting}
+                            activeOpacity={0.85}
+                        >
                             <Ionicons
-                                name="navigate"
+                                name="calendar-outline"
                                 size={18}
-                                color={colors.onPrimary}
+                                color={colors.primary}
                             />
-                        )}
-                        <Text style={styles.startBtnText}>
-                            {isStarting ? "Starting…" : "Start Journey"}
-                        </Text>
-                    </TouchableOpacity>
+                            <Text style={styles.leaveLaterText}>Leave Later</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.startBtn,
+                                isStarting && styles.startBtnDisabled,
+                            ]}
+                            onPress={handleStart}
+                            disabled={isStarting}
+                            activeOpacity={0.85}
+                        >
+                            {isStarting ? (
+                                <ActivityIndicator
+                                    size="small"
+                                    color={colors.onPrimary}
+                                />
+                            ) : (
+                                <Ionicons
+                                    name="navigate"
+                                    size={18}
+                                    color={colors.onPrimary}
+                                />
+                            )}
+                            <Text style={styles.startBtnText}>
+                                {isStarting ? "Starting…" : "Start Journey"}
+                            </Text>
+                        </TouchableOpacity>
+                    </View>
                 </View>
             </BottomSheetFooter>
         ),
@@ -805,7 +865,10 @@ export default function RouteScreen() {
             startError,
             isStarting,
             handleStart,
+            handleLeaveLater,
+            selectedRoute,
             colors.onPrimary,
+            colors.primary,
         ],
     );
 
@@ -1492,7 +1555,12 @@ function makeStyles(t: AppTheme) {
             borderTopWidth: 1,
             borderTopColor: colors.divider,
         },
+        footerRow: {
+            flexDirection: "row",
+            gap: 10,
+        },
         startBtn: {
+            flex: 2,
             backgroundColor: colors.primary,
             borderRadius: radii.button,
             paddingVertical: 16,
@@ -1500,6 +1568,23 @@ function makeStyles(t: AppTheme) {
             justifyContent: "center",
             alignItems: "center",
             gap: 10,
+        },
+        leaveLaterBtn: {
+            flex: 1,
+            borderWidth: 1.5,
+            borderColor: colors.primary,
+            borderRadius: radii.button,
+            paddingVertical: 16,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 8,
+        },
+        leaveLaterText: {
+            ...typography.subtitleStrong,
+            fontWeight: "800",
+            color: colors.primary,
+            letterSpacing: 0.3,
         },
         startBtnText: {
             ...typography.subtitleStrong,
