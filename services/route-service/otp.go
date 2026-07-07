@@ -97,6 +97,9 @@ type OTPRouteRequest struct {
 	// DepartureTime is the desired depart-at instant as RFC3339. Empty or "now" ⇒ now. OTP plans
 	// forward from here to the next available trip (see FetchOTPRoutes).
 	DepartureTime string `json:"departure_time"`
+	// ArrivalTime is the desired arrive-by instant as RFC3339. When set, OTP plans arriveBy
+	// (itineraries ending at or before this time) and DepartureTime is ignored.
+	ArrivalTime string `json:"arrival_time"`
 }
 
 // transportMode is an OTP TransportMode input value.
@@ -271,6 +274,29 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 		num = 5
 	}
 
+	// Arrive-by planning: date/time anchor the arrival deadline and OTP's searchWindow
+	// extends backwards from it. Try a tight window first, then a full day back — but no
+	// further: an itinerary arriving a day early is useless as a pre-route.
+	if s := strings.TrimSpace(req.ArrivalTime); s != "" {
+		arrive, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			return nil, fmt.Errorf("invalid arrival_time %q (want RFC3339): %w", s, perr)
+		}
+		for _, window := range []time.Duration{2 * time.Hour, 24 * time.Hour} {
+			out, used, err := planOnce(req, modes, num, arrive, int(window/time.Second), true)
+			if err != nil {
+				return nil, err
+			}
+			if len(out) > 0 {
+				log.Printf("[/route/otp] %d itineraries (arriveBy=%s window=%s searchWindowUsed=%ds)",
+					len(out), arrive.In(calgaryTZ).Format(time.RFC3339), window, used)
+				enrichVehicleIDs(out)
+				return out, nil
+			}
+		}
+		return nil, nil
+	}
+
 	// Resolve the departure instant (default now). Accepts RFC3339 or "now".
 	depart := time.Now()
 	if s := strings.TrimSpace(req.DepartureTime); s != "" && !strings.EqualFold(s, "now") {
@@ -291,7 +317,7 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 	cursor := depart
 	window := firstWindow
 	for cursor.Before(deadline) {
-		out, used, err := planOnce(req, modes, num, cursor, int(window/time.Second))
+		out, used, err := planOnce(req, modes, num, cursor, int(window/time.Second), false)
 		if err != nil {
 			return nil, err
 		}
@@ -308,10 +334,12 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 	return nil, nil
 }
 
-// planOnce runs a single OTP plan() for the given departure instant and search window (seconds),
+// planOnce runs a single OTP plan() for the given anchor instant and search window (seconds),
 // returning the mapped itineraries and the searchWindow OTP actually used (for logging).
-func planOnce(req OTPRouteRequest, modes []transportMode, num int, depart time.Time, windowSecs int) ([]CleanItinerary, int, error) {
-	local := depart.In(calgaryTZ)
+// With arriveBy the anchor is the arrival deadline (window extends back); otherwise it is
+// the departure instant (window extends forward).
+func planOnce(req OTPRouteRequest, modes []transportMode, num int, anchor time.Time, windowSecs int, arriveBy bool) ([]CleanItinerary, int, error) {
+	local := anchor.In(calgaryTZ)
 	payload := map[string]any{
 		"query": otpPlanQuery,
 		"variables": map[string]any{
@@ -324,7 +352,7 @@ func planOnce(req OTPRouteRequest, modes []transportMode, num int, depart time.T
 			"date":         local.Format("2006-01-02"),
 			"time":         local.Format("15:04:05"),
 			"searchWindow": windowSecs,
-			"arriveBy":     false,
+			"arriveBy":     arriveBy,
 		},
 	}
 	body, _ := json.Marshal(payload)
