@@ -33,6 +33,13 @@ mTLS listeners exist). The dial targets `https://$ADDR`; verification uses
 Wiring: `siblingTransport()` in `main.go` swaps the transport on the existing
 datasource / rtfeed / routeclient HTTP clients.
 
+> **Warning:** the Funnel fallback sends **no credential at all** — no client cert and
+> no JWT — so sibling calls over the public Funnel URL are anonymous. This works only
+> while the siblings run with soft auth (`AUTH_ENFORCE=false`). Before flipping
+> `AUTH_ENFORCE=true` on tranzit-route-service (or the middleware), set the
+> corresponding `*_MTLS_ADDR` here so calls go over mTLS, or those calls will start
+> failing with 401s.
+
 | Var | Purpose |
 |---|---|
 | `MTLS_CA_CERT` / `MTLS_CERT` / `MTLS_KEY` | CA + this service's leaf (container paths) |
