@@ -36,9 +36,8 @@ type HTTPSource struct {
 	BaseURL string // e.g. http://localhost:8080
 	Client  *http.Client
 
-	stopsOnce sync.Once
-	stopGeo   map[string]Stop // teleride_number -> static stop (Loc, Name)
-	stopErr   error
+	stopsMu sync.Mutex      // guards the lazy stopGeo load; serializes the catalog fetch
+	stopGeo map[string]Stop // teleride_number -> static stop (Loc, Name); nil until loaded
 }
 
 // NewHTTPSource builds an HTTPSource pointing at the middleware base URL.
@@ -73,9 +72,11 @@ func (h *HTTPSource) query(table string, params url.Values) ([]map[string]any, e
 	return qr.Data, nil
 }
 
-// pageSize is the middleware's hard cap on rows per generic table query; larger
-// requested limits are silently truncated to this, so we must page with offset.
-const pageSize = 100
+// pageSize is the rows-per-request for generic table queries. The middleware
+// accepts limits up to 10_000 (anything larger falls back to its 100 default),
+// so one page covers the ~7k-row stop catalog in a single round trip; queryAll
+// still steps offset in case a table ever outgrows a page.
+const pageSize = 10_000
 
 // queryAll pages through every row of a table query, stepping offset until a
 // short page signals the end. Without this the stop catalog (thousands of rows)
@@ -148,8 +149,8 @@ func (h *HTTPSource) routeTripIDs(routeID string) ([]string, error) {
 // a trip_id→stops map. It fails fast: the first error cancels further work and is
 // returned. Result assembly is keyed by trip_id, so it is order-independent.
 func (h *HTTPSource) tripStopsConcurrent(tripIDs []string) (map[string][]Stop, error) {
-	// Warm the catalog once up front so the workers don't race on sync.Once and so
-	// a catalog error surfaces before fanning out.
+	// Warm the catalog once up front so the workers don't contend on the catalog
+	// mutex and so a catalog error surfaces before fanning out.
 	if err := h.loadStopGeo(); err != nil {
 		return nil, err
 	}
@@ -423,26 +424,32 @@ func serviceDayBase(secs int64, now time.Time) int64 {
 	return best
 }
 
-// loadStopGeo bulk-loads the static stop catalog once.
+// loadStopGeo bulk-loads the static stop catalog lazily, caching only success:
+// a transient middleware outage must not poison every later trip build, so a
+// failed fetch is returned to the caller and retried on the next call. The
+// mutex serializes the fetch (concurrent builds wait for the in-flight one) and
+// gives the happens-before for the lock-free stopGeo reads that follow.
 func (h *HTTPSource) loadStopGeo() error {
-	h.stopsOnce.Do(func() {
-		rows, err := h.queryAll("calgary_transit_stops", nil)
-		if err != nil {
-			h.stopErr = err
-			return
+	h.stopsMu.Lock()
+	defer h.stopsMu.Unlock()
+	if h.stopGeo != nil {
+		return nil
+	}
+	rows, err := h.queryAll("calgary_transit_stops", nil)
+	if err != nil {
+		return err
+	}
+	m := make(map[string]Stop, len(rows))
+	for _, r := range rows {
+		id := asString(r["teleride_number"])
+		loc, ok := parsePointWKT(asString(r["point"]))
+		if id == "" || !ok {
+			continue
 		}
-		m := make(map[string]Stop, len(rows))
-		for _, r := range rows {
-			id := asString(r["teleride_number"])
-			loc, ok := parsePointWKT(asString(r["point"]))
-			if id == "" || !ok {
-				continue
-			}
-			m[id] = Stop{StopID: id, Name: asString(r["stop_name"]), Loc: loc}
-		}
-		h.stopGeo = m
-	})
-	return h.stopErr
+		m[id] = Stop{StopID: id, Name: asString(r["stop_name"]), Loc: loc}
+	}
+	h.stopGeo = m
+	return nil
 }
 
 // parsePointWKT parses "POINT(lon lat)" into a LatLng. Per the §2 platform

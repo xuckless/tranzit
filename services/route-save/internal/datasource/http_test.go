@@ -21,12 +21,14 @@ import (
 type mockMiddleware struct {
 	tables map[string][]map[string]any
 
-	mu           sync.Mutex
-	stuByTrip    int  // stop_time_updates?trip_id=
-	stuByStop    int  // stop_time_updates?stop_id=
-	tripUpdate   int  // trip_updates?route_id=
-	resolveCalls int  // /api/v1/resolve_trip
-	failResolve  bool // when set, resolve_trip returns 500 (exercises the fallback)
+	mu              sync.Mutex
+	stuByTrip       int  // stop_time_updates?trip_id=
+	stuByStop       int  // stop_time_updates?stop_id=
+	tripUpdate      int  // trip_updates?route_id=
+	catalogCalls    int  // calgary_transit_stops
+	resolveCalls    int  // /api/v1/resolve_trip
+	failResolve     bool // when set, resolve_trip returns 500 (exercises the fallback)
+	failCatalogOnce bool // when set, the next calgary_transit_stops query returns 500 then clears
 }
 
 // mi64 coerces a raw mock-table value (stored as int/int64/float64) to int64. The
@@ -199,6 +201,14 @@ func (m *mockMiddleware) handler() http.Handler {
 			m.stuByTrip++
 		case table == "trip_updates":
 			m.tripUpdate++
+		case table == "calgary_transit_stops":
+			m.catalogCalls++
+			if m.failCatalogOnce {
+				m.failCatalogOnce = false
+				m.mu.Unlock()
+				http.Error(w, "transient failure", http.StatusInternalServerError)
+				return
+			}
 		}
 		m.mu.Unlock()
 
@@ -505,6 +515,34 @@ func TestTripStops_NoDataAnywhere(t *testing.T) {
 	src, _ := newTestSource(t)
 	if _, err := src.TripStops("UNKNOWN"); err == nil {
 		t.Fatal("expected error when neither RT nor catalog has the trip")
+	}
+}
+
+// TestLoadStopGeo_RetriesAfterFailure pins the catalog-poisoning regression: a
+// transient catalog failure must fail only the call that hit it — the next call
+// retries the fetch and succeeds. (The old sync.Once memoized the error forever,
+// so every trip build after one timeout failed until process restart.) Also pins
+// that a successful load takes a single catalog request (pageSize covers it).
+func TestLoadStopGeo_RetriesAfterFailure(t *testing.T) {
+	src, mock := newTestSource(t)
+	mock.failCatalogOnce = true
+
+	if _, err := src.TripStops("T1"); err == nil {
+		t.Fatal("expected first TripStops to fail while the catalog fetch is failing")
+	}
+
+	stops, err := src.TripStops("T1")
+	if err != nil {
+		t.Fatalf("second TripStops after catalog recovery: %v", err)
+	}
+	if len(stops) != 2 || stops[0].StopID != "S_entry" || stops[1].StopID != "S_exit" {
+		t.Errorf("recovered stops = %+v, want entry→exit", stops)
+	}
+
+	mock.mu.Lock()
+	defer mock.mu.Unlock()
+	if mock.catalogCalls != 2 {
+		t.Errorf("catalog queries = %d, want 2 (one failed, one successful single page)", mock.catalogCalls)
 	}
 }
 
