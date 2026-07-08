@@ -29,6 +29,12 @@ var (
 	columnCache sync.Map // map[string][]string — table → column list
 )
 
+// dbQueryTimeout bounds every single Supabase read. Without it a stalled pool or
+// DNS hang (both observed in this netns) holds the caller "awaiting headers" until
+// *its* client timeout — and blocks background pollers forever. With it the query
+// fails fast and the caller gets a retryable 5xx instead of a hang.
+const dbQueryTimeout = 15 * time.Second
+
 // ── Response cache ─────────────────────────────────────────────────────────────
 // Pinning Cloud Run to a single instance (max-instances 1) makes this in-process
 // cache shared across every request, so repeat /api/v1/{table} reads return the
@@ -190,6 +196,8 @@ func startVehiclePoller(ctx context.Context) {
 }
 
 func refreshVehicleCache(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
+	defer cancel()
 	rows, err := db.Query(ctx, "SELECT * FROM vehicle_positions")
 	if err != nil {
 		return err
@@ -403,6 +411,8 @@ func parseWKTPoint(wkt string) (lat, lon float64, ok bool) {
 
 // findNearestTrip returns the trip_id for route whose stops are nearest to queryTime.
 func findNearestTrip(ctx context.Context, routeID string, queryTime int64) (string, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
+	defer cancel()
 	row := db.QueryRow(ctx, `
 		SELECT tu.trip_id
 		FROM trip_updates tu
@@ -426,6 +436,8 @@ func findNearestTrip(ctx context.Context, routeID string, queryTime int64) (stri
 
 // fetchRouteStops returns all stops for tripID joined with static stop coordinates.
 func fetchRouteStops(ctx context.Context, tripID string) ([]routeStop, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
+	defer cancel()
 	rows, err := db.Query(ctx, `
 		SELECT
 			tu.route_id,
@@ -648,9 +660,16 @@ func handleRouteSSE(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Only "the query ran and matched nothing" is a 404; a DB/timeout failure is a
+	// retryable 503 — conflating them made every Supabase stall read as "no trip".
 	tripID, err := findNearestTrip(r.Context(), routeID, queryTime)
 	if err != nil {
-		jsonError(w, "no active trip found for that route and time", http.StatusNotFound)
+		if errors.Is(err, pgx.ErrNoRows) {
+			jsonError(w, "no active trip found for that route and time", http.StatusNotFound)
+			return
+		}
+		log.Printf("findNearestTrip(route %s): %v", routeID, err)
+		jsonError(w, "trip lookup failed, retry later", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -714,6 +733,8 @@ type resolvedStop struct {
 // the nearest-time pick — the consumer gets the current run, not a departed one.
 // Returns pgx.ErrNoRows when nothing resolves.
 func resolveTrip(ctx context.Context, routeID, entryStopID, exitStopID string, target, floor int64) (tripID string, eseq, xseq int64, stops []resolvedStop, err error) {
+	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
+	defer cancel()
 	row := db.QueryRow(ctx, `
 		SELECT e.trip_id, e.eseq, MIN(x.xseq) AS xseq
 		FROM (
@@ -865,7 +886,9 @@ func handleTripStops(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	rows, err := db.Query(r.Context(), `
+	ctx, cancel := context.WithTimeout(r.Context(), dbQueryTimeout)
+	defer cancel()
+	rows, err := db.Query(ctx, `
 		SELECT st.stop_id, st.stop_sequence, st.arrival_secs, st.departure_secs,
 		       s.stop_name, s.stop_lat, s.stop_lon
 		FROM gtfs_stop_times st
@@ -1058,7 +1081,16 @@ func main() {
 		port = "8080"
 	}
 	log.Printf("listening on :%s (auth_enforce=%v)", port, authEnforce)
-	log.Fatal(http.ListenAndServe(":"+port, requireUserAuth(verifier, authEnforce, mux)))
+	// No WriteTimeout: it would kill the long-lived SSE streams. Slow-header and
+	// idle-keepalive abuse are bounded; response duration is bounded per-query by
+	// dbQueryTimeout instead.
+	srv := &http.Server{
+		Addr:              ":" + port,
+		Handler:           requireUserAuth(verifier, authEnforce, mux),
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
+	log.Fatal(srv.ListenAndServe())
 }
 
 // authEnforce gates hard 401/403 (true) vs log-and-allow soft rollout (false).
@@ -1115,7 +1147,15 @@ func startMTLSListener(addr string, handler http.Handler) {
 	if err != nil {
 		log.Fatalf("mtls: %v", err)
 	}
-	srv := &http.Server{Addr: addr, Handler: handler, TLSConfig: cfg}
+	// No WriteTimeout — SSE streams are served on this listener too (see the public
+	// server for the same reasoning).
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		TLSConfig:         cfg,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 	log.Printf("mtls: service listener on %s (enforce=%v)", addr, authEnforce)
 	// Certs are supplied via TLSConfig.Certificates, so the file args are empty.
 	log.Fatal(srv.ListenAndServeTLS("", ""))
@@ -1264,6 +1304,9 @@ func handleQuery(w http.ResponseWriter, r *http.Request) {
 // buildTableResponse runs the parameterised query for a whitelisted table and
 // returns the marshaled JSON response body.
 func buildTableResponse(ctx context.Context, table string, q url.Values) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, dbQueryTimeout)
+	defer cancel()
+
 	cols, err := tableColumns(ctx, table)
 	if err != nil {
 		return nil, err
