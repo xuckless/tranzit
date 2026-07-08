@@ -103,9 +103,13 @@ Cloud Run sidecar, but makes the engine publicly reachable.
 - OTP keeps the whole graph in memory (~2–4 GB) and has a multi-minute load time, so it is
   **not** suited to scale-to-zero. Run it on an **always-on VM** or Cloud Run with
   `min-instances=1`, `--memory=4Gi`, and `graph.obj` **baked into the image**.
-- **Graph rebuild cadence:** static GTFS only changes when schedules change. Rebuild the
-  graph (and redeploy the image) **weekly** via CI. Realtime is live via the updaters — no
-  rebuild needed for delays.
+- **Graph rebuild cadence:** static GTFS only changes when schedules change. The
+  `rebuild-graph` workflow rebuilds the graph and redeploys **weekly** (Sun ~03:00 local)
+  on the self-hosted runner; trigger it manually via *Actions → rebuild-graph → Run
+  workflow*. Realtime is live via the updaters — no rebuild needed for delays.
+- **Fresh runner workspace:** build artifacts (`graph.obj`, GTFS, OSM) are gitignored, so
+  on a brand-new checkout run `rebuild-graph` once (workflow_dispatch) before push-deploys —
+  `deploy.yml`'s docker build needs `graph.obj` on disk.
 - The updaters fetch directly from `data.calgary.ca`; no API token required.
 
 ## Modes

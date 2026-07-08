@@ -1,31 +1,34 @@
 {
   "routingDefaults": {
-    "numItineraries": 5,
+    "numItineraries": 8,
     "streetRoutingTimeout": "10s",
     "transferSlack": "2m",
-    "walkSpeed": 1.33,
-    "bikeSpeed": 5.0,
-    "maxSearchWindow": "PT24H"
+    "itineraryFilters": {
+      "transitGeneralizedCostLimit": {
+        "costLimitFunction": "30m + 2.0 x",
+        "intervalRelaxFactor": 0.75
+      }
+    }
   },
   "updaters": [
     {
       "type": "stop-time-updater",
       "feedId": "CT",
-      "frequencySec": 30,
+      "frequency": "30s",
       "fuzzyTripMatching": true,
       "url": "https://tranzit-rt-service.tailnet-example.ts.net/gtfs-rt/trip-updates"
     },
     {
       "type": "vehicle-positions",
       "feedId": "CT",
-      "frequencySec": 30,
+      "frequency": "30s",
       "fuzzyTripMatching": true,
       "url": "https://data.calgary.ca/download/am7c-qe3u/application%2Foctet-stream"
     },
     {
       "type": "real-time-alerts",
       "feedId": "CT",
-      "frequencySec": 60,
+      "frequency": "1m",
       "url": "https://data.calgary.ca/download/jhgn-ynqj/application%2Foctet-stream"
     }
   ]
