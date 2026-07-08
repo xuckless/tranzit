@@ -142,6 +142,19 @@ func main() {
 	}
 
 	fmt.Printf("Starting real-time polling every %ds. Ctrl+C to stop.\n", realtimeInterval)
+
+	// ponytail: in-process retention; move to pg_cron if a second instance ever runs
+	go func() {
+		for range time.Tick(15 * time.Minute) {
+			tag, err := pool.Exec(ctx, `DELETE FROM trip_updates WHERE timestamp < extract(epoch from now())::bigint - 7200`)
+			if err != nil {
+				fmt.Printf("retention error: %v\n", err)
+				continue
+			}
+			fmt.Printf("retention: deleted %d trip_updates older than 2h\n", tag.RowsAffected())
+		}
+	}()
+
 	for {
 		if err := scrapeRealtime(ctx, pool, hub, tuFeed, appToken); err != nil {
 			fmt.Printf("Realtime error: %v\n", err)

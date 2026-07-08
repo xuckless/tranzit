@@ -225,9 +225,11 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, tuFeed 
 			congestion := enumStr(congestionLevel, int(v.GetCongestionLevel()), "UNKNOWN_CONGESTION_LEVEL")
 			occupancy := enumStr(occupancyStatus, int(v.GetOccupancyStatus()), "UNKNOWN")
 
-			// Ensure the trip_id exists to satisfy the foreign key constraint
+			// Ensure the trip_id exists to satisfy the foreign key constraint.
+			// timestamp is set so stub rows age out with the retention delete.
 			if tripID != "" {
-				batch.Queue(`INSERT INTO trip_updates (trip_id) VALUES ($1) ON CONFLICT (trip_id) DO NOTHING`, tripID)
+				batch.Queue(`INSERT INTO trip_updates (trip_id, timestamp) VALUES ($1,$2) ON CONFLICT (trip_id) DO NOTHING`,
+					tripID, int64(feed.Header.GetTimestamp()))
 			}
 
 			batch.Queue(`

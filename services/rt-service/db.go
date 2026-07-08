@@ -99,6 +99,8 @@ schedule_relationship TEXT,
 timestamp             BIGINT
 );
 
+CREATE INDEX idx_trip_updates_timestamp ON trip_updates (timestamp);
+
 CREATE TABLE stop_time_updates (
 trip_id               TEXT,
 stop_sequence         INTEGER,
