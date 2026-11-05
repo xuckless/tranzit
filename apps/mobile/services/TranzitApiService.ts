@@ -10,11 +10,7 @@ import type {
 import { parseRouteResponse } from "@/lib/routeParser";
 import { authHeader } from "@/lib/supabase";
 
-// Set EXPO_PUBLIC_USE_LOCAL=true in .env.local to target localhost:3100
-const BASE_URL =
-  process.env.EXPO_PUBLIC_USE_LOCAL === "true"
-    ? "http://localhost:3100"
-    : "https://tranzit-route-service.tailnet-example.ts.net";
+import { ROUTE_SERVICE_URL as BASE_URL } from "@/lib/config";
 
 export const TranzitApiService = {
   async searchPlaces(

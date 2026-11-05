@@ -3,8 +3,7 @@ import EventSource from "react-native-sse";
 import type { VehiclePosition } from "@/types/database";
 import { authHeader } from "@/lib/supabase";
 
-const SSE_URL =
-  "https://tranzit-db-middleware.tailnet-example.ts.net/api/v1/vehicle_positions";
+import { VEHICLE_SSE_URL as SSE_URL } from "@/lib/config";
 
 // ─── Module-level connection state ────────────────────────────────────────────
 // Single shared EventSource across all subscribers. The pool/slot pattern is

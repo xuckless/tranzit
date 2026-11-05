@@ -2,8 +2,7 @@ import { useState, useCallback, useRef } from "react";
 import type { PlacesSearchResponse, SearchSuggestion } from "../types/places";
 import { authHeader } from "../lib/supabase";
 
-const BASE_URL =
-  "https://tranzit-route-service.tailnet-example.ts.net";
+import { ROUTE_SERVICE_URL as BASE_URL } from "@/lib/config";
 
 // /search fires quickly for near-instant business results
 const INSTANT_MS = 150;

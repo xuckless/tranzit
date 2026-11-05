@@ -1,7 +1,6 @@
 import { authHeader } from "@/lib/supabase";
 
-const MIDDLEWARE_BASE =
-  "https://tranzit-db-middleware.tailnet-example.ts.net";
+import { MIDDLEWARE_URL as MIDDLEWARE_BASE } from "@/lib/config";
 
 interface Envelope<T> {
   table: string;
