@@ -1,0 +1,1600 @@
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import {
+    View,
+    Text,
+    StyleSheet,
+    TouchableOpacity,
+    TextInput,
+    ActivityIndicator,
+    Keyboard,
+} from "react-native";
+import {
+    Map,
+    Camera,
+    GeoJSONSource,
+    Layer,
+    Marker,
+    type CameraRef,
+} from "@maplibre/maplibre-react-native";
+import BottomSheet, {
+    BottomSheetView,
+    BottomSheetFooter,
+    type BottomSheetFooterProps,
+} from "@gorhom/bottom-sheet";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Ionicons } from "@expo/vector-icons";
+import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
+import AntDesign from "@expo/vector-icons/AntDesign";
+import { useLocalSearchParams, useRouter } from "expo-router";
+import { useFocusEffect } from "@react-navigation/native";
+import * as Location from "expo-location";
+import { useTheme } from "@/contexts/ThemeContext";
+import { TranzitApiService } from "@/services/TranzitApiService";
+import { useDestinationSearch } from "@/hooks/useDestinationSearch";
+import { useSearchHistory, useRecentSearches } from "@/hooks/useSearchHistory";
+import { recentToSuggestion } from "@/lib/searchHistory";
+import { DestinationSuggestionsList } from "@/components/search/DestinationSuggestionsList";
+import {
+    RoutePickerSheet,
+    normalizeColor,
+    formatDuration,
+} from "@/components/routes/RoutePickerSheet";
+import { decodePolyline } from "@/utils/decodePolyline";
+import { routeStore } from "@/lib/routeStore";
+import { stashPlannedRoute } from "@/lib/preRoutes";
+import { saveActiveTrip } from "@/lib/activeTrip";
+import { ROUTE_SAVE_URL } from "@/lib/config";
+import { getAccessToken } from "@/lib/supabase";
+import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
+import type { Route, RouteStop, SearchSuggestion } from "@/types/places";
+import HorizontalView from "@/components/horizontalView";
+import type { AppTheme } from "@/styles/themes";
+
+const CALGARY_CENTER: [number, number] = [-114.058, 51.044];
+
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+interface RouteEndpoint {
+    placeId?: string;
+    lat: number;
+    lng: number;
+}
+
+// ─── Screen ───────────────────────────────────────────────────────────────────
+
+export default function RouteScreen() {
+    const router = useRouter();
+    const { theme } = useTheme();
+    const { colors, typography, semantic, spacing, radii, shadow, mapPaint } =
+        theme;
+    const styles = useMemo(() => makeStyles(theme), [theme]);
+    const insets = useSafeAreaInsets();
+    const sheetSnapPoints = useMemo(() => ["14%", "50%", "90%"], []);
+    const {
+        destinationId,
+        destinationLat,
+        destinationLng,
+        destinationName: destNameParam,
+    } = useLocalSearchParams<{
+        destinationId?: string;
+        destinationLat?: string;
+        destinationLng?: string;
+        destinationName?: string;
+    }>();
+
+    const cameraRef = useRef<CameraRef>(null);
+    const originInputRef = useRef<TextInput>(null);
+    const destInputRef = useRef<TextInput>(null);
+    const routeAbortRef = useRef<AbortController | null>(null);
+
+    const [gpsLocation, setGpsLocation] = useState<{
+        latitude: number;
+        longitude: number;
+    } | null>(null);
+    const [origin, setOrigin] = useState<RouteEndpoint | null>(null);
+    const [destination, setDestination] = useState<RouteEndpoint | null>(null);
+    const [originLabel, setOriginLabel] = useState("Current Location");
+    const [destinationLabel, setDestinationLabel] = useState("");
+    const [focusedField, setFocusedField] = useState<
+        "origin" | "destination" | null
+    >(null);
+
+    const [routes, setRoutes] = useState<Route[]>([]);
+    const [selectedRoute, setSelectedRoute] = useState<Route | null>(null);
+    const [isLoadingRoutes, setIsLoadingRoutes] = useState(false);
+    const [routeError, setRouteError] = useState<string | null>(null);
+    const [activeFilter, setActiveFilter] = useState<string>("All");
+    const [isStarting, setIsStarting] = useState(false);
+    const [startError, setStartError] = useState<string | null>(null);
+
+    const originSearch = useDestinationSearch(gpsLocation);
+    const destinationSearch = useDestinationSearch(gpsLocation);
+    const { record: recordSearch } = useSearchHistory();
+    const { recents, refresh: refreshRecents } = useRecentSearches();
+    const recentSuggestions = useMemo(
+        () => recents.map(recentToSuggestion),
+        [recents],
+    );
+
+    // ── Location ─────────────────────────────────────────────────────────────────
+    useEffect(() => {
+        (async () => {
+            const { status } =
+                await Location.requestForegroundPermissionsAsync();
+            if (status !== "granted") return;
+            const { coords } = await Location.getCurrentPositionAsync({
+                accuracy: Location.Accuracy.Balanced,
+            });
+            const loc = {
+                latitude: coords.latitude,
+                longitude: coords.longitude,
+            };
+            setGpsLocation(loc);
+            setOrigin({ lat: coords.latitude, lng: coords.longitude });
+        })();
+    }, []);
+
+    // ── Restore cached routes when local state is empty ──────────────────────────
+    useFocusEffect(
+        useCallback(() => {
+            if (routes.length > 0) return;
+            const cached = routeStore.getRoutes();
+            if (cached.length === 0) return;
+
+            setRoutes(cached);
+            const cachedSelected =
+                routeStore.getSelectedRoute() ?? cached[0] ?? null;
+            setSelectedRoute(cachedSelected);
+
+            const cachedDest = routeStore.getDestination();
+            const cachedOrigin = routeStore.getOrigin();
+            if (cachedDest) {
+                setDestinationLabel(cachedDest.label);
+                setDestination({
+                    lat: cachedDest.lat,
+                    lng: cachedDest.lng,
+                    placeId: cachedDest.placeId,
+                });
+            }
+            if (cachedOrigin) {
+                setOriginLabel(cachedOrigin.label || "Current Location");
+                setOrigin({
+                    lat: cachedOrigin.lat,
+                    lng: cachedOrigin.lng,
+                    placeId: cachedOrigin.placeId,
+                });
+            }
+        }, [routes.length]),
+    );
+
+    useEffect(() => {
+        if (
+            !destinationId ||
+            !destinationLat ||
+            !destinationLng ||
+            !destNameParam
+        )
+            return;
+        setDestination({
+            placeId: destinationId,
+            lat: parseFloat(destinationLat),
+            lng: parseFloat(destinationLng),
+        });
+        setDestinationLabel(destNameParam);
+    }, [destinationId, destinationLat, destinationLng, destNameParam]);
+
+    useEffect(() => {
+        return () => {
+            routeAbortRef.current?.abort();
+        };
+    }, []);
+
+    useEffect(() => {
+        if (!destination) {
+            setRoutes([]);
+            setSelectedRoute(null);
+            setRouteError(null);
+            routeAbortRef.current?.abort();
+        }
+    }, [destination]);
+
+    // ── Route fetch ───────────────────────────────────────────────────────────────
+    const handleFindRoutes = useCallback(() => {
+        const effectiveOrigin =
+            origin ??
+            (gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null);
+        if (!effectiveOrigin || !destination) return;
+
+        routeAbortRef.current?.abort();
+        const ctrl = new AbortController();
+        routeAbortRef.current = ctrl;
+
+        setIsLoadingRoutes(true);
+        setRouteError(null);
+        setRoutes([]);
+        setSelectedRoute(null);
+        setActiveFilter("All");
+        Keyboard.dismiss();
+        setFocusedField(null);
+
+        // ── Routing engine select ────────────────────────────────────────────
+        // OTP (active): plans from coordinates, no Place ID required. The fetched
+        // routes are tagged source:"opentrip", so handleStart() posts the OTP
+        // contract automatically — switching engines needs no change there.
+        const routesPromise = TranzitApiService.getOTPRoute(
+            {
+                origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
+                destination: { lat: destination.lat, lng: destination.lng },
+                num_itineraries: 10,
+            },
+            ctrl.signal,
+        );
+        // ── Google Routes (standby) ──────────────────────────────────────────
+        // To switch engines: comment out the OTP block above and uncomment this.
+        // Routes come back tagged source:"google-maps-api"; handleStart() then
+        // posts the Google (Place ID) contract. Needs destination.placeId.
+        // const routesPromise = TranzitApiService.getRoute(
+        //     {
+        //         origin: { lat: effectiveOrigin.lat, lng: effectiveOrigin.lng },
+        //         destination_id: destination.placeId,
+        //     },
+        //     ctrl.signal,
+        // );
+
+        routesPromise
+            .then((res) => {
+                const fetchedRoutes = res.routes ?? [];
+                setRoutes(fetchedRoutes);
+                const firstRoute = fetchedRoutes[0] ?? null;
+                setSelectedRoute(firstRoute);
+                setIsLoadingRoutes(false);
+
+                routeStore.setRoutes(fetchedRoutes);
+                routeStore.setSelectedRoute(firstRoute);
+                routeStore.setOrigin({
+                    label: originLabel,
+                    lat: effectiveOrigin.lat,
+                    lng: effectiveOrigin.lng,
+                    placeId: origin?.placeId,
+                });
+                routeStore.setDestination({
+                    label: destinationLabel,
+                    lat: destination.lat,
+                    lng: destination.lng,
+                    placeId: destination.placeId,
+                });
+
+                if (fetchedRoutes.length > 0) {
+                    const lats = [effectiveOrigin.lat, destination.lat];
+                    const lngs = [effectiveOrigin.lng, destination.lng];
+                    const bounds: [number, number, number, number] = [
+                        Math.min(...lngs),
+                        Math.min(...lats),
+                        Math.max(...lngs),
+                        Math.max(...lats),
+                    ];
+                    setTimeout(() => {
+                        cameraRef.current?.fitBounds(bounds, {
+                            duration: 800,
+                            padding: {
+                                top: 50,
+                                right: 50,
+                                bottom: 50,
+                                left: 50,
+                            },
+                        });
+                    }, 400);
+                }
+            })
+            .catch((err: unknown) => {
+                if (err instanceof Error && err.name === "AbortError") return;
+                const msg =
+                    err instanceof Error
+                        ? err.message
+                        : "Failed to load routes";
+                setRouteError(msg);
+                setIsLoadingRoutes(false);
+            });
+    }, [origin, gpsLocation, destination, originLabel, destinationLabel]);
+
+    // ── Polyline GeoJSON ──────────────────────────────────────────────────────────
+    // One LineString per *leg* so walking legs can render dotted and transit legs
+    // solid. OTP routes carry per-leg polylines (the active engine); Google routes
+    // fall back to a single route-level transit line.
+    const routesGeoJSON = useMemo(() => {
+        const features = routes.flatMap((r, i) => {
+            const isSelected = r === selectedRoute;
+            const transitStep = (r.legs ?? [])
+                .flatMap((l) => l.steps ?? [])
+                .find((s) => s.travelMode === "TRANSIT");
+            const lineColor = transitStep?.transitDetails?.transitLine?.color
+                ? normalizeColor(
+                      transitStep.transitDetails.transitLine.color,
+                      theme.colors.primary,
+                  )
+                : semantic.routePalette[i % semantic.routePalette.length];
+
+            const segments: {
+                coords: [number, number][];
+                isWalk: boolean;
+            }[] = [];
+
+            const legs = r.otpItinerary?.legs;
+            if (legs && legs.length > 0) {
+                for (const leg of legs) {
+                    if (!leg.polyline) continue;
+                    let c: { latitude: number; longitude: number }[];
+                    try {
+                        c = decodePolyline(leg.polyline);
+                    } catch {
+                        continue;
+                    }
+                    if (c.length === 0) continue;
+                    segments.push({
+                        coords: c.map(
+                            (p) =>
+                                [p.longitude, p.latitude] as [number, number],
+                        ),
+                        isWalk: leg.mode === "WALK",
+                    });
+                }
+            } else {
+                const encoded = r.polyline?.encodedPolyline;
+                if (encoded) {
+                    try {
+                        const c = decodePolyline(encoded);
+                        if (c.length > 0)
+                            segments.push({
+                                coords: c.map(
+                                    (p) =>
+                                        [p.longitude, p.latitude] as [
+                                            number,
+                                            number,
+                                        ],
+                                ),
+                                isWalk: false,
+                            });
+                    } catch {
+                        // ignore undecodable polyline
+                    }
+                }
+            }
+
+            return segments.map((seg) => ({
+                type: "Feature" as const,
+                properties: {
+                    color: lineColor,
+                    isSelected,
+                    isWalk: seg.isWalk,
+                },
+                geometry: {
+                    type: "LineString" as const,
+                    coordinates: seg.coords,
+                },
+            }));
+        });
+
+        return { type: "FeatureCollection" as const, features };
+    }, [
+        routes,
+        selectedRoute,
+        theme.colors.primary,
+        semantic.routePalette,
+    ]);
+
+    // ── Boarding / exit stop markers (selected route only) ─────────────────────────
+    // The route data carries each transit leg's board + alight stop coordinates,
+    // so no global stop fetch is needed.
+    const stopsGeoJSON = useMemo(() => {
+        const features: {
+            type: "Feature";
+            properties: { name: string };
+            geometry: { type: "Point"; coordinates: [number, number] };
+        }[] = [];
+        const seen = new Set<string>();
+        const add = (stop?: RouteStop) => {
+            const ll = stop?.location?.latLng;
+            if (!ll) return;
+            const key = `${ll.latitude.toFixed(5)},${ll.longitude.toFixed(5)}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            features.push({
+                type: "Feature",
+                properties: { name: stop?.name ?? "" },
+                geometry: {
+                    type: "Point",
+                    coordinates: [ll.longitude, ll.latitude],
+                },
+            });
+        };
+        for (const leg of selectedRoute?.legs ?? [])
+            for (const step of leg.steps ?? [])
+                if (step.travelMode === "TRANSIT") {
+                    add(step.transitDetails?.stopDetails?.departureStop);
+                    add(step.transitDetails?.stopDetails?.arrivalStop);
+                }
+        return { type: "FeatureCollection" as const, features };
+    }, [selectedRoute]);
+
+    // ── Grouping / ranking ────────────────────────────────────────────────────────
+    // Routes are sectioned by the line(s) they ride ("201", "201+30", "Walk"),
+    // each section ascending by first bus departure. (Built in routeRanking —
+    // the MapLibre `Map` import shadows the Map constructor in this file.)
+    const { meta: routeMeta, groups: routeGroups } = useMemo(
+        () => groupRoutes(routes),
+        [routes],
+    );
+
+    // Fastest = earliest arrival at the destination, across all routes.
+    const overallFastest = useMemo(() => {
+        let best: Route | null = null;
+        for (const r of routes) {
+            if (!best || routeMeta.get(r)!.arrival < routeMeta.get(best)!.arrival)
+                best = r;
+        }
+        return best;
+    }, [routes, routeMeta]);
+
+    // Least walking = minimum total walk distance, across all routes.
+    const leastWalkingRoute = useMemo(() => {
+        let best: Route | null = null;
+        for (const r of routes) {
+            if (!best || routeWalkDistance(r) < routeWalkDistance(best)) best = r;
+        }
+        return best;
+    }, [routes]);
+
+    const filterChips = useMemo(() => {
+        const keys = [...routeGroups.entries()]
+            .map(([key, arr]) => {
+                const icon = arr.some(routeUsesTrain)
+                    ? "subway"
+                    : key === "Walk"
+                      ? "walking"
+                      : "bus";
+                const bestArrival = Math.min(
+                    ...arr.map((r) => routeMeta.get(r)!.arrival),
+                );
+                const bestRoute =
+                    arr.find((r) => routeMeta.get(r)!.arrival === bestArrival) ??
+                    arr[0];
+                // Fastest travel time in this category (replaces the KM badge).
+                const timeLabel = formatDuration(bestRoute.duration);
+                return { key, best: bestArrival, icon, timeLabel };
+            })
+            .sort((a, b) => a.best - b.best)
+            .map(({ key, icon, timeLabel }) => ({ key, icon, timeLabel }));
+        return [
+            { key: "All", icon: "list", timeLabel: undefined as string | undefined },
+            ...keys,
+        ];
+    }, [routeGroups, routeMeta]);
+
+    const filteredRoutes = useMemo(() => {
+        const arrival = (r: Route) => routeMeta.get(r)?.arrival ?? Infinity;
+        if (activeFilter === "All") {
+            // Curated view: the overall fastest + the fastest of each section.
+            const picks = new Set<Route>();
+            if (overallFastest) picks.add(overallFastest);
+            for (const arr of routeGroups.values()) {
+                let best: Route | null = null;
+                for (const r of arr)
+                    if (!best || arrival(r) < arrival(best)) best = r;
+                if (best) picks.add(best);
+            }
+            return [...picks].sort((a, b) => arrival(a) - arrival(b));
+        }
+        return routeGroups.get(activeFilter) ?? [];
+    }, [activeFilter, routeGroups, overallFastest, routeMeta]);
+
+    // ── Search handlers ───────────────────────────────────────────────────────────
+    // Editing either endpoint invalidates any routes on screen. Clearing the
+    // routeStore too is load-bearing: the focus-restore effect above would
+    // otherwise resurrect the cached results the moment local state empties.
+    const clearStaleResults = useCallback(() => {
+        if (routes.length === 0 && !selectedRoute && !routeError) return;
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        setActiveFilter("All");
+        routeStore.setRoutes([]);
+    }, [routes.length, selectedRoute, routeError]);
+
+    const handleOriginChange = useCallback(
+        (text: string) => {
+            setOriginLabel(text);
+            clearStaleResults();
+            if (text.trim()) originSearch.search(text);
+            else originSearch.reset();
+        },
+        [originSearch, clearStaleResults],
+    );
+
+    const handleSelectOrigin = useCallback(
+        async (suggestion: SearchSuggestion) => {
+            setFocusedField(null);
+            originSearch.reset();
+            Keyboard.dismiss();
+            setOriginLabel(suggestion.mainText);
+            setRoutes([]);
+            setSelectedRoute(null);
+            setRouteError(null);
+            routeStore.setRoutes([]);
+            if (suggestion.location) {
+                setOrigin({
+                    placeId: suggestion.placeId,
+                    lat: suggestion.location.latitude,
+                    lng: suggestion.location.longitude,
+                });
+            } else {
+                try {
+                    const details = await TranzitApiService.getPlaceDetails(
+                        suggestion.placeId,
+                    );
+                    setOrigin({
+                        placeId: suggestion.placeId,
+                        lat: details.location.latitude,
+                        lng: details.location.longitude,
+                    });
+                } catch (e) {
+                    console.error("[routes] origin details fetch failed:", e);
+                    setRouteError("Could not load origin. Please try again.");
+                }
+            }
+        },
+        [originSearch],
+    );
+
+    const handleDestChange = useCallback(
+        (text: string) => {
+            setDestinationLabel(text);
+            clearStaleResults();
+            if (text.trim()) destinationSearch.search(text);
+            else destinationSearch.reset();
+        },
+        [destinationSearch, clearStaleResults],
+    );
+
+    const handleSelectDest = useCallback(
+        async (suggestion: SearchSuggestion) => {
+            setFocusedField(null);
+            destinationSearch.reset();
+            Keyboard.dismiss();
+            setDestinationLabel(suggestion.mainText);
+            setRoutes([]);
+            setSelectedRoute(null);
+            setRouteError(null);
+            routeStore.setRoutes([]);
+            let coords: { lat: number; lng: number } | null = null;
+            if (suggestion.location) {
+                coords = {
+                    lat: suggestion.location.latitude,
+                    lng: suggestion.location.longitude,
+                };
+                setDestination({ placeId: suggestion.placeId, ...coords });
+            } else {
+                try {
+                    const details = await TranzitApiService.getPlaceDetails(
+                        suggestion.placeId,
+                    );
+                    coords = {
+                        lat: details.location.latitude,
+                        lng: details.location.longitude,
+                    };
+                    setDestination({ placeId: suggestion.placeId, ...coords });
+                } catch (e) {
+                    console.error(
+                        "[routes] destination details fetch failed:",
+                        e,
+                    );
+                    setRouteError(
+                        "Could not load destination. Please try again.",
+                    );
+                }
+            }
+            if (coords) {
+                recordSearch({
+                    placeId: suggestion.placeId,
+                    name: suggestion.mainText,
+                    address: suggestion.secondaryText ?? suggestion.mainText,
+                    lat: coords.lat,
+                    lng: coords.lng,
+                    originLat: origin?.lat ?? null,
+                    originLng: origin?.lng ?? null,
+                    originAddress: origin ? originLabel : null,
+                });
+            }
+        },
+        [destinationSearch, recordSearch, origin, originLabel],
+    );
+
+    // Sticky "Current Location" action for the origin search — guarantees the
+    // GPS option is always reachable even after the user has picked a suggestion.
+    const useCurrentLocationOrigin = useCallback(() => {
+        Keyboard.dismiss();
+        setFocusedField(null);
+        originSearch.reset();
+        setOriginLabel("Current Location");
+        setOrigin(
+            gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null,
+        );
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        routeStore.setRoutes([]);
+    }, [gpsLocation, originSearch]);
+
+    const dismissSearch = useCallback(() => {
+        Keyboard.dismiss();
+        setFocusedField(null);
+        originSearch.reset();
+        destinationSearch.reset();
+        setOriginLabel("Current Location");
+        setOrigin(
+            gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null,
+        );
+        setDestinationLabel("");
+        setDestination(null);
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        routeStore.clear();
+        router.navigate("/(tabs)/map" as never);
+    }, [originSearch, destinationSearch, gpsLocation, router]);
+
+    // "Leave Later": instead of starting the trip now, stash the picked route and
+    // hand off to Add Trip — the event is arrival-anchored (start = arrival) and
+    // the stashed itinerary becomes its cached pre-route (lib/preRoutes.ts).
+    const handleLeaveLater = useCallback(() => {
+        const effectiveOrigin =
+            origin ??
+            (gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null);
+        // OTP routes only — the raw itinerary is what Route Save + the planner need.
+        if (!selectedRoute?.otpItinerary || !destination || !effectiveOrigin)
+            return;
+        stashPlannedRoute({
+            itinerary: selectedRoute.otpItinerary,
+            origin: {
+                label: originLabel,
+                lat: effectiveOrigin.lat,
+                lng: effectiveOrigin.lng,
+            },
+            destination: {
+                label: destinationLabel,
+                lat: destination.lat,
+                lng: destination.lng,
+                placeId: destination.placeId,
+            },
+        });
+        router.push({
+            pathname: "/add-trip",
+            params: {
+                name: `Trip to ${destinationLabel}`,
+                locationLabel: destinationLabel,
+                lat: String(destination.lat),
+                lng: String(destination.lng),
+                ...(destination.placeId ? { placeId: destination.placeId } : {}),
+            },
+        });
+    }, [
+        selectedRoute,
+        destination,
+        origin,
+        gpsLocation,
+        originLabel,
+        destinationLabel,
+        router,
+    ]);
+
+    const handleStart = useCallback(async () => {
+        const effectiveOrigin =
+            origin ??
+            (gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null);
+        if (!selectedRoute || !destination || !effectiveOrigin) return;
+
+        // The OTP path resolves stops from coordinates and reroutes from coords, so
+        // it does not need a Place ID; the Google path does. Branch the POST body on
+        // the engine that produced the route (tagged by parseRouteResponse()).
+        const isOTP = selectedRoute.source === "opentrip";
+        if (!isOTP && !destination.placeId) return;
+
+        setIsStarting(true);
+        setStartError(null);
+
+        try {
+            const body = isOTP
+                ? {
+                      source: "opentrip",
+                      // Raw OTP itinerary — carries trip_id + stop ids/coords that
+                      // the normalized Route drops and Route Save's OTP path needs.
+                      route: selectedRoute.otpItinerary ?? selectedRoute,
+                      destination: {
+                          lat: destination.lat,
+                          lng: destination.lng,
+                      },
+                      origin: {
+                          lat: effectiveOrigin.lat,
+                          lng: effectiveOrigin.lng,
+                      },
+                  }
+                : {
+                      // Google Routes: the canonical route IS the raw Google route,
+                      // and Route Save needs the Place ID to reroute.
+                      route: selectedRoute,
+                      destination_place_id: destination.placeId,
+                      origin: {
+                          lat: effectiveOrigin.lat,
+                          lng: effectiveOrigin.lng,
+                      },
+                  };
+
+            // Route Save authenticates the trip owner from this Supabase JWT.
+            const token = await getAccessToken();
+            const resp = await fetch(`${ROUTE_SAVE_URL}/trips`, {
+                method: "POST",
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                },
+                body: JSON.stringify(body),
+            });
+
+            if (!resp.ok) {
+                const body = await resp.text().catch(() => "");
+                throw new Error(`${resp.status}${body ? `: ${body}` : ""}`);
+            }
+
+            const { session_id, ws_url } = (await resp.json()) as {
+                session_id: string;
+                ws_url: string;
+            };
+
+            const destinationInfo = {
+                label: destinationLabel,
+                lat: destination.lat,
+                lng: destination.lng,
+                placeId: destination.placeId,
+            };
+            const originInfo = {
+                label: originLabel,
+                lat: effectiveOrigin.lat,
+                lng: effectiveOrigin.lng,
+                placeId: origin?.placeId,
+            };
+            const session = { sessionId: session_id, wsUrl: ws_url };
+
+            routeStore.setSelectedRoute(selectedRoute);
+            routeStore.setDestination(destinationInfo);
+            routeStore.setOrigin(originInfo);
+            routeStore.setTripSession(session);
+
+            // Persist a durable pointer so Commute can restore the trip after a cold start.
+            await saveActiveTrip({ session, destination: destinationInfo, origin: originInfo });
+
+            router.navigate("/(tabs)/commute" as never);
+        } catch (err) {
+            const msg = err instanceof Error ? err.message : "Unknown error";
+            setStartError(`Could not start trip: ${msg}`);
+        } finally {
+            setIsStarting(false);
+        }
+    }, [
+        selectedRoute,
+        destination,
+        origin,
+        gpsLocation,
+        destinationLabel,
+        originLabel,
+        router,
+    ]);
+
+    // Start Journey lives in the sheet footer so it stays pinned at the sheet's
+    // bottom edge at every snap point.
+    const renderSheetFooter = useCallback(
+        (props: BottomSheetFooterProps) => (
+            <BottomSheetFooter {...props} bottomInset={0}>
+                <View
+                    style={[
+                        styles.footerWrap,
+                        { paddingBottom: insets.bottom > 0 ? 8 : 12 },
+                    ]}
+                >
+                    {startError && (
+                        <Text style={styles.startErrorText}>{startError}</Text>
+                    )}
+                    <View style={styles.footerRow}>
+                        <TouchableOpacity
+                            style={[
+                                styles.startBtn,
+                                isStarting && styles.startBtnDisabled,
+                            ]}
+                            onPress={handleStart}
+                            disabled={isStarting}
+                            activeOpacity={0.85}
+                        >
+                            {isStarting ? (
+                                <ActivityIndicator
+                                    size="small"
+                                    color={colors.onPrimary}
+                                />
+                            ) : (
+                                <Ionicons
+                                    name="navigate"
+                                    size={18}
+                                    color={colors.onPrimary}
+                                />
+                            )}
+                            <Text style={styles.startBtnText}>
+                                {isStarting ? "Starting…" : "Start Journey"}
+                            </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                            style={[
+                                styles.leaveLaterBtn,
+                                !selectedRoute?.otpItinerary &&
+                                    styles.startBtnDisabled,
+                            ]}
+                            onPress={handleLeaveLater}
+                            disabled={!selectedRoute?.otpItinerary || isStarting}
+                            activeOpacity={0.85}
+                        >
+                            <Ionicons
+                                name="calendar-outline"
+                                size={18}
+                                color={colors.primary}
+                            />
+                            <Text style={styles.leaveLaterText}>Leave Later</Text>
+                        </TouchableOpacity>
+                    </View>
+                </View>
+            </BottomSheetFooter>
+        ),
+        [
+            styles,
+            insets.bottom,
+            startError,
+            isStarting,
+            handleStart,
+            handleLeaveLater,
+            selectedRoute,
+            colors.onPrimary,
+            colors.primary,
+        ],
+    );
+
+    // ─── Render ──────────────────────────────────────────────────────────────────
+    return (
+        <View style={[styles.screen, { backgroundColor: colors.surface }]}>
+            <Map
+                style={styles.map}
+                mapStyle={mapPaint.baseStyle}
+                compass={false}
+                logo={false}
+                attribution={true}
+            >
+                <Camera
+                    ref={cameraRef}
+                    initialViewState={{
+                        center: CALGARY_CENTER,
+                        zoom: 11,
+                    }}
+                />
+
+                <GeoJSONSource id="routes-source" data={routesGeoJSON}>
+                    {/* Unselected transit: solid casing under a faded fill. */}
+                    <Layer
+                        id="routes-unselected-casing"
+                        type="line"
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], false],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
+                        paint={{
+                            "line-color": semantic.unselectedPolyline,
+                            "line-width": 6,
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                    <Layer
+                        id="routes-unselected-fill"
+                        type="line"
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], false],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
+                        paint={{
+                            "line-color": ["get", "color"],
+                            "line-width": 3,
+                            "line-opacity": 0.45,
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                    {/* Selected transit: solid full-strength line. */}
+                    <Layer
+                        id="routes-selected"
+                        type="line"
+                        filter={[
+                            "all",
+                            ["==", ["get", "isSelected"], true],
+                            ["==", ["get", "isWalk"], false],
+                        ]}
+                        paint={{
+                            "line-color": ["get", "color"],
+                            "line-width": 5,
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                    {/* Walking legs: dotted, dimmed when the route isn't selected. */}
+                    <Layer
+                        id="routes-walk"
+                        type="line"
+                        filter={["==", ["get", "isWalk"], true]}
+                        paint={{
+                            "line-color": mapPaint.polyline.walk,
+                            "line-width": 4,
+                            "line-dasharray": [0.4, 1.8],
+                            "line-opacity": [
+                                "case",
+                                ["get", "isSelected"],
+                                1,
+                                0.4,
+                            ],
+                        }}
+                        layout={{
+                            "line-cap": "round",
+                            "line-join": "round",
+                        }}
+                    />
+                </GeoJSONSource>
+
+                <GeoJSONSource id="route-stops-source" data={stopsGeoJSON}>
+                    <Layer
+                        id="route-stops-circle"
+                        type="circle"
+                        paint={{
+                            "circle-radius": 5,
+                            "circle-color": colors.card,
+                            "circle-stroke-color": colors.primary,
+                            "circle-stroke-width": 2.5,
+                        }}
+                    />
+                </GeoJSONSource>
+
+                {origin && (
+                    <Marker
+                        id="origin-marker"
+                        lngLat={[origin.lng, origin.lat]}
+                        anchor="center"
+                    >
+                        <View style={styles.originDot} />
+                    </Marker>
+                )}
+
+                {destination && (
+                    <Marker
+                        id="destination-marker"
+                        lngLat={[destination.lng, destination.lat]}
+                        anchor="bottom"
+                    >
+                        <Ionicons
+                            name="location"
+                            size={32}
+                            color={colors.primary}
+                        />
+                    </Marker>
+                )}
+            </Map>
+
+            {/* ── Foreground overlay (map stays interactive underneath) ── */}
+            <View style={styles.overlay} pointerEvents="box-none">
+            {/* ── Search panel ── */}
+            <View
+                style={[styles.searchPanel, { backgroundColor: colors.card }]}
+            >
+                <View style={styles.searchRows}>
+                    <View style={styles.searchRow}>
+                        <AntDesign
+                            name="aim"
+                            size={17}
+                            color={colors.primary}
+                            style={styles.rowIcon}
+                        />
+                        <TextInput
+                            ref={originInputRef}
+                            style={[styles.searchInput, { color: colors.ink }]}
+                            value={originLabel}
+                            onChangeText={handleOriginChange}
+                            onFocus={() => {
+                                setFocusedField("origin");
+                                refreshRecents();
+                                if (originLabel === "Current Location")
+                                    setOriginLabel("");
+                            }}
+                            onBlur={() => {
+                                if (!originLabel.trim())
+                                    setOriginLabel("Current Location");
+                            }}
+                            placeholder="Origin"
+                            placeholderTextColor={colors.ink2}
+                            returnKeyType="search"
+                            blurOnSubmit={false}
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                        />
+                        {originLabel.length > 0 &&
+                            originLabel !== "Current Location" && (
+                                <TouchableOpacity
+                                    onPress={() => {
+                                        setOriginLabel("Current Location");
+                                        setOrigin(
+                                            gpsLocation
+                                                ? {
+                                                      lat: gpsLocation.latitude,
+                                                      lng: gpsLocation.longitude,
+                                                  }
+                                                : null,
+                                        );
+                                        originSearch.reset();
+                                        setRoutes([]);
+                                        setSelectedRoute(null);
+                                        setRouteError(null);
+                                        routeStore.setRoutes([]);
+                                    }}
+                                    hitSlop={{
+                                        top: 8,
+                                        bottom: 8,
+                                        left: 8,
+                                        right: 8,
+                                    }}
+                                >
+                                    <Ionicons
+                                        name="close-circle"
+                                        size={16}
+                                        color={colors.ink2}
+                                    />
+                                </TouchableOpacity>
+                            )}
+                    </View>
+
+                    <View
+                        style={[
+                            styles.searchDivider,
+                            { backgroundColor: colors.divider },
+                        ]}
+                    />
+
+                    <View style={styles.searchRow}>
+                        <Ionicons
+                            name="location"
+                            size={17}
+                            color={colors.tertiary}
+                            style={styles.rowIcon}
+                        />
+                        <TextInput
+                            ref={destInputRef}
+                            style={[styles.searchInput, { color: colors.ink }]}
+                            value={destinationLabel}
+                            onChangeText={handleDestChange}
+                            onFocus={() => {
+                                setFocusedField("destination");
+                                refreshRecents();
+                                originSearch.reset();
+                            }}
+                            placeholder="Where to?"
+                            placeholderTextColor={colors.ink2}
+                            returnKeyType="search"
+                            blurOnSubmit={false}
+                            autoCorrect={false}
+                            autoCapitalize="none"
+                        />
+                        {destinationLabel.length > 0 && (
+                            <TouchableOpacity
+                                onPress={() => {
+                                    setDestinationLabel("");
+                                    setDestination(null);
+                                    destinationSearch.reset();
+                                    setRoutes([]);
+                                    setSelectedRoute(null);
+                                    setRouteError(null);
+                                    routeStore.setRoutes([]);
+                                }}
+                                hitSlop={{
+                                    top: 8,
+                                    bottom: 8,
+                                    left: 8,
+                                    right: 8,
+                                }}
+                            >
+                                <Ionicons
+                                    name="close-circle"
+                                    size={16}
+                                    color={colors.ink2}
+                                />
+                            </TouchableOpacity>
+                        )}
+                    </View>
+
+                    {!focusedField && destinationLabel.length > 0 && (
+                        <>
+                            <View
+                                style={[
+                                    styles.searchDivider,
+                                    { backgroundColor: colors.divider },
+                                ]}
+                            />
+                            <TouchableOpacity
+                                style={[
+                                    styles.findRoutesBtn,
+                                    !destination &&
+                                        styles.findRoutesBtnDisabled,
+                                ]}
+                                onPress={handleFindRoutes}
+                                disabled={!destination}
+                                activeOpacity={0.8}
+                            >
+                                <Ionicons
+                                    name="search"
+                                    size={14}
+                                    color={
+                                        destination
+                                            ? colors.onPrimary
+                                            : colors.ink3
+                                    }
+                                />
+                                <Text
+                                    style={[
+                                        styles.findRoutesBtnText,
+                                        !destination &&
+                                            styles.findRoutesBtnTextDisabled,
+                                    ]}
+                                >
+                                    Find Routes
+                                </Text>
+                            </TouchableOpacity>
+                        </>
+                    )}
+                </View>
+
+                <TouchableOpacity
+                    style={styles.cancelBtn}
+                    onPress={dismissSearch}
+                    activeOpacity={0.75}
+                >
+                    <Text style={styles.cancelText}>Cancel</Text>
+                </TouchableOpacity>
+            </View>
+
+            {/* ── Content area ── */}
+            {focusedField === "destination" ? (
+                <View
+                    style={[
+                        styles.searchResultsArea,
+                        { paddingHorizontal: spacing.screen },
+                    ]}
+                >
+                    {destinationSearch.status === "loading" && (
+                        <ActivityIndicator
+                            style={{ marginTop: 24 }}
+                            size="small"
+                            color={colors.primary}
+                        />
+                    )}
+                    {destinationSearch.status === "success" && (
+                        <DestinationSuggestionsList
+                            suggestions={destinationSearch.suggestions}
+                            onSelect={handleSelectDest}
+                        />
+                    )}
+                    {destinationSearch.status === "idle" &&
+                        recents.length > 0 && (
+                            <DestinationSuggestionsList
+                                variant="recent"
+                                suggestions={recentSuggestions}
+                                onSelect={handleSelectDest}
+                            />
+                        )}
+                    {destinationSearch.status === "empty" && (
+                        <Text style={styles.emptyText}>No results found</Text>
+                    )}
+                </View>
+            ) : focusedField === "origin" ? (
+                <View
+                    style={[
+                        styles.searchResultsArea,
+                        { paddingHorizontal: spacing.screen },
+                    ]}
+                >
+                    {gpsLocation && (
+                        <TouchableOpacity
+                            style={styles.currentLocRow}
+                            onPress={useCurrentLocationOrigin}
+                            activeOpacity={0.7}
+                        >
+                            <AntDesign
+                                name="aim"
+                                size={18}
+                                color={colors.primary}
+                            />
+                            <Text style={styles.currentLocText}>
+                                Current Location
+                            </Text>
+                        </TouchableOpacity>
+                    )}
+                    {originSearch.status === "loading" && (
+                        <ActivityIndicator
+                            style={{ marginTop: 24 }}
+                            size="small"
+                            color={colors.primary}
+                        />
+                    )}
+                    {originSearch.status === "success" && (
+                        <DestinationSuggestionsList
+                            suggestions={originSearch.suggestions}
+                            onSelect={handleSelectOrigin}
+                        />
+                    )}
+                    {originSearch.status === "idle" && recents.length > 0 && (
+                        <DestinationSuggestionsList
+                            variant="recent"
+                            suggestions={recentSuggestions}
+                            onSelect={handleSelectOrigin}
+                        />
+                    )}
+                    {originSearch.status === "empty" && (
+                        <Text style={styles.emptyText}>No results found</Text>
+                    )}
+                </View>
+            ) : (
+                <View style={styles.routeArea} pointerEvents="box-none">
+                    {isLoadingRoutes && (
+                        <View style={styles.centerState} pointerEvents="box-none">
+                            <ActivityIndicator
+                                size="large"
+                                color={colors.primary}
+                            />
+                            <Text style={styles.stateText}>
+                                Finding routes…
+                            </Text>
+                        </View>
+                    )}
+
+                    {!isLoadingRoutes && routeError && (
+                        <View style={styles.centerState} pointerEvents="box-none">
+                            <Ionicons
+                                name="warning-outline"
+                                size={36}
+                                color={colors.error}
+                            />
+                            <Text style={styles.stateText}>
+                                Could not find routes
+                            </Text>
+                            <Text style={styles.stateSubText}>
+                                {routeError}
+                            </Text>
+                        </View>
+                    )}
+
+                    {!isLoadingRoutes && !routeError && routes.length === 0 && (
+                        <View style={styles.centerState} pointerEvents="box-none">
+                            <Ionicons
+                                name="navigate-outline"
+                                size={36}
+                                color={colors.ink2}
+                            />
+                            <Text style={styles.stateText}>
+                                {destination
+                                    ? "No routes found"
+                                    : "Set a destination to see routes"}
+                            </Text>
+                        </View>
+                    )}
+
+                </View>
+            )}
+            </View>
+
+            {/* ── Route picker bottom sheet ── */}
+            {!focusedField &&
+                !isLoadingRoutes &&
+                !routeError &&
+                routes.length > 0 && (
+                    <BottomSheet
+                        index={1}
+                        snapPoints={sheetSnapPoints}
+                        enablePanDownToClose={false}
+                        // Let the inner route list scroll natively at any snap
+                        // height (gorhom scrollables otherwise lock until the
+                        // sheet reaches its top snap); the sheet drags from the
+                        // handle. Mirrors the Map screen's sheet.
+                        enableContentPanningGesture={false}
+                        handleIndicatorStyle={{
+                            backgroundColor: colors.ink3,
+                        }}
+                        backgroundStyle={{ backgroundColor: colors.card }}
+                        footerComponent={renderSheetFooter}
+                    >
+                        <BottomSheetView style={styles.sheetContent}>
+                        <HorizontalView
+                            style={{
+                                paddingHorizontal: spacing.screen,
+                                paddingVertical: 6,
+                                gap: spacing.element,
+                            }}
+                        >
+                            {filterChips.map(({ key, icon, timeLabel }) => {
+                                const isActive = activeFilter === key;
+                                return (
+                                    <TouchableOpacity
+                                        key={key}
+                                        style={[
+                                            styles.modeChip,
+                                            isActive && styles.modeChipActive,
+                                        ]}
+                                        onPress={() => setActiveFilter(key)}
+                                        activeOpacity={0.8}
+                                    >
+                                        <FontAwesome5
+                                            name={icon as any}
+                                            size={12}
+                                            color={
+                                                isActive
+                                                    ? colors.selected
+                                                    : colors.ink2
+                                            }
+                                        />
+                                        <Text
+                                            style={[
+                                                styles.modeChipText,
+                                                isActive &&
+                                                    styles.modeChipTextActive,
+                                            ]}
+                                        >
+                                            {key}
+                                        </Text>
+                                        {timeLabel && (
+                                            <Text
+                                                style={[
+                                                    styles.modeChipDist,
+                                                    isActive &&
+                                                        styles.modeChipDistActive,
+                                                ]}
+                                            >
+                                                {timeLabel}
+                                            </Text>
+                                        )}
+                                    </TouchableOpacity>
+                                );
+                            })}
+                        </HorizontalView>
+
+                        {filteredRoutes.length > 0 ? (
+                            <RoutePickerSheet
+                                routes={filteredRoutes}
+                                selectedRoute={selectedRoute}
+                                fastestRoute={overallFastest}
+                                leastWalkingRoute={leastWalkingRoute}
+                                onSelectRoute={setSelectedRoute}
+                            />
+                        ) : (
+                            <Text style={[styles.emptyText, { marginTop: 16 }]}>
+                                No {activeFilter} routes available
+                            </Text>
+                        )}
+                        </BottomSheetView>
+                    </BottomSheet>
+                )}
+        </View>
+    );
+}
+
+
+// ─── Styles ───────────────────────────────────────────────────────────────────
+
+function makeStyles(t: AppTheme) {
+    const { colors, typography, semantic, spacing, radii, shadow } = t;
+    return StyleSheet.create({
+        screen: { flex: 1, backgroundColor: colors.surface },
+        map: { ...StyleSheet.absoluteFillObject },
+        overlay: { ...StyleSheet.absoluteFillObject },
+        originDot: {
+            width: 14,
+            height: 14,
+            borderRadius: 7,
+            backgroundColor: colors.primary,
+            borderWidth: 3,
+            borderColor: colors.onPrimary,
+        },
+
+        searchPanel: {
+            backgroundColor: colors.card,
+            marginHorizontal: spacing.screen,
+            marginTop: 10,
+            borderRadius: 20,
+            paddingHorizontal: spacing.card,
+            paddingVertical: spacing.element + 4,
+            ...shadow.card,
+            shadowColor: semantic.shadow,
+            shadowOffset: { width: 0, height: 4 },
+            shadowOpacity: 0.1,
+            shadowRadius: 12,
+            elevation: 6,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: spacing.element,
+        },
+        searchRows: { flex: 1, gap: 2 },
+        searchRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: spacing.element,
+            paddingVertical: 6,
+        },
+        rowIcon: { width: 22, textAlign: "center" },
+        searchInput: {
+            flex: 1,
+            ...typography.bodyStrong,
+            color: colors.ink,
+        },
+        searchDivider: {
+            height: 1,
+            backgroundColor: colors.divider,
+            marginLeft: 30,
+        },
+        cancelBtn: { paddingLeft: spacing.element },
+        cancelText: {
+            ...typography.bodyStrong,
+            color: colors.primary,
+        },
+
+        findRoutesBtn: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 6,
+            backgroundColor: colors.primary,
+            borderRadius: 10,
+            paddingVertical: 9,
+            marginTop: 4,
+        },
+        findRoutesBtnDisabled: { backgroundColor: colors.muted },
+        findRoutesBtnText: {
+            ...typography.bodyStrong,
+            color: colors.onPrimary,
+        },
+        findRoutesBtnTextDisabled: { color: colors.ink2 },
+
+        searchResultsArea: {
+            flex: 1,
+            paddingTop: spacing.element,
+            backgroundColor: colors.surface,
+        },
+        currentLocRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            gap: spacing.element,
+            paddingVertical: 12,
+            borderBottomWidth: 1,
+            borderBottomColor: colors.divider,
+            marginBottom: 4,
+        },
+        currentLocText: {
+            ...typography.bodyStrong,
+            color: colors.primary,
+        },
+        emptyText: {
+            ...typography.body,
+            color: colors.ink2,
+            textAlign: "center",
+            marginTop: 24,
+        },
+
+        routeArea: { flex: 1, paddingTop: spacing.element },
+        centerState: {
+            flex: 1,
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 10,
+            paddingBottom: 40,
+        },
+        stateText: {
+            ...typography.subtitleStrong,
+            color: colors.ink,
+            textAlign: "center",
+        },
+        stateSubText: {
+            ...typography.caption,
+            color: colors.ink2,
+            textAlign: "center",
+            maxWidth: 260,
+        },
+
+        modeChip: {
+            backgroundColor: colors.surface2,
+            borderRadius: 30,
+            paddingHorizontal: spacing.card,
+            paddingVertical: spacing.element,
+            flexDirection: "row",
+            alignItems: "center",
+            gap: 4,
+        },
+        modeChipActive: { backgroundColor: colors.secondary },
+        modeChipText: {
+            ...typography.bodyStrong,
+            color: colors.ink,
+        },
+        modeChipTextActive: { color: colors.selected },
+        modeChipDist: { ...typography.caption, color: colors.ink3 },
+        modeChipDistActive: { color: colors.selected },
+
+        sheetContent: { flex: 1 },
+        footerWrap: {
+            paddingHorizontal: spacing.screen,
+            paddingTop: 8,
+            backgroundColor: colors.card,
+            borderTopWidth: 1,
+            borderTopColor: colors.divider,
+        },
+        footerRow: {
+            gap: 10,
+        },
+        startBtn: {
+            backgroundColor: colors.primary,
+            borderRadius: radii.button,
+            paddingVertical: 16,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 10,
+        },
+        leaveLaterBtn: {
+            borderWidth: 1.5,
+            borderColor: colors.primary,
+            borderRadius: radii.button,
+            paddingVertical: 13,
+            flexDirection: "row",
+            justifyContent: "center",
+            alignItems: "center",
+            gap: 8,
+        },
+        leaveLaterText: {
+            ...typography.subtitleStrong,
+            fontWeight: "800",
+            color: colors.primary,
+            letterSpacing: 0.3,
+        },
+        startBtnText: {
+            ...typography.subtitleStrong,
+            fontWeight: "800",
+            color: colors.onPrimary,
+            letterSpacing: 0.3,
+        },
+        startBtnDisabled: { opacity: 0.6 },
+        startErrorText: {
+            ...typography.captionStrong,
+            color: colors.error,
+            textAlign: "center",
+            marginBottom: 8,
+        },
+    });
+}
