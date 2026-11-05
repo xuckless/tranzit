@@ -1,0 +1,23 @@
+# Cloud Run image for tranzit-route-service WITH an embedded Tailscale userspace sidecar,
+# so the deployed gateway joins your tailnet and can reach the private OTP node
+# (tranzit-otp.tailnet-example.ts.net:8080) without exposing it publicly.
+#
+# The base Dockerfile (no Tailscale) is left intact for non-tailnet deploys; this is a
+# separate, additive image. Build with: -f Dockerfile.cloudrun
+FROM golang:1.23-alpine AS builder
+WORKDIR /app
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 GOOS=linux go build -o server .
+
+FROM alpine:3.20
+RUN apk --no-cache add ca-certificates
+# Bring in the Tailscale binaries from the official image.
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscaled /usr/local/bin/tailscaled
+COPY --from=docker.io/tailscale/tailscale:stable /usr/local/bin/tailscale  /usr/local/bin/tailscale
+COPY --from=builder /app/server /app/server
+COPY start-cloudrun.sh /app/start-cloudrun.sh
+RUN chmod +x /app/start-cloudrun.sh
+EXPOSE 8080
+ENTRYPOINT ["/app/start-cloudrun.sh"]

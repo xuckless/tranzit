@@ -1,0 +1,9 @@
+# Builds the Tailscale-sidecar image with Cloud Build (uses Dockerfile.cloudrun, which
+# `gcloud builds submit --tag` cannot target directly).
+substitutions:
+  _IMAGE: ""
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args: ["build", "-f", "Dockerfile.cloudrun", "-t", "${_IMAGE}", "."]
+images:
+  - "${_IMAGE}"
