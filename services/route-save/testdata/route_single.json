@@ -1,0 +1,35 @@
+{
+  "distanceMeters": 3025,
+  "duration": "1264s",
+  "legs": [
+    {
+      "steps": [
+        { "navigationInstruction": { "instructions": "Head west toward 9 Ave SW", "maneuver": "DEPART" }, "travelMode": "WALK" },
+        { "navigationInstruction": { "instructions": "Turn right onto 6 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+        {
+          "navigationInstruction": { "instructions": "Bus towards Killarney/17 Av SW" },
+          "transitDetails": {
+            "headsign": "Killarney/17 Av SW",
+            "stopCount": 8,
+            "stopDetails": {
+              "arrivalStop": {
+                "location": { "latLng": { "latitude": 51.0379, "longitude": -114.08972 } },
+                "name": "WB 17 AV SW @ 11 ST SW fs"
+              },
+              "arrivalTime": "2026-05-31T02:20:50Z",
+              "departureStop": {
+                "location": { "latLng": { "latitude": 51.047742299999996, "longitude": -114.07078329999999 } },
+                "name": "WB 6 Av SW @ 3 St SW"
+              },
+              "departureTime": "2026-05-31T02:08:58Z"
+            },
+            "transitLine": { "nameShort": "2", "name": "Mount Pleasant/Killarney 17 Av SW" }
+          },
+          "travelMode": "TRANSIT"
+        },
+        { "navigationInstruction": { "instructions": "Head west on 17 Ave SW", "maneuver": "DEPART" }, "travelMode": "WALK" }
+      ]
+    }
+  ],
+  "polyline": { "encodedPolyline": "itpvHjtfwTCdDo@E@yAcAlp@M?@??zE" }
+}

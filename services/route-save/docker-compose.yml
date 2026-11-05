@@ -1,0 +1,64 @@
+# Runs tranzit-route-save in Docker, joins it to the tailnet, and exposes it publicly
+# over HTTPS via Tailscale Funnel at https://tranzit-route-save.tailnet-example.ts.net
+#
+# The tailscale sidecar owns the network namespace; the app shares it
+# (network_mode: service:tailscale). Funnel (TS_SERVE_CONFIG) publishes :8090 to the
+# internet (WSS rides the same host). The app reaches the middleware and route-service
+# over their public Funnel URLs.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-route-save-ts
+    hostname: tranzit-route-save
+    environment:
+      - TS_HOSTNAME=tranzit-route-save
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tranzit-route-save
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    # Run as the host user that owns ./certs (uid 1000) so the distroless image's
+    # default 'nonroot' (65532) can read the 0600 mTLS key mounted read-only below.
+    user: "1000:1000"
+    environment:
+      - PORT=8090
+      - LOG_STATE=1
+      - MIDDLEWARE_URL=https://tranzit-db-middleware.tailnet-example.ts.net
+      - ROUTE_SERVICE_URL=https://tranzit-route-service.tailnet-example.ts.net
+      # Supabase project URL for JWT verification (JWKS). Required to start.
+      - SUPABASE_URL=${SUPABASE_URL:-https://vxpjxjokuzyqigrlvjzb.supabase.co}
+      # Outbound mTLS to siblings (see AUTH.md). Empty *_MTLS_ADDR → Funnel fallback.
+      - MTLS_CA_CERT=/certs/ca.crt
+      - MTLS_CERT=/certs/tranzit-route-save.crt
+      - MTLS_KEY=/certs/tranzit-route-save.key
+      - MIDDLEWARE_MTLS_ADDR=${MIDDLEWARE_MTLS_ADDR:-}
+      - ROUTE_SERVICE_MTLS_ADDR=${ROUTE_SERVICE_MTLS_ADDR:-}
+      - MIDDLEWARE_MTLS_SERVERNAME=${MIDDLEWARE_MTLS_SERVERNAME:-tranzit-db-middleware}
+      - ROUTE_SERVICE_MTLS_SERVERNAME=${ROUTE_SERVICE_MTLS_SERVERNAME:-tranzit-route-service}
+    volumes:
+      # mTLS material: ca.crt + this service's leaf (git-ignored; gen with middleware's scripts/gen-mtls-certs.sh).
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:

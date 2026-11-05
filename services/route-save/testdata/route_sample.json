@@ -1,0 +1,102 @@
+{
+  "routes": [
+    {
+      "distanceMeters": 3025,
+      "duration": "1264s",
+      "legs": [
+        {
+          "steps": [
+            { "navigationInstruction": { "instructions": "Head west toward 9 Ave SW", "maneuver": "DEPART" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right toward 9 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right onto 9 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn left toward 4 St SW", "maneuver": "TURN_LEFT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn left onto 4 St SW", "maneuver": "TURN_LEFT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right onto 6 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+            {
+              "navigationInstruction": { "instructions": "Bus towards Killarney/17 Av SW" },
+              "transitDetails": {
+                "headsign": "Killarney/17 Av SW",
+                "localizedValues": {
+                  "arrivalTime": { "time": { "text": "8:20 PM" }, "timeZone": "America/Edmonton" },
+                  "departureTime": { "time": { "text": "8:08 PM" }, "timeZone": "America/Edmonton" }
+                },
+                "stopCount": 8,
+                "stopDetails": {
+                  "arrivalStop": {
+                    "location": { "latLng": { "latitude": 51.0379, "longitude": -114.08972 } },
+                    "name": "WB 17 AV SW @ 11 ST SW fs"
+                  },
+                  "arrivalTime": "2026-05-31T02:20:50Z",
+                  "departureStop": {
+                    "location": { "latLng": { "latitude": 51.047742299999996, "longitude": -114.07078329999999 } },
+                    "name": "WB 6 Av SW @ 3 St SW"
+                  },
+                  "departureTime": "2026-05-31T02:08:58Z"
+                },
+                "transitLine": {
+                  "agencies": [ { "name": "Calgary Transit", "phoneNumber": "+1 403-262-1000", "uri": "https://www.calgarytransit.com/" } ],
+                  "color": "#2872e0",
+                  "name": "Mount Pleasant/Killarney 17 Av SW",
+                  "nameShort": "2",
+                  "textColor": "#ffffff",
+                  "vehicle": { "iconUri": "//maps.gstatic.com/mapfiles/transit/iw2/6/bus2.png", "name": { "text": "Bus" }, "type": "BUS" }
+                }
+              },
+              "travelMode": "TRANSIT"
+            },
+            { "navigationInstruction": { "instructions": "Head west on 17 Ave SW toward 11 St SW\nDestination will be on the right", "maneuver": "DEPART" }, "travelMode": "WALK" }
+          ]
+        }
+      ],
+      "polyline": { "encodedPolyline": "itpvHjtfwTCdDo@E@yAcACB{BsAA]HMGkDJgEEBkDN@QnMUrWUnXrITPHzL`@v@GxIVzEFxLf@~BDb@?Alp@M?@??zE" }
+    },
+    {
+      "distanceMeters": 3485,
+      "duration": "1275s",
+      "legs": [
+        {
+          "steps": [
+            { "navigationInstruction": { "instructions": "Head west toward 9 Ave SW", "maneuver": "DEPART" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right toward 9 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn left onto 9 Ave SW", "maneuver": "TURN_LEFT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right onto 5 St SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn left onto 6 Ave SW\nDestination will be on the right", "maneuver": "TURN_LEFT" }, "travelMode": "WALK" },
+            {
+              "navigationInstruction": { "instructions": "Bus towards Richmond Rd SW" },
+              "transitDetails": {
+                "headsign": "Richmond Rd SW",
+                "localizedValues": {
+                  "arrivalTime": { "time": { "text": "8:13 PM" }, "timeZone": "America/Edmonton" },
+                  "departureTime": { "time": { "text": "8:05 PM" }, "timeZone": "America/Edmonton" }
+                },
+                "stopCount": 9,
+                "stopDetails": {
+                  "arrivalStop": {
+                    "location": { "latLng": { "latitude": 51.037451, "longitude": -114.094876 } },
+                    "name": "SB 14 St Sw@ 17 Av SW"
+                  },
+                  "arrivalTime": "2026-05-31T02:13:00Z",
+                  "departureStop": {
+                    "location": { "latLng": { "latitude": 51.047881999999994, "longitude": -114.07560099999999 } },
+                    "name": "WB 6 Av SW @ 6 St SW"
+                  },
+                  "departureTime": "2026-05-31T02:05:00Z"
+                },
+                "transitLine": {
+                  "agencies": [ { "name": "Calgary Transit", "phoneNumber": "+1 403-262-1000", "uri": "https://www.calgarytransit.com/" } ],
+                  "name": "Richmond Rd SW",
+                  "nameShort": "22",
+                  "vehicle": { "iconUri": "//maps.gstatic.com/mapfiles/transit/iw2/6/bus2.png", "name": { "text": "Bus" }, "type": "BUS" }
+                }
+              },
+              "travelMode": "TRANSIT"
+            },
+            { "navigationInstruction": { "instructions": "Head north on 14 St SW toward 17 Ave SW", "maneuver": "DEPART" }, "travelMode": "WALK" },
+            { "navigationInstruction": { "instructions": "Turn right onto 17 Ave SW", "maneuver": "TURN_RIGHT" }, "travelMode": "WALK" }
+          ]
+        }
+      ],
+      "polyline": { "encodedPolyline": "itpvHjtfwTCdDo@EI~Es@AOFsBEcAEc@BuCKa@M_@FG?UK_@?IbKL?s@`w@SbXExDFrAL|@ZjAbD~FXfAJ|@@lC@lLFn@N^VRX?PITWXu@ZoARc@FIVOzTEn@KjLBpN??^?KwAA?}W" }
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+# Local redeploy on the self-hosted runner (fedora). Replaces the old Cloud Run
+# deploy. The test job still gates; redeploy rebuilds ONLY the app container
+# (--no-deps app) so the tailscale sidecar is never recreated — the node identity,
+# IP, MagicDNS name and Funnel stay stable.
+name: local-redeploy
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Test
+        run: go test -race ./...
+
+  redeploy:
+    needs: test
+    runs-on: [self-hosted, fedora]
+    steps:
+      - name: Rebuild app container only (reuse existing tailscale sidecar)
+        run: |
+          cd services/route-save
+          git pull --ff-only
+          docker compose up -d --build --no-deps app
