@@ -25,9 +25,9 @@
 
 Tranzit is a Calgary-specific public transit app built in React Native (Expo). The frontend talks to three backend services:
 
-- **Route Service** (`tranzit-route-service`) — Go microservice wrapping Google Maps Routes/Places APIs and OpenTripPlanner (OTP).
-- **DB Middleware** (`tranzit-db-middleware`) — REST+SSE service exposing the PostgreSQL transit database to the client.
-- **Route Save** (`tranzit-route-save`) — WebSocket+REST service managing active trip sessions, live tracking, rerouting, and boarding confirmation.
+- **Route Service** (`services/route-service`) — Go microservice wrapping Google Maps Routes/Places APIs and OpenTripPlanner (OTP).
+- **DB Middleware** (`services/db-middleware`) — REST+SSE service exposing the PostgreSQL transit database to the client.
+- **Route Save** (`services/route-save`) — WebSocket+REST service managing active trip sessions, live tracking, rerouting, and boarding confirmation.
 
 The app has five visible tabs: **Map**, **Routes**, **Commute**, **Planner**, and **Saved**, plus a hidden **Report** tab (`href: null`). 
 
@@ -76,7 +76,7 @@ components/
 lib/
   supabase.ts        — Supabase client singleton (typed against Database)
   middleware.ts      — Typed REST client for the DB middleware service
-  config.ts          — Hardcoded backend URLs (ROUTE_SAVE_URL)
+  config.ts          — Backend URLs, all read from EXPO_PUBLIC_* env vars (see .env.example)
   vehicleSSE.ts      — Incremental SSE hook for live bus positions with culling & throttling
   routeSSE.ts        — Per-route SSE hook for live stop-level delays
   transitStopsCache.ts — Orchestrates middleware fetch → SQLite write

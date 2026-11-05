@@ -1,0 +1,99 @@
+Tranzit Source-Available License — SHOWCASE ONLY
+Copyright (c) 2026 xuckless and the Tranzit contributors. All rights reserved.
+
+This software and its source code (the "Software") are published as a SHOWCASE: a
+portfolio demonstration of the authors' work, made public so that it can be read and
+evaluated. It is NOT open source. No right to use the Software is granted except as
+stated below.
+
+In particular, neither the Software nor any copy, fork, mirror, port, or derivative of it
+may be used commercially, sold, or operated as or as part of a product or service.
+Copying the Software does not create a copy you are permitted to deploy.
+
+1. Permission granted
+
+   You may view, read and inspect the source code of the Software, and make the
+   temporary local copies that unavoidably result from doing so (for example, cloning
+   the repository or letting your browser or editor fetch it), for the sole purposes of
+   personal study, evaluation, security research, and reference.
+
+   You may additionally build and run the Software on hardware you control, against
+   your own accounts and API keys, for the sole purpose of evaluating it. Such a run
+   may not be exposed to users other than yourself and may not serve any commercial
+   purpose.
+
+2. Permission NOT granted
+
+   Without the prior written permission of the copyright holders, you may not:
+
+   a. copy, reproduce, republish, mirror, or redistribute the Software or any part of
+      it, in source or compiled form;
+   b. host, deploy, or otherwise operate the Software or any part of it beyond the
+      personal evaluation run permitted by Section 1, whether commercially or
+      non-commercially;
+   c. modify the Software or create derivative works from it, including translations,
+      ports, and adaptations;
+   d. incorporate any part of the Software, including individual files, functions, or
+      design assets, into any other project or product;
+   e. sell, license, sublicense, rent, lease, or otherwise transfer the Software or any
+      rights in it;
+   f. use the Software or any part of it as training data, fine-tuning data, retrieval
+      corpus, or other input for machine learning or generative artificial intelligence
+      systems, or to generate datasets or embeddings derived from it;
+   g. remove, obscure, or alter this license, any copyright notice, or any attribution
+      contained in the Software;
+   h. commercially exploit the Software or any copy or derivative of it in any way,
+      including using it to provide a service to others, whether or not a fee is charged.
+
+   These restrictions apply equally to the Software and to every copy, fork, mirror, port,
+   translation, and derivative of it, however obtained.
+
+3. Reserved rights
+
+   All rights not expressly granted in Section 1 are reserved by the copyright holders.
+   Nothing in this license transfers ownership of the Software or of any trademark,
+   service mark, logo, or trade name used in it, including the name "Tranzit".
+
+4. Third-party components and data
+
+   The Software depends on third-party components, including without limitation
+   OpenTripPlanner, Tailscale, Supabase, MapLibre, MapTiler, Expo, and the packages
+   listed in each component's package.json and go.mod. Those components are governed by
+   their own licenses, which are unaffected by this license and continue to apply.
+
+   The Software consumes public transit data published by the City of Calgary (GTFS and
+   GTFS-Realtime) and street data from OpenStreetMap. That data is not part of the
+   Software and is governed by its own terms: the City of Calgary's Open Data Licence
+   and the Open Database License respectively. No transit or map data is distributed in
+   this repository.
+
+5. Contributions
+
+   Unsolicited contributions are not invited. If the copyright holders accept a
+   contribution from you, you assign to them all rights in that contribution, or, where
+   assignment is not permitted by law, grant a perpetual, worldwide, irrevocable,
+   royalty-free license to use it without restriction.
+
+6. Termination
+
+   The permission in Section 1 terminates automatically and immediately if you breach
+   any term of this license. On termination you must delete all copies of the Software
+   in your possession or control.
+
+7. No warranty
+
+   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED,
+   INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A
+   PARTICULAR PURPOSE, AND NONINFRINGEMENT.
+
+8. Limitation of liability
+
+   IN NO EVENT SHALL THE COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES, OR OTHER
+   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT, OR OTHERWISE, ARISING FROM, OUT
+   OF, OR IN CONNECTION WITH THE SOFTWARE OR THE USE OF OR OTHER DEALINGS IN THE
+   SOFTWARE.
+
+9. Licensing enquiries
+
+   For any use beyond Section 1, contact github.com/xuckless to request a written
+   license.

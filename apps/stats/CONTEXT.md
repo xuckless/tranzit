@@ -1,10 +1,10 @@
 # Tranzit Stats Dashboard
 
-This is a Nuxt 3 application that serves as a read-only dashboard to monitor the status of the local Tranzit microservices and their Tailscale network endpoints.
+This is a Nuxt 4 application that serves as a read-only dashboard to monitor the status of the local Tranzit microservices and their Tailscale network endpoints.
 
 ## Architecture
 
-- **Frontend:** Nuxt 3, Vue 3, Tailwind CSS for styling, and Chart.js (`vue-chartjs`) for real-time graphs.
+- **Frontend:** Nuxt 4, Vue 3, Tailwind CSS for styling, and Chart.js (`vue-chartjs`) for real-time graphs.
 - **Backend (Nitro API):**
   - `/api/docker`: Executes `docker stats --no-stream --format "{{json .}}"` to get current container resource usage (CPU, Memory, Network I/O).
   - `/api/tailscale`: Executes `tailscale status --json` to get the list of active peers, their IPs, and Rx/Tx bytes.

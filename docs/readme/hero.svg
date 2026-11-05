@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 400" width="1280" height="400" role="img" aria-label="Tranzit: Calgary transit, routed and tracked in real time">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#07140C"/>
+      <stop offset="0.55" stop-color="#0F1410"/>
+      <stop offset="1" stop-color="#04100A"/>
+    </linearGradient>
+    <radialGradient id="green" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#00B352" stop-opacity="0.8"/>
+      <stop offset="1" stop-color="#00B352" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="yellow" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#FFDE00" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FFDE00" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="mint" cx="50%" cy="50%" r="50%">
+      <stop offset="0" stop-color="#6DD49A" stop-opacity="0.5"/>
+      <stop offset="1" stop-color="#6DD49A" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FFFFFF"/>
+      <stop offset="0.55" stop-color="#C8F3DA"/>
+      <stop offset="1" stop-color="#FFEE8A"/>
+    </linearGradient>
+    <linearGradient id="routeline" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#00B352" stop-opacity="0.15"/>
+      <stop offset="0.5" stop-color="#6DD49A" stop-opacity="0.9"/>
+      <stop offset="1" stop-color="#FFDE00" stop-opacity="0.2"/>
+    </linearGradient>
+    <style>
+      .pulse { animation: p 2.6s ease-in-out infinite; transform-origin: center; }
+      .pulse2 { animation: p 2.6s ease-in-out .9s infinite; transform-origin: center; }
+      .pulse3 { animation: p 2.6s ease-in-out 1.8s infinite; transform-origin: center; }
+      @keyframes p { 0%,100% { opacity:.25; r:5 } 50% { opacity:.9; r:8 } }
+      .glide { animation: gl 7s linear infinite; }
+      @keyframes gl { from { offset-distance: 0% } to { offset-distance: 100% } }
+    </style>
+  </defs>
+
+  <rect width="1280" height="400" fill="url(#bg)"/>
+  <ellipse cx="200" cy="90" rx="440" ry="260" fill="url(#green)" opacity="0.5"/>
+  <ellipse cx="1120" cy="330" rx="420" ry="250" fill="url(#yellow)" opacity="0.45"/>
+  <ellipse cx="760" cy="60" rx="360" ry="200" fill="url(#mint)" opacity="0.35"/>
+
+  <!-- street grid -->
+  <g stroke="#6DD49A" stroke-opacity="0.07" stroke-width="1">
+    <path d="M0 110 H1280 M0 180 H1280 M0 250 H1280 M0 320 H1280"/>
+    <path d="M160 0 V400 M360 0 V400 M560 0 V400 M760 0 V400 M960 0 V400 M1160 0 V400"/>
+  </g>
+
+  <!-- the route -->
+  <path id="route" d="M70 330 L300 330 Q360 330 360 270 L360 200 Q360 150 430 150 L740 150 Q820 150 820 215 L820 285 Q820 340 890 340 L1210 340"
+        fill="none" stroke="url(#routeline)" stroke-width="4" stroke-linecap="round"/>
+  <g fill="#0F1410" stroke="#6DD49A" stroke-width="2.5">
+    <circle cx="70" cy="330" r="6"/>
+    <circle class="pulse" cx="360" cy="200" r="6"/>
+    <circle class="pulse2" cx="740" cy="150" r="6"/>
+    <circle class="pulse3" cx="890" cy="340" r="6"/>
+  </g>
+  <circle cx="1210" cy="340" r="7" fill="#FFDE00"/>
+
+  <!-- a bus riding the route -->
+  <g class="glide" style="offset-path: path('M70 330 L300 330 Q360 330 360 270 L360 200 Q360 150 430 150 L740 150 Q820 150 820 215 L820 285 Q820 340 890 340 L1210 340'); offset-rotate: 0deg;">
+    <rect x="-13" y="-8" width="26" height="16" rx="4.5" fill="#00B352"/>
+    <rect x="-9" y="-5" width="8" height="5.5" rx="1.5" fill="#07140C" opacity="0.7"/>
+    <rect x="2" y="-5" width="7" height="5.5" rx="1.5" fill="#07140C" opacity="0.45"/>
+  </g>
+
+  <!-- wordmark -->
+  <g transform="translate(70, 92)">
+    <text x="0" y="0" font-family="'Inter','SF Pro Display','Segoe UI',system-ui,sans-serif"
+          font-size="86" font-weight="760" letter-spacing="-3.4" fill="url(#title)">Tranzit</text>
+    <text x="3" y="42" font-family="'Inter','SF Pro Text','Segoe UI',system-ui,sans-serif"
+          font-size="21" font-weight="500" fill="#C8F3DA" opacity="0.92">Calgary transit, routed and tracked in real time.</text>
+    <text x="3" y="72" font-family="'Inter','SF Pro Text','Segoe UI',system-ui,sans-serif"
+          font-size="15" font-weight="430" fill="#8FBDA2" opacity="0.8">One Expo app · five Go services · a self-hosted routing engine</text>
+  </g>
+</svg>

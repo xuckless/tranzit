@@ -44,7 +44,8 @@ docker exec -it tranzit-user-db psql -U tranzit-user -d tranzit-user -c '\l'
 psql "postgres://tranzit-user:change-me@127.0.0.1:5432/tranzit-user" -c "select version();"
 ```
 
-Full credentials live in `CREDENTIALS.md` (gitignored).
+Credentials are not committed. Set `POSTGRES_PASSWORD` in `.env` (see `.env.example`); the
+`change-me` above is a placeholder, not a default to ship.
 
 ## Schema
 
@@ -60,6 +61,7 @@ docker exec -i tranzit-user-db psql -U tranzit-user -d tranzit-user -v ON_ERROR_
 
 - Data persists in the `pgdata` named volume; the tailnet identity persists in `tailscale-state`.
 - No `ts-serve.json` / Funnel config — that exists only for the Funnel'd HTTP services.
-- To wire the middleware to this DB later, set its `SUPABASE_DIRECT_CONNECTION_STRING` to the
-  tailnet DSN above (see `CREDENTIALS.md`).
+- To wire the middleware to this DB, set its `TRANZIT_USER_DB_CONNECTION_STRING` to the private
+  DSN above. Prefer a stable IP over a DNS name — with the Tailscale sidecar running
+  `--accept-dns=false`, the container's resolver cannot see MagicDNS names.
 ```
