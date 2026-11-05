@@ -1,0 +1,55 @@
+# Runs tranzit-user Postgres in Docker and joins it to the tailnet via a Tailscale sidecar.
+#
+# Unlike the other Tranzit services, this is NOT exposed to the public internet. Postgres is a
+# raw TCP protocol that doesn't fit Tailscale Funnel's HTTPS/SNI model, so there is no Funnel
+# config here. The tailscale sidecar owns the network namespace; postgres shares it
+# (network_mode: service:tailscale, TS_USERSPACE=false), so postgres listening on 0.0.0.0:5432
+# is automatically reachable at tranzit-user-db.tailnet-example.ts.net:5432 from any tailnet peer
+# (e.g. tranzit-db-middleware). 5432 is also published to 127.0.0.1 for local admin only.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-user-db-ts
+    hostname: tranzit-user-db
+    environment:
+      - TS_HOSTNAME=tranzit-user-db
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    ports:
+      - "127.0.0.1:5432:5432"   # local admin only; tailnet access is via the node itself
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:17-alpine
+    container_name: tranzit-user-db
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    environment:
+      - POSTGRES_USER=tranzit-user
+      - POSTGRES_DB=tranzit-user
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./initdb:/docker-entrypoint-initdb.d:ro   # runs only on a fresh volume (first init)
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tranzit-user -d tranzit-user"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:
+  pgdata:

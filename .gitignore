@@ -1,0 +1,70 @@
+# --- secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.crt
+*.p12
+*.p8
+*.jks
+*.keystore
+*.mobileprovision
+key.json
+CREDENTIALS.md
+certs/*
+!certs/.gitkeep
+
+# --- build output ---
+dist/
+build/
+.output/
+.nuxt/
+web-build/
+*.tsbuildinfo
+
+# --- dependencies ---
+node_modules/
+
+# --- Go: compiled binaries live nowhere near git ---
+/services/*/db-middleware
+/services/*/route-service
+/services/*/rt-service
+/services/*/route-save
+*.test
+*.out
+
+# --- OTP graph + transit data artifacts (fetched, see services/otp/README.md) ---
+*.pbf
+*.jar
+*.zip
+graph.obj
+*.gtfs
+
+# --- Expo / React Native ---
+.expo/
+.kotlin/
+.metro-health-check*
+expo-env.d.ts
+/apps/mobile/ios/
+/apps/mobile/android/
+
+# --- local databases ---
+*.sqlite
+*.sqlite3
+*.db
+
+# --- logs ---
+*.log
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+
+# --- editors / agent tooling ---
+.idea/
+.vscode/
+.zed/
+.claude/
+.agents/
+skills-lock.json
+.DS_Store
