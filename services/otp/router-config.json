@@ -1,0 +1,35 @@
+{
+  "routingDefaults": {
+    "numItineraries": 8,
+    "streetRoutingTimeout": "10s",
+    "transferSlack": "2m",
+    "itineraryFilters": {
+      "transitGeneralizedCostLimit": {
+        "costLimitFunction": "30m + 2.0 x",
+        "intervalRelaxFactor": 0.75
+      }
+    }
+  },
+  "updaters": [
+    {
+      "type": "stop-time-updater",
+      "feedId": "CT",
+      "frequency": "30s",
+      "fuzzyTripMatching": true,
+      "url": "https://tranzit-rt-service.tailnet-example.ts.net/gtfs-rt/trip-updates"
+    },
+    {
+      "type": "vehicle-positions",
+      "feedId": "CT",
+      "frequency": "30s",
+      "fuzzyTripMatching": true,
+      "url": "https://data.calgary.ca/download/am7c-qe3u/application%2Foctet-stream"
+    },
+    {
+      "type": "real-time-alerts",
+      "feedId": "CT",
+      "frequency": "1m",
+      "url": "https://data.calgary.ca/download/jhgn-ynqj/application%2Foctet-stream"
+    }
+  ]
+}

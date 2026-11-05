@@ -1,0 +1,12 @@
+# The image only needs the OTP jar, graph.obj, and the two config files.
+# Keep the large source artifacts out of the build context.
+alberta-latest.osm.pbf
+calgary.osm.pbf
+calgary.gtfs.zip
+*.log
+.env
+.env.example
+build.sh
+run.sh
+README.md
+docker-compose.yml

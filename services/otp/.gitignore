@@ -1,0 +1,10 @@
+# Large build artifacts — fetched/produced by build.sh, not committed.
+*.jar
+*.osm.pbf
+calgary.gtfs.zip
+graph.obj
+streetGraph.obj
+
+# Secrets / local state
+.env
+*.log

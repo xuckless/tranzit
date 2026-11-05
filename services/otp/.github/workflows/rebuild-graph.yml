@@ -1,0 +1,20 @@
+# Weekly graph rebuild: fresh GTFS + OSM, rebuild graph.obj, redeploy otp only.
+# Runs on the self-hosted runner in the live checkout — same pattern as deploy.yml.
+name: rebuild-graph
+
+on:
+  schedule:
+    - cron: "0 9 * * 0"   # Sun 09:00 UTC ≈ 03:00 America/Edmonton
+  workflow_dispatch:
+
+jobs:
+  rebuild:
+    runs-on: [self-hosted, fedora]
+    steps:
+      - name: Rebuild graph and redeploy otp
+        run: |
+          cd services/otp
+          git pull --ff-only
+          rm -f alberta-latest.osm.pbf   # force fresh OSM (build.sh skips download if present)
+          ./build.sh
+          docker compose up -d --build --no-deps otp
