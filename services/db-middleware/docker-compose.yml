@@ -1,0 +1,59 @@
+# Runs tranzit-db-middleware in Docker, joins it to the tailnet, and exposes it
+# publicly over HTTPS via Tailscale Funnel at https://tranzit-db-middleware.tailnet-example.ts.net
+#
+# The tailscale sidecar owns the network namespace; the app shares it
+# (network_mode: service:tailscale). Funnel (TS_SERVE_CONFIG) publishes :8080 to the
+# internet. Sibling services and the frontend all reach it via the public Funnel URL.
+#
+# Auth: set TS_AUTHKEY in .env (a reusable key from the Tailscale admin console).
+
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: tranzit-db-middleware-ts
+    hostname: tranzit-db-middleware
+    environment:
+      - TS_HOSTNAME=tranzit-db-middleware
+      - TS_AUTHKEY=${TS_AUTHKEY:-}
+      - TS_USERSPACE=false
+      - TS_STATE_DIR=/var/lib/tailscale
+      - TS_SERVE_CONFIG=/config/serve.json
+      - TS_EXTRA_ARGS=--accept-dns=false
+    volumes:
+      - tailscale-state:/var/lib/tailscale
+      - ./ts-serve.json:/config/serve.json:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - net_admin
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: tranzit-db-middleware
+    depends_on:
+      - tailscale
+    network_mode: service:tailscale
+    environment:
+      - PORT=8080
+      - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
+      # tranzit-user-db over the tailnet (private). Empty → /api/v1/user/ is disabled.
+      - TRANZIT_USER_DB_CONNECTION_STRING=${TRANZIT_USER_DB_CONNECTION_STRING:-}
+      # Auth (see AUTH.md): JWT for end users on the Funnel port, mTLS for siblings
+      # on MTLS_LISTEN_ADDR (tailnet-only, not Funnel-published).
+      - SUPABASE_URL=${SUPABASE_URL:-https://vxpjxjokuzyqigrlvjzb.supabase.co}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-false}
+      - MTLS_LISTEN_ADDR=${MTLS_LISTEN_ADDR:-:8443}
+      - MTLS_CA_CERT=/certs/ca.crt
+      - MTLS_CERT=/certs/tranzit-db-middleware.crt
+      - MTLS_KEY=/certs/tranzit-db-middleware.key
+      - MTLS_ALLOWED_CLIENTS=${MTLS_ALLOWED_CLIENTS:-tranzit-route-save,tranzit-route-service}
+    volumes:
+      # mTLS material: ca.crt + this service's leaf (git-ignored; see scripts/gen-mtls-certs.sh).
+      - ./certs:/certs:ro
+    restart: unless-stopped
+
+volumes:
+  tailscale-state:

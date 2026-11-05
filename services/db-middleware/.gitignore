@@ -1,0 +1,7 @@
+.env
+TODO.md
+.dockerignore
+
+# mTLS key material — never commit. Keep the dir + gen script tracked.
+certs/*
+!certs/.gitkeep
