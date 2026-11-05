@@ -1,0 +1,10 @@
+# Inherits .gitignore rules except where overridden below.
+#!include:.gitignore
+
+# go.sum must reach Cloud Build for reproducible module downloads.
+!go.sum
+
+.env
+.git/
+.idea/
+.claude/

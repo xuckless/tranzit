@@ -1,0 +1,11 @@
+.env
+.claude/
+.idea/
+*.exe
+*.test
+
+
+.dockerignore
+
+hidden.md
+TODO.md

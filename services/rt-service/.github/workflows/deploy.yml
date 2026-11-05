@@ -1,0 +1,19 @@
+# Local redeploy on the self-hosted runner (fedora). Replaces the old Cloud Run
+# deploy. Rebuilds ONLY the app container (--no-deps app) so the tailscale sidecar
+# is never recreated — the node identity, IP, MagicDNS name and Funnel stay stable.
+name: local-redeploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  redeploy:
+    runs-on: [self-hosted, fedora]
+    steps:
+      - name: Rebuild app container only (reuse existing tailscale sidecar)
+        run: |
+          cd services/rt-service
+          git pull --ff-only
+          docker compose up -d --build --no-deps app
