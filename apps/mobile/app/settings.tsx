@@ -8,6 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
+  Linking,
 } from "react-native";
 import Ionicons from "@expo/vector-icons/Ionicons";
 import { useAuth } from "@/contexts/AuthContext";
@@ -15,6 +16,9 @@ import { useTheme } from "@/contexts/ThemeContext";
 import { useUserProfile } from "@/hooks/useUserProfile";
 import type { AppTheme, ColorSchemePreference } from "@/styles/themes";
 import { router } from "expo-router";
+import { DEMO_MODE } from "@/lib/demo";
+
+const SUPPORT_URL = "https://github.com/xuckless/tranzit/issues";
 
 const MODES: {
   key: ColorSchemePreference;
@@ -39,6 +43,20 @@ export default function SettingsScreen() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const { signOut, isGuest } = useAuth();
+
+  // Guests have no credentials to sign back in with, so signing out loses their
+  // saved places and trips for good — say so before doing it.
+  const confirmSignOut = () =>
+    Alert.alert(
+      isGuest ? "Sign out of guest account?" : "Sign out?",
+      isGuest
+        ? "Guest accounts can't be recovered. Your saved places and planned trips will be lost."
+        : "Saved places and trips stay in your account; this device's copy is cleared.",
+      [
+        { text: "Cancel", style: "cancel" },
+        { text: "Sign out", style: "destructive", onPress: () => void signOut() },
+      ],
+    );
   const { profile, loading: profileLoading, error: profileError } =
     useUserProfile();
 
@@ -167,7 +185,12 @@ export default function SettingsScreen() {
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Preferences</Text>
 
-        <TouchableOpacity style={styles.settingItem}>
+        <TouchableOpacity
+          style={styles.settingItem}
+          onPress={() => Linking.openSettings()}
+          accessibilityRole="button"
+          accessibilityLabel="Notification settings"
+        >
           <Ionicons
             name="notifications-outline"
             size={22}
@@ -233,7 +256,12 @@ export default function SettingsScreen() {
           </View>
         )}
 
-        <TouchableOpacity style={[styles.settingItem, styles.settingItemSpaced]}>
+        <TouchableOpacity
+          style={[styles.settingItem, styles.settingItemSpaced]}
+          onPress={() => Linking.openURL(SUPPORT_URL)}
+          accessibilityRole="link"
+          accessibilityLabel="Help and support"
+        >
           <Ionicons
             name="help-circle-outline"
             size={22}
@@ -243,16 +271,26 @@ export default function SettingsScreen() {
           <Ionicons name="chevron-forward" size={18} color={colors.ink3} />
         </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.settingItem}
-          onPress={() => signOut()}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="log-out-outline" size={22} color={colors.danger} />
-          <Text style={[styles.settingText, { color: colors.danger }]}>
-            Sign out
-          </Text>
-        </TouchableOpacity>
+        {DEMO_MODE ? (
+          <View style={styles.settingItem}>
+            <Ionicons name="flask-outline" size={22} color={colors.ink3} />
+            <Text style={[styles.settingText, { color: colors.ink3 }]}>
+              Demo mode — signed in as the demo rider
+            </Text>
+          </View>
+        ) : (
+          <TouchableOpacity
+            style={styles.settingItem}
+            onPress={confirmSignOut}
+            activeOpacity={0.8}
+            accessibilityRole="button"
+          >
+            <Ionicons name="log-out-outline" size={22} color={colors.danger} />
+            <Text style={[styles.settingText, { color: colors.danger }]}>
+              Sign out
+            </Text>
+          </TouchableOpacity>
+        )}
       </View>
     </ScrollView>
   );

@@ -33,7 +33,7 @@ The app has five visible tabs: **Map**, **Routes**, **Commute**, **Planner**, an
 
 The standard flow is: user searches a destination on Map or Routes → route is computed via OTP (fallback to Google Maps) → user starts a journey → a server-side trip session is created → Commute screen takes over with live WebSocket tracking, push notifications, iOS Live Activities, and community reporting.
 
-The **Planner** flow allows users to map out and sequence their upcoming day's trips on an interactive 24-hour timeline. Planned trips calculate appropriate "leave-by" times and trigger push notifications to start heading to transit stops.
+The **Planner** flow allows users to map out their trips on Day, Week and Month views (a 24-hour timeline in Day view). Planned trips calculate appropriate "leave-by" times and trigger push notifications to start heading to transit stops.
 
 **Theme System:** All themable values (colors, fonts, sizes, weights, letter-spacing, line-height, MapLibre paint colors, semantic status colors) are defined as **preset struct objects** in `styles/themes/`. Two presets ship today: `classic-light` and `classic-dark`. To add a new theme: drop a file in `styles/themes/` that implements `AppTheme` and register it in the `THEMES` map in `styles/themes/index.ts`. The active theme is selected via `ThemeContext` and exposed as a single `useTheme()` hook returning the full `AppTheme` object (no `isDark` boolean — use `theme.isDark` if needed). Map base layer, polyline colors, stop circle paint, bus label halo, and category icon palette are all part of the theme and switch with it.
 
@@ -49,7 +49,7 @@ app/
     map.tsx          — Main map screen with bottom sheet, live markers, search
     routes.tsx       — Route planning: origin/destination inputs + route picker sheet
     commute.tsx      — Active journey screen with WebSocket state machine
-    planner.tsx      — Travel planner: interactive 24-hour daily timeline
+    planner.tsx      — Travel planner: Day / Week / Month views
     saved.tsx        — Saved places management
     report.tsx       — Community reporting (hidden from tab bar)
     _layout.tsx      — Tab bar configuration + custom HeaderBar (Planner tab registered)
@@ -209,8 +209,21 @@ Managed by `lib/db.ts` using `expo-sqlite`. Database file: `tranzit.db`. WAL mod
 saved_place_cache    (user_id, category_code PK[user_id,category_code], category_name,
                       category_icon, full_formatted_address, city, country, lat, lng,
                       google_place_id, pending)
+search_history_cache (per-user recent searches, pending flag)
+planner_event_cache  (user_id, event_id PK, name, start/end, timezone, location + coords,
+                      place_id, notes, travel_time, recurrence_rule, pending)
+delete_tombstones    (user_id, entity, entity_key PK, created_at) — deletes made offline,
+                      replayed by the outboxes, hidden from reads until confirmed
 transit_stops_cache  (globalid PK, teleride_number, stop_name, status, point, cached_at)
 ```
+
+**Outboxes.** Writes are optimistic: the mirror row is written with `pending = 1` and
+pushed to db-middleware; deletes record a tombstone in the same transaction as the
+local delete. `pushPending` replays both on the next sync (a 404 on delete counts as
+done) and gives up on rows that fail with a permanent 4xx (anything but 408/429).
+Transactions are queued on the main connection (`runTransaction`), and the database
+runs with `busy_timeout = 5000`, so overlapping writes wait instead of failing with
+"database is locked". `wipeLocalUserData()` clears every per-user table on sign-out.
 
 **Saved places now live in the user DB**, not SQLite. `saved_place_cache` is an
 offline **mirror** of the per-user `saved_addresses` + `user_defined_default_categories`
@@ -225,10 +238,15 @@ are dropped on launch. Consumed via `hooks/useSavedPlaces.ts`
 
 `transit_stops_cache` has a 24-hour TTL enforced in code by `getCachedTransitStops()`.
 
-### Travel Planner Storage (Future Integration)
+### Travel Planner Storage
 
-Planned trips are currently mock-modeled in `SAMPLE_TRIPS` within `components/planner/trip.ts`. The schema uses minutes-from-midnight boundaries (`departMin`, `arriveMin`, `eventEndMin`). 
-- **Future Integration:** Plans are in place to back this with a user-specific trips store — a Supabase table keyed by `user_id` mirrored into `expo-sqlite` for offline caching, and calculating real transit timing via `TranzitApiService.getRoute`.
+Events live in the user DB (`user_defined_events` + `user_calendar`) and are mirrored
+into `planner_event_cache` by `lib/plannerEvents.ts`. `recurrence_rule` holds a small
+RFC 5545 subset written by add-trip: `FREQ=DAILY`, `FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR`,
+`FREQ=WEEKLY`, `FREQ=MONTHLY`, optionally with `;UNTIL=YYYYMMDDT235959Z` (read as the
+whole local end day). `components/planner/recurrence.ts` expands occurrences; any other
+rule is treated as a one-off. Device-calendar imports are keyed
+`device:{calendarId}:{eventId}:{startMs}` so each occurrence of a repeating event is kept.
 
 ---
 
@@ -373,7 +391,7 @@ Local push notifications that ask the user "Did you board the bus?" at critical 
 
 ### `lib/db.ts`
 
-All SQLite operations. Opens the database once (`getDb()` singleton). Runs `PRAGMA journal_mode = WAL` and `PRAGMA foreign_keys = ON` on first open.
+All SQLite operations. Opens the database once (`getDb()` singleton). Runs `PRAGMA journal_mode = WAL`, `PRAGMA busy_timeout = 5000` and `PRAGMA foreign_keys = ON` on first open. Multi-statement writes go through `runTransaction`, which queues them on the main connection.
 
 ---
 
@@ -423,13 +441,20 @@ The trip progress tracking and telemetry HUD.
 - **Leave-by Countdowns:** Generates a "Leave by HH:MM" countdown chip (computed as departure ETA - walk duration - 3 min buffer). Disappears once boarding is confirmed.
 - **Timeline Interleaving:** Walk steps and transfers (labeled "Transfer · walk to...") are interleaved directly into the timeline with duration and distance metrics.
 - **Marquee Text Scrolling:** Replaced overflowing text lines in destination lists and stop cards with the `<MarqueeText>` component, allowing long stop names to scroll horizontally without layout clipping.
+- **Ticking countdowns:** a `now` value ticks every 15 s while a trip is active, so ETAs and "Leave by" move between server messages; past the leave-by time it reads "Leave · Now".
+- **Completion:** the trip ends with a "You've arrived" card when the server reports `COMPLETED` or the rider comes within 40 m of the destination (Route Save only tracks transit stops, so walk-only trips rely on the latter). Teardown stops the Live Activity / Android notification, background location and the socket.
+- **Reconnects:** a dropped socket doesn't end the trip — Route Save holds the session for 15 minutes; the app reconnects (or restores after a cold start) and sends `RESUME`. "Offline · retrying" shows after 10 s without a socket.
+- **Background location:** `lib/backgroundLocation.ts` registers a TaskManager task (imported from `app/_layout.tsx`) that runs only during a trip, with an Android foreground-service notification.
+- **Reports and alerts:** community reports go to `route_reports` (`lib/reports.ts`) and the thank-you text uses the real recent count; `<AlertBanner>` shows active service alerts for the trip's routes.
 
 ---
 
 ### `app/(tabs)/planner.tsx` — Travel Planner Screen
 
-A 24-hour visual daily timeline (Gantt-chart-style timeline layout).
-- Displays sequenced planned trips (`PlannedTrip`) calculated in minutes from midnight.
+Day / Week / Month views around a selected anchor date (arrows step by the current view; "Today" jumps back).
+- **Day** (`components/planner/DayTimeline.tsx`): the 24-hour timeline. Overlapping events sit side by side (`components/planner/layout.ts` assigns lanes), multi-day events appear on every day they cover (`eventsInRange` / `clipToDay` in `trip.ts`), all-day events sit in a scrollable strip, and swiping left/right changes day.
+- **Week** (`WeekView.tsx`): seven columns sharing the hour gutter; tap a day header to open it.
+- **Month** (`MonthView.tsx`): a 6×7 grid with up to three event chips per day.
 - **Visual Scale:** Layout scales using shared constants: `HOUR_HEIGHT = 60px` (y-axis scale), `GUTTER_WIDTH = 56px`.
 - Interactivity: Trips are rendered inside `TripEventCard` components.
 - Opens by default scrolled near the morning commute (Y offset: `8 * HOUR_HEIGHT - 20`).
@@ -440,9 +465,8 @@ A 24-hour visual daily timeline (Gantt-chart-style timeline layout).
 ### `app/add-trip.tsx` — Add Planned Trip Screen
 
 Transactional modal form pushed from the Planner FAB.
-- Let's users configure Destination, Origin, Timing Mode (`leave` or `arrive` target times), and Planned stay durations.
-- Integrates custom `Stepper` components to slide minutes/hours easily.
-- Calculates derived departures/arrivals based on configured travel estimates (currently `30m` placeholders).
+- Name, location (the same two-phase place search as Routes — picking a suggestion attaches coordinates), start/end time, and a **Repeat** picker (Never / Daily / Weekdays / Weekly / Monthly, with an optional end date) stored as `recurrence_rule`.
+- On save, `lib/preRoutes.ts` computes an arrive-by route, writes `travel_time`, and schedules a leave-now notification.
 
 ---
 

@@ -13,9 +13,16 @@ import type {
   AppTypography,
 } from "./types";
 
+// Base map tiles: MapTiler when EXPO_PUBLIC_MAPTILER_KEY is set, otherwise the
+// keyless OpenFreeMap styles (https://openfreemap.org), so a fresh clone shows a
+// map without signing up for anything.
 const MAPTILER_KEY = process.env.EXPO_PUBLIC_MAPTILER_KEY ?? "";
-const MAPTILER_LIGHT = `https://api.maptiler.com/maps/positron/style.json?key=${MAPTILER_KEY}`;
-const MAPTILER_DARK = `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`;
+const MAPTILER_LIGHT = MAPTILER_KEY
+  ? `https://api.maptiler.com/maps/positron/style.json?key=${MAPTILER_KEY}`
+  : "https://tiles.openfreemap.org/styles/positron";
+const MAPTILER_DARK = MAPTILER_KEY
+  ? `https://api.maptiler.com/maps/dataviz-dark/style.json?key=${MAPTILER_KEY}`
+  : "https://tiles.openfreemap.org/styles/dark";
 
 // ─── Spacing (shared, both themes use the same scale) ────────────────────────
 

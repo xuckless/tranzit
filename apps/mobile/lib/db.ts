@@ -50,8 +50,9 @@ export interface SearchHistoryMirrorRow {
 // Local SQLite mirror of the user DB `user_defined_events`. Doubles as the outbox:
 // `pending = 1` marks an event written locally but not yet confirmed in the user DB
 // (offline / 503), retried by the orchestrator. (user_id, event_id) PK matches the
-// remote PK so saves UPSERT in place. recurrence_rule is deferred and not mirrored.
-// Scoped by user_id so multiple identities never collide.
+// remote PK so saves UPSERT in place. recurrence_rule is the stored RRULE (see
+// components/planner/recurrence.ts). Scoped by user_id so multiple identities
+// never collide.
 
 export interface PlannedEventMirrorRow {
   user_id: string;
@@ -66,13 +67,45 @@ export interface PlannedEventMirrorRow {
   end_time: string; // ISO
   timezone: string | null;
   travel_time: number | null; // minutes, from the cached pre-route
+  recurrence_rule: string | null; // RRULE subset; null = one-off
   pending: number;
+}
+
+// ─── Delete tombstones (outbox for deletes) ─────────────────────────────────────
+// A delete removes the mirror row at once and records a tombstone here; the
+// orchestrator's pushPending replays the remote delete and drops the tombstone
+// once it succeeds (404 counts). Reads hide tombstoned keys, so a fetch that
+// still sees the row remotely (delete not pushed yet) never resurrects it.
+// Re-saving the same key clears its tombstone (the save wins).
+
+export type TombstoneEntity = "planner_event" | "saved_place";
+
+export interface TombstoneRow {
+  user_id: string;
+  entity: TombstoneEntity;
+  entity_key: string;
+  created_at: number; // epoch ms
 }
 
 // ─── Singleton ────────────────────────────────────────────────────────────────
 
 let _db: SQLite.SQLiteDatabase | null = null;
 let _openPromise: Promise<SQLite.SQLiteDatabase> | null = null;
+
+// Transactions run on the shared connection, one at a time. expo-sqlite's
+// withExclusiveTransactionAsync opens a second connection with no busy timeout,
+// which made concurrent mirror writes fail with "database is locked"; queueing
+// withTransactionAsync on the main connection avoids that.
+let _txQueue: Promise<unknown> = Promise.resolve();
+
+function runTransaction(
+  db: SQLite.SQLiteDatabase,
+  fn: (txn: SQLite.SQLiteDatabase) => Promise<void>
+): Promise<void> {
+  const run = _txQueue.then(() => db.withTransactionAsync(() => fn(db)));
+  _txQueue = run.catch(() => undefined);
+  return run;
+}
 
 export function getDb(): Promise<SQLite.SQLiteDatabase> {
   if (_db) return Promise.resolve(_db);
@@ -83,6 +116,9 @@ export function getDb(): Promise<SQLite.SQLiteDatabase> {
 async function _openDb(): Promise<SQLite.SQLiteDatabase> {
   const db = await SQLite.openDatabaseAsync("tranzit.db");
   await db.runAsync("PRAGMA journal_mode = WAL");
+  // Exclusive transactions run on a second connection; without a busy timeout a
+  // read that lands during one fails at once with "database is locked".
+  await db.runAsync("PRAGMA busy_timeout = 5000");
   await db.runAsync("PRAGMA foreign_keys = ON");
   await _initSchema(db);
   _db = db;
@@ -172,6 +208,18 @@ async function _initSchema(db: SQLite.SQLiteDatabase): Promise<void> {
   await _addColumnIfMissing(db, "planner_event_cache", "location_lng", "REAL");
   await _addColumnIfMissing(db, "planner_event_cache", "place_id", "TEXT");
   await _addColumnIfMissing(db, "planner_event_cache", "travel_time", "INTEGER");
+  await _addColumnIfMissing(db, "planner_event_cache", "recurrence_rule", "TEXT");
+
+  // Delete outbox (see TombstoneRow).
+  await db.execAsync(`
+    CREATE TABLE IF NOT EXISTS delete_tombstones (
+      user_id    TEXT NOT NULL,
+      entity     TEXT NOT NULL,
+      entity_key TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (user_id, entity, entity_key)
+    );
+  `);
 
   await db.execAsync(`
     CREATE TABLE IF NOT EXISTS transit_stops_cache (
@@ -215,8 +263,9 @@ export async function mirrorReadSavedPlaces(
 ): Promise<SavedPlaceMirrorRow[]> {
   const db = await getDb();
   return db.getAllAsync<SavedPlaceMirrorRow>(
-    `SELECT ${SAVED_COLS} FROM saved_place_cache
-      WHERE user_id = ? ORDER BY category_name ASC`,
+    `SELECT ${SAVED_COLS} FROM saved_place_cache c
+      WHERE user_id = ? AND ${notTombstoned("saved_place", "c.category_code")}
+      ORDER BY category_name ASC`,
     userId
   );
 }
@@ -226,8 +275,9 @@ export async function mirrorReadPending(
 ): Promise<SavedPlaceMirrorRow[]> {
   const db = await getDb();
   return db.getAllAsync<SavedPlaceMirrorRow>(
-    `SELECT ${SAVED_COLS} FROM saved_place_cache
-      WHERE user_id = ? AND pending = 1`,
+    `SELECT ${SAVED_COLS} FROM saved_place_cache c
+      WHERE user_id = ? AND pending = 1
+        AND ${notTombstoned("saved_place", "c.category_code")}`,
     userId
   );
 }
@@ -263,6 +313,7 @@ export async function mirrorUpsertSavedPlace(
     row.google_place_id,
     row.pending
   );
+  await _clearTombstone(db, row.user_id, "saved_place", row.category_code);
 }
 
 export async function mirrorClearPending(
@@ -298,7 +349,7 @@ export async function mirrorReplaceAll(
   rows: SavedPlaceMirrorRow[]
 ): Promise<void> {
   const db = await getDb();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await runTransaction(db, async (txn) => {
     await txn.runAsync(
       "DELETE FROM saved_place_cache WHERE user_id = ? AND pending = 0",
       userId
@@ -318,7 +369,8 @@ export async function mirrorReplaceAll(
            lat                    = excluded.lat,
            lng                    = excluded.lng,
            google_place_id        = excluded.google_place_id,
-           pending                = 0`,
+           pending                = 0
+         WHERE saved_place_cache.pending = 0`,
         r.user_id,
         r.category_code,
         r.category_name,
@@ -449,7 +501,7 @@ export async function mirrorReplaceAllSearch(
   rows: SearchHistoryMirrorRow[]
 ): Promise<void> {
   const db = await getDb();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await runTransaction(db, async (txn) => {
     await txn.runAsync(
       "DELETE FROM search_history_cache WHERE user_id = ? AND pending = 0",
       userId
@@ -499,15 +551,16 @@ export async function mirrorReplaceAllSearch(
 
 const EVENT_COLS = `user_id, event_id, name, description, location,
             location_lat, location_lng, place_id,
-            start_time, end_time, timezone, travel_time, pending`;
+            start_time, end_time, timezone, travel_time, recurrence_rule, pending`;
 
 export async function mirrorReadEvents(
   userId: string
 ): Promise<PlannedEventMirrorRow[]> {
   const db = await getDb();
   return db.getAllAsync<PlannedEventMirrorRow>(
-    `SELECT ${EVENT_COLS} FROM planner_event_cache
-      WHERE user_id = ? ORDER BY start_time ASC`,
+    `SELECT ${EVENT_COLS} FROM planner_event_cache c
+      WHERE user_id = ? AND ${notTombstoned("planner_event", "c.event_id")}
+      ORDER BY start_time ASC`,
     userId
   );
 }
@@ -517,8 +570,10 @@ export async function mirrorReadPendingEvents(
 ): Promise<PlannedEventMirrorRow[]> {
   const db = await getDb();
   return db.getAllAsync<PlannedEventMirrorRow>(
-    `SELECT ${EVENT_COLS} FROM planner_event_cache
-      WHERE user_id = ? AND pending = 1 ORDER BY start_time ASC`,
+    `SELECT ${EVENT_COLS} FROM planner_event_cache c
+      WHERE user_id = ? AND pending = 1
+        AND ${notTombstoned("planner_event", "c.event_id")}
+      ORDER BY start_time ASC`,
     userId
   );
 }
@@ -531,8 +586,8 @@ export async function mirrorUpsertEvent(
     `INSERT INTO planner_event_cache
        (user_id, event_id, name, description, location,
         location_lat, location_lng, place_id,
-        start_time, end_time, timezone, travel_time, pending)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        start_time, end_time, timezone, travel_time, recurrence_rule, pending)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(user_id, event_id) DO UPDATE SET
        name         = excluded.name,
        description  = excluded.description,
@@ -544,6 +599,7 @@ export async function mirrorUpsertEvent(
        end_time     = excluded.end_time,
        timezone     = excluded.timezone,
        travel_time  = excluded.travel_time,
+       recurrence_rule = excluded.recurrence_rule,
        pending      = excluded.pending`,
     row.user_id,
     row.event_id,
@@ -557,8 +613,10 @@ export async function mirrorUpsertEvent(
     row.end_time,
     row.timezone,
     row.travel_time,
+    row.recurrence_rule,
     row.pending
   );
+  await _clearTombstone(db, row.user_id, "planner_event", row.event_id);
 }
 
 export async function mirrorClearPendingEvent(
@@ -594,7 +652,7 @@ export async function mirrorReplaceAllEvents(
   rows: PlannedEventMirrorRow[]
 ): Promise<void> {
   const db = await getDb();
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await runTransaction(db, async (txn) => {
     await txn.runAsync(
       "DELETE FROM planner_event_cache WHERE user_id = ? AND pending = 0",
       userId
@@ -604,8 +662,8 @@ export async function mirrorReplaceAllEvents(
         `INSERT INTO planner_event_cache
            (user_id, event_id, name, description, location,
             location_lat, location_lng, place_id,
-            start_time, end_time, timezone, travel_time, pending)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+            start_time, end_time, timezone, travel_time, recurrence_rule, pending)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
          ON CONFLICT(user_id, event_id) DO UPDATE SET
            name         = excluded.name,
            description  = excluded.description,
@@ -617,7 +675,9 @@ export async function mirrorReplaceAllEvents(
            end_time     = excluded.end_time,
            timezone     = excluded.timezone,
            travel_time  = excluded.travel_time,
-           pending      = 0`,
+           recurrence_rule = excluded.recurrence_rule,
+           pending      = 0
+         WHERE planner_event_cache.pending = 0`,
         r.user_id,
         r.event_id,
         r.name,
@@ -629,10 +689,106 @@ export async function mirrorReplaceAllEvents(
         r.start_time,
         r.end_time,
         r.timezone,
-        r.travel_time
+        r.travel_time,
+        r.recurrence_rule
       );
     }
   });
+}
+
+// ─── Delete tombstones ────────────────────────────────────────────────────────
+
+/** SQL predicate: the row's key has no tombstone for this entity (alias `c`). */
+function notTombstoned(entity: TombstoneEntity, keyExpr: string): string {
+  return `NOT EXISTS (SELECT 1 FROM delete_tombstones t
+             WHERE t.user_id = c.user_id AND t.entity = '${entity}'
+               AND t.entity_key = ${keyExpr})`;
+}
+
+async function _clearTombstone(
+  db: SQLite.SQLiteDatabase,
+  userId: string,
+  entity: TombstoneEntity,
+  key: string
+): Promise<void> {
+  await db.runAsync(
+    "DELETE FROM delete_tombstones WHERE user_id = ? AND entity = ? AND entity_key = ?",
+    userId,
+    entity,
+    key
+  );
+}
+
+/**
+ * Delete the mirror row and record a tombstone, atomically. The caller then
+ * attempts the remote delete and calls `tombstoneDrop` once it succeeds.
+ */
+export async function tombstoneDelete(
+  userId: string,
+  entity: TombstoneEntity,
+  key: string
+): Promise<void> {
+  const db = await getDb();
+  const [table, col] =
+    entity === "planner_event"
+      ? ["planner_event_cache", "event_id"]
+      : ["saved_place_cache", "category_code"];
+  await runTransaction(db, async (txn) => {
+    await txn.runAsync(
+      `DELETE FROM ${table} WHERE user_id = ? AND ${col} = ?`,
+      userId,
+      key
+    );
+    await txn.runAsync(
+      `INSERT OR REPLACE INTO delete_tombstones
+         (user_id, entity, entity_key, created_at) VALUES (?, ?, ?, ?)`,
+      userId,
+      entity,
+      key,
+      Date.now()
+    );
+  });
+}
+
+export async function tombstoneRead(
+  userId: string,
+  entity: TombstoneEntity
+): Promise<TombstoneRow[]> {
+  const db = await getDb();
+  return db.getAllAsync<TombstoneRow>(
+    `SELECT user_id, entity, entity_key, created_at FROM delete_tombstones
+      WHERE user_id = ? AND entity = ? ORDER BY created_at ASC`,
+    userId,
+    entity
+  );
+}
+
+export async function tombstoneDrop(
+  userId: string,
+  entity: TombstoneEntity,
+  key: string
+): Promise<void> {
+  await _clearTombstone(await getDb(), userId, entity, key);
+}
+
+// ─── Outbox failure classification ────────────────────────────────────────────
+// lib/middleware.ts throws errors carrying a numeric `status` (RequestError) and a
+// "… → <status>" message; read either so the outboxes can tell "retry later" from
+// "will never succeed".
+
+/** HTTP status of a middleware error, or null (network/timeout/other). */
+export function outboxHttpStatus(err: unknown): number | null {
+  const st = (err as { status?: unknown } | null)?.status;
+  if (typeof st === "number") return st;
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const m = /→\s*(\d{3})\b/.exec(msg);
+  return m ? Number(m[1]) : null;
+}
+
+/** 4xx other than 408/429 — retrying won't help, so the outbox gives up. */
+export function isPermanentFailure(err: unknown): boolean {
+  const s = outboxHttpStatus(err);
+  return s != null && s >= 400 && s < 500 && s !== 408 && s !== 429;
 }
 
 // ─── Transit Stops Cache ──────────────────────────────────────────────────────
@@ -659,7 +815,7 @@ export async function getCachedTransitStops(): Promise<CalgaryTransitStop[] | nu
 export async function cacheTransitStops(stops: CalgaryTransitStop[]): Promise<void> {
   const db = await getDb();
   const now = Math.floor(Date.now() / 1000);
-  await db.withExclusiveTransactionAsync(async (txn) => {
+  await runTransaction(db, async (txn) => {
     await txn.runAsync("DELETE FROM transit_stops_cache");
     for (const s of stops) {
       await txn.runAsync(
@@ -709,4 +865,21 @@ export async function getStopsByTelerideNumbers(
     ...ids
   );
   return rows.map((r) => ({ ...r, create_dt_utc: null, mod_dt_utc: null }));
+}
+
+/**
+ * Sign-out: drop every per-user row from the local mirror (saved places, search
+ * history, planner events, pending deletes) so the next account on this device
+ * starts clean. The shared transit stop cache is kept.
+ */
+export async function wipeLocalUserData(): Promise<void> {
+  const db = await getDb();
+  await runTransaction(db, async () => {
+    await db.execAsync(`
+      DELETE FROM saved_place_cache;
+      DELETE FROM search_history_cache;
+      DELETE FROM planner_event_cache;
+      DELETE FROM delete_tombstones;
+    `);
+  });
 }

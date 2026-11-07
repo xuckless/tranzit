@@ -1,9 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import type { Database } from '../types/database';
+import { DEMO_MODE, DEMO_TOKEN, DEMO_USER_ID } from './demo';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL;
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY;
+// Demo mode never talks to Supabase, but the client is still constructed (the
+// auth screens import it), so give it inert placeholders.
+const supabaseUrl =
+  process.env.EXPO_PUBLIC_SUPABASE_URL || (DEMO_MODE ? 'http://127.0.0.1:54321' : undefined);
+const supabaseAnonKey =
+  process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || (DEMO_MODE ? 'demo' : undefined);
 
 if (!supabaseUrl || !supabaseAnonKey) {
   throw new Error(
@@ -110,6 +115,7 @@ supabase.auth.onAuthStateChange((_event, session) => {
  * falls back to getSession() once and seeds the cache.
  */
 export async function getAccessToken(): Promise<string | null> {
+  if (DEMO_MODE) return DEMO_TOKEN;
   if (cachedToken != null) return cachedToken;
   const { data } = await supabase.auth.getSession();
   cachedToken = data.session?.access_token ?? null;
@@ -124,4 +130,15 @@ export async function getAccessToken(): Promise<string | null> {
 export async function authHeader(): Promise<Record<string, string>> {
   const token = await getAccessToken();
   return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+/**
+ * The signed-in user's id (the Supabase `sub`), or null when signed out. In demo
+ * mode it is always the fixed demo user. Use this instead of reading
+ * supabase.auth directly, so non-React code works in demo mode too.
+ */
+export async function getCurrentUserId(): Promise<string | null> {
+  if (DEMO_MODE) return DEMO_USER_ID;
+  const { data } = await supabase.auth.getSession();
+  return data.session?.user?.id ?? null;
 }
