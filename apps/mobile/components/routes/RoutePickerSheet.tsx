@@ -6,6 +6,7 @@ import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import type { Route, RouteStep } from "@/types/places";
 import { useTheme } from "@/contexts/ThemeContext";
 import { useRouteLiveStops } from "@/lib/routeSSE";
+import { routeArrivalEpoch } from "@/lib/routeRanking";
 import type { RouteSSEStop } from "@/lib/routeSSE";
 import type { AppTheme } from "@/styles/themes";
 
@@ -252,7 +253,11 @@ const RouteCard = memo(function RouteCard({
     [allSteps],
   );
   const firstDept = transitSteps[0]?.transitDetails?.stopDetails?.departureTime;
-  const lastArr = transitSteps.at(-1)?.transitDetails?.stopDetails?.arrivalTime;
+  // Arrival at the destination (incl. the final walk), matching the "Fastest" ranking.
+  const lastArr = useMemo(() => {
+    if (!transitSteps.at(-1)?.transitDetails?.stopDetails?.arrivalTime) return undefined;
+    return new Date(routeArrivalEpoch(route, Date.now() / 1000) * 1000).toISOString();
+  }, [route, transitSteps]);
 
   return (
     <TouchableOpacity
@@ -266,6 +271,9 @@ const RouteCard = memo(function RouteCard({
       ]}
       onPress={() => onSelect(route)}
       activeOpacity={0.85}
+      accessibilityRole="button"
+      accessibilityState={{ selected: isSelected }}
+      accessibilityHint="Select this route"
     >
       {isFastest && (
         <View style={[styles.fastestBadge, { backgroundColor: colors.primaryDim }]}>

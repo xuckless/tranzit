@@ -8,7 +8,7 @@ import {
   ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { middlewareQuery } from "@/lib/middleware";
+import { friendlyErrorMessage, middlewareQuery } from "@/lib/middleware";
 import type { StopTimeUpdate, TripUpdate } from "@/types/database";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
@@ -149,6 +149,7 @@ function formatDelay(
 
 async function fetchStopSchedule(
   teleride_number: number,
+  signal?: AbortSignal,
 ): Promise<{ upcoming: BusEntry[]; past: BusEntry[] }> {
   const now = Math.floor(Date.now() / 1000);
   const fifteenMinAgo = now - 900;
@@ -158,7 +159,7 @@ async function fetchStopSchedule(
     stop_id: String(teleride_number),
     schedule_relationship: "neq.NO_DATA",
     limit: 50,
-  });
+  }, signal);
 
   if (!stus.length) return { upcoming: [], past: [] };
 
@@ -169,6 +170,7 @@ async function fetchStopSchedule(
       trip_id: `in.(${uniqueTripIds.join(",")})`,
       limit: uniqueTripIds.length,
     },
+    signal,
   );
   const routeMap = new Map(tripRows.map((t) => [t.trip_id, t.route_id]));
 
@@ -242,26 +244,56 @@ export function StopDetailsPanel({
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [upcoming, setUpcoming] = useState<BusEntry[]>([]);
   const [past, setPast] = useState<BusEntry[]>([]);
+  // Spinner only until the first response for this stop; 30s polls refresh
+  // in place so the list doesn't flash or lose its scroll position.
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const pollingRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const hasDataRef = useRef(false);
 
   const load = useCallback(async () => {
-    setLoading(true);
-    const { upcoming: u, past: p } = await fetchStopSchedule(teleride_number);
-    setUpcoming(u);
-    setPast(p);
-    setLoading(false);
+    // Cancel any in-flight request (fast stop switches / overlapping polls).
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    if (!hasDataRef.current) setLoading(true);
+    try {
+      const { upcoming: u, past: p } = await fetchStopSchedule(
+        teleride_number,
+        ctrl.signal,
+      );
+      if (ctrl.signal.aborted) return;
+      setUpcoming(u);
+      setPast(p);
+      setError(null);
+      hasDataRef.current = true;
+    } catch (e) {
+      if (ctrl.signal.aborted) return;
+      console.warn("[stop] schedule fetch failed:", e);
+      setError(friendlyErrorMessage(e, "arrivals"));
+    } finally {
+      if (!ctrl.signal.aborted) setLoading(false);
+    }
   }, [teleride_number]);
 
   useEffect(() => {
+    // New stop → drop the previous stop's rows and show the spinner again.
+    hasDataRef.current = false;
+    setUpcoming([]);
+    setPast([]);
+    setError(null);
     load();
     pollingRef.current = setInterval(load, 30_000);
     return () => {
       if (pollingRef.current !== null) clearInterval(pollingRef.current);
+      pollingRef.current = null;
+      abortRef.current?.abort();
     };
   }, [load]);
 
-  const isEmpty = !loading && upcoming.length === 0 && past.length === 0;
+  const hasRows = upcoming.length > 0 || past.length > 0;
+  const isEmpty = !loading && !error && !hasRows;
 
   return (
     <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -275,18 +307,47 @@ export function StopDetailsPanel({
             <Text style={[styles.panelSub, { color: colors.ink3 }]}>Stop #{teleride_number}</Text>
           </View>
         </View>
-        <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          onPress={onClose}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Close stop details"
+        >
           <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>
       </View>
 
       <View style={styles.panelContent}>
-        {loading ? (
+        {loading && !hasRows ? (
           <ActivityIndicator size="small" color={colors.primary} />
+        ) : error && !hasRows ? (
+          <View style={styles.errorRow}>
+            <Text style={[styles.empty, { color: colors.ink2 }]}>{error}</Text>
+            <TouchableOpacity
+              onPress={load}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading arrivals"
+            >
+              <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         ) : isEmpty ? (
           <Text style={[styles.empty, { color: colors.ink3 }]}>No service data</Text>
         ) : (
           <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+            {error && (
+              <TouchableOpacity
+                onPress={load}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Couldn't refresh arrivals. Retry"
+              >
+                <Text style={[styles.staleText, { color: colors.ink3 }]}>
+                  Couldn&apos;t refresh — tap to retry
+                </Text>
+              </TouchableOpacity>
+            )}
             {upcoming.length > 0 && (
               <>
                 <Text style={[styles.sectionLabel, { color: colors.ink3 }]}>Upcoming</Text>
@@ -379,6 +440,9 @@ function makeStyles(t: AppTheme) {
       paddingVertical: 8,
     },
     scroll: { flex: 1 },
+    errorRow: { alignItems: "center", gap: 6 },
+    retryText: { ...typography.bodySmallStrong },
+    staleText: { ...typography.micro, textAlign: "center", paddingVertical: 4 },
 
     sectionLabel: {
       ...typography.micro,

@@ -7,7 +7,11 @@ import {
   ScrollView,
   Dimensions,
   Keyboard,
+  Modal,
+  Pressable,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useHeaderHeight } from "@react-navigation/elements";
 import BottomSheet, { BottomSheetView } from "@gorhom/bottom-sheet";
 import {
   Map,
@@ -29,7 +33,13 @@ import { PlaceDetailsPanel } from "@/components/placeViews";
 import type { SelectedDestination, PlaceResult } from "@/types/places";
 import type { CalgaryTransitStop } from "@/types/database";
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
-import { useVehicles, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
+import {
+  useVehicles,
+  useVehicleStreamStatus,
+  vehiclesToGeoJSON,
+} from "@/lib/vehicleSSE";
+import { fetchAlerts, type ServiceAlert } from "@/lib/alerts";
+import { AlertList } from "@/components/AlertBanner";
 import { loadAndCacheStops } from "@/lib/transitStopsCache";
 import { middlewareQuery } from "@/lib/middleware";
 import * as Location from "expo-location";
@@ -167,6 +177,44 @@ export default function MapScreen() {
   } | null>(null);
 
   const vehicles = useVehicles();
+  const streamStatus = useVehicleStreamStatus();
+  // Only surface the "live data unavailable" pill once the stream has been
+  // down for >10s, so normal connects/brief reconnects don't flash it.
+  const [streamDown, setStreamDown] = useState(false);
+  useEffect(() => {
+    if (streamStatus === "live") {
+      setStreamDown(false);
+      return;
+    }
+    const t = setTimeout(() => setStreamDown(true), 10_000);
+    return () => clearTimeout(t);
+  }, [streamStatus]);
+
+  // All active service alerts (unfiltered), refreshed every 2 minutes.
+  const [allAlerts, setAllAlerts] = useState<ServiceAlert[]>([]);
+  const [alertsOpen, setAlertsOpen] = useState(false);
+  useEffect(() => {
+    let ctrl: AbortController | null = null;
+    const load = async () => {
+      ctrl?.abort();
+      const c = new AbortController();
+      ctrl = c;
+      const list = await fetchAlerts({ signal: c.signal });
+      if (!c.signal.aborted) setAllAlerts(list);
+    };
+    void load();
+    const timer = setInterval(() => void load(), 2 * 60 * 1000);
+    return () => {
+      clearInterval(timer);
+      ctrl?.abort();
+    };
+  }, []);
+
+  const insets = useSafeAreaInsets();
+  const headerHeight = useHeaderHeight();
+  // The tab header already sits above this screen; only pad for the status
+  // bar ourselves if the header is hidden.
+  const topOverlayOffset = (headerHeight > 0 ? 0 : insets.top) + 12;
 
   // Current camera bounds ([w, s, e, n]), refreshed when a pan/zoom settles.
   // Used only to cull the per-tick GeoJSON allocation — never the vehicle
@@ -475,12 +523,17 @@ export default function MapScreen() {
 
   // ── Location ─────────────────────────────────────────────────────────────────
   const requestLocationPermission = async () => {
-    const { status } = await Location.requestForegroundPermissionsAsync();
-    if (status !== "granted") {
-      setErrorMsg("Location permission denied.");
-      return;
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setErrorMsg("Location permission denied.");
+        return;
+      }
+      setHasPermission(true);
+    } catch (e) {
+      console.warn("[map] location permission request failed", e);
+      setErrorMsg("Location is unavailable.");
     }
-    setHasPermission(true);
   };
 
   const fetchCurrentLocation = async () => {
@@ -640,11 +693,15 @@ export default function MapScreen() {
       if (coord) { flyTo(coord, 16, 600); return; }
     }
 
-    const allStops = await loadAndCacheStops();
-    const stop = allStops.find((s) => s.teleride_number === telerideNumber);
-    if (stop?.point) {
-      const coord = parseWKTPoint(stop.point);
-      if (coord) flyTo(coord, 16, 600);
+    try {
+      const allStops = await loadAndCacheStops();
+      const stop = allStops.find((s) => s.teleride_number === telerideNumber);
+      if (stop?.point) {
+        const coord = parseWKTPoint(stop.point);
+        if (coord) flyTo(coord, 16, 600);
+      }
+    } catch (e) {
+      console.warn("[map] stop lookup failed", e);
     }
   }, [transitStops, flyTo]);
 
@@ -659,19 +716,25 @@ export default function MapScreen() {
       let posSub: Location.LocationSubscription | undefined;
       let cancelled = false;
       (async () => {
-        const sub = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            distanceInterval: 10,
-            timeInterval: 5000,
-          },
-          ({ coords }) => {
-            setUserLocation({
-              latitude: coords.latitude,
-              longitude: coords.longitude,
-            });
-          },
-        );
+        let sub: Location.LocationSubscription;
+        try {
+          sub = await Location.watchPositionAsync(
+            {
+              accuracy: Location.Accuracy.Balanced,
+              distanceInterval: 10,
+              timeInterval: 5000,
+            },
+            ({ coords }) => {
+              setUserLocation({
+                latitude: coords.latitude,
+                longitude: coords.longitude,
+              });
+            },
+          );
+        } catch (e) {
+          console.warn("[map] location watch failed", e);
+          return;
+        }
         if (cancelled) {
           sub.remove();
           return;
@@ -800,6 +863,9 @@ export default function MapScreen() {
         onPress={fetchCurrentLocation}
         activeOpacity={0.85}
         disabled={loadingLocation}
+        accessibilityRole="button"
+        accessibilityLabel="Center map on my location"
+        accessibilityState={{ disabled: loadingLocation, busy: loadingLocation }}
       >
         {loadingLocation ? (
           <ActivityIndicator size="small" color={colors.primary} />
@@ -808,12 +874,94 @@ export default function MapScreen() {
         )}
       </TouchableOpacity>
 
-      {errorMsg && (
-        <View style={styles.errorBanner}>
-          <Ionicons name="warning-outline" size={15} color={semantic.errorBannerText} />
-          <Text style={styles.errorText}>{errorMsg}</Text>
+      <View
+        style={[
+          styles.topOverlay,
+          {
+            top: topOverlayOffset,
+            left: insets.left + 16,
+            right: insets.right + 16,
+          },
+        ]}
+        pointerEvents="box-none"
+      >
+        {errorMsg && (
+          <View style={styles.errorBanner} accessibilityLiveRegion="polite">
+            <Ionicons name="warning-outline" size={15} color={semantic.errorBannerText} />
+            <Text style={styles.errorText}>{errorMsg}</Text>
+          </View>
+        )}
+        {(streamDown || allAlerts.length > 0) && (
+          <View style={styles.topPillRow} pointerEvents="box-none">
+            {streamDown && (
+              <View
+                style={styles.livePill}
+                accessibilityRole="text"
+                accessibilityLiveRegion="polite"
+                accessibilityLabel="Live bus data unavailable, retrying"
+              >
+                <Ionicons name="cloud-offline-outline" size={13} color={colors.ink2} />
+                <Text style={styles.livePillText}>Live data unavailable — retrying</Text>
+              </View>
+            )}
+            {allAlerts.length > 0 && (
+              <TouchableOpacity
+                style={styles.alertChip}
+                onPress={() => setAlertsOpen(true)}
+                activeOpacity={0.8}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel={`${allAlerts.length} service alert${allAlerts.length === 1 ? "" : "s"}. Show alerts`}
+              >
+                <Text style={styles.alertChipText}>⚠ {allAlerts.length}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+      </View>
+
+      <Modal
+        visible={alertsOpen}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setAlertsOpen(false)}
+      >
+        <View style={styles.alertsModalRoot}>
+          <Pressable
+            style={[StyleSheet.absoluteFill, { backgroundColor: semantic.backdrop }]}
+            onPress={() => setAlertsOpen(false)}
+            accessibilityRole="button"
+            accessibilityLabel="Close service alerts"
+          />
+          <View
+            style={[
+              styles.alertsSheet,
+              { paddingBottom: Math.max(insets.bottom, 16) },
+            ]}
+          >
+            <View style={styles.alertsHeader}>
+              <Text style={styles.alertsTitle}>
+                Service alerts ({allAlerts.length})
+              </Text>
+              <TouchableOpacity
+                onPress={() => setAlertsOpen(false)}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Close service alerts"
+              >
+                <Ionicons name="close-circle" size={24} color={colors.ink3} />
+              </TouchableOpacity>
+            </View>
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {allAlerts.length === 0 ? (
+                <Text style={styles.nearbyStopsEmpty}>No active service alerts.</Text>
+              ) : (
+                <AlertList alerts={allAlerts} />
+              )}
+            </ScrollView>
+          </View>
         </View>
-      )}
+      </Modal>
 
       {/* ════════ BOTTOM SHEET ════════ */}
       <BottomSheet
@@ -866,7 +1014,9 @@ export default function MapScreen() {
               </View>
               <TouchableOpacity
                 onPress={dismissNearby}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Close nearby places"
               >
                 <Ionicons name="close-circle" size={22} color={colors.ink3} />
               </TouchableOpacity>
@@ -908,6 +1058,9 @@ export default function MapScreen() {
                   <TouchableOpacity
                     style={styles.nearbyPlaceGo}
                     activeOpacity={0.85}
+                    hitSlop={12}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Get routes to ${place.displayName.text}`}
                     onPress={() =>
                       router.navigate({
                         pathname: "/(tabs)/routes",
@@ -975,6 +1128,8 @@ export default function MapScreen() {
                     key={item.categoryCode}
                     style={styles.quickChip}
                     activeOpacity={0.8}
+                    accessibilityRole="button"
+                    accessibilityLabel={`Routes to ${item.categoryName}`}
                     onPress={() => {
                       if (item.latitude == null || item.longitude == null) return;
                       const coord = {
@@ -1021,6 +1176,8 @@ export default function MapScreen() {
                 style={styles.quickChip}
                 activeOpacity={0.8}
                 onPress={() => setShowSaveModal(true)}
+                accessibilityRole="button"
+                accessibilityLabel="Add a saved place"
               >
                 <View
                   style={[
@@ -1049,7 +1206,13 @@ export default function MapScreen() {
               keyboardShouldPersistTaps="handled"
             >
               {nearbyTransitStops.length === 0 ? (
-                <Text style={styles.nearbyStopsEmpty}>No active stops nearby.</Text>
+                <Text style={styles.nearbyStopsEmpty}>
+                  {!userLocation
+                    ? hasPermission
+                      ? "Finding your location…"
+                      : "Location unavailable — turn on location to see nearby stops."
+                    : "No active stops nearby."}
+                </Text>
               ) : (
                 nearbyTransitStops.map((stop, i) => {
                   const isCTrain = stop.stop_name?.toLowerCase().includes("station") ?? false;
@@ -1153,10 +1316,75 @@ function makeStyles(t: AppTheme) {
       shadowRadius: 8,
       elevation: 6,
     },
-    errorBanner: {
+    topOverlay: {
       position: "absolute",
-      top: 16,
-      alignSelf: "center",
+      alignItems: "center",
+      gap: 8,
+    },
+    topPillRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "center",
+      gap: 8,
+      flexWrap: "wrap",
+    },
+    livePill: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 6,
+      backgroundColor: colors.card,
+      borderRadius: radii.pill,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      borderWidth: 1,
+      borderColor: colors.border,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    livePillText: {
+      ...typography.caption,
+      color: colors.ink2,
+    },
+    alertChip: {
+      backgroundColor: semantic.warningBg,
+      borderColor: semantic.warning,
+      borderWidth: 1,
+      borderRadius: radii.pill,
+      paddingHorizontal: 12,
+      paddingVertical: 6,
+      shadowColor: semantic.shadow,
+      shadowOffset: { width: 0, height: 2 },
+      shadowOpacity: 0.1,
+      shadowRadius: 6,
+      elevation: 4,
+    },
+    alertChipText: {
+      ...typography.captionStrong,
+      color: semantic.warningInk,
+    },
+    alertsModalRoot: { flex: 1, justifyContent: "flex-end" },
+    alertsSheet: {
+      backgroundColor: colors.card,
+      borderTopLeftRadius: radii.sheet,
+      borderTopRightRadius: radii.sheet,
+      paddingHorizontal: spacing.screen,
+      paddingTop: spacing.card,
+      maxHeight: "75%",
+    },
+    alertsHeader: {
+      flexDirection: "row",
+      alignItems: "center",
+      justifyContent: "space-between",
+      marginBottom: spacing.element,
+    },
+    alertsTitle: {
+      ...typography.subtitleStrong,
+      color: colors.ink,
+    },
+    errorBanner: {
       flexDirection: "row",
       alignItems: "center",
       gap: 6,

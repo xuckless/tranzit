@@ -55,7 +55,8 @@ export const SearchBar: React.FC<Props> = ({
       {value.length > 0 && (
         <TouchableOpacity
           onPress={onClear}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={12}
+          accessibilityRole="button"
           accessibilityLabel="Clear search"
         >
           <Ionicons name="close-circle" size={18} color={colors.ink2} />

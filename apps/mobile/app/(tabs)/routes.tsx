@@ -7,6 +7,7 @@ import {
     TextInput,
     ActivityIndicator,
     Keyboard,
+    Linking,
 } from "react-native";
 import {
     Map,
@@ -45,6 +46,8 @@ import { stashPlannedRoute } from "@/lib/preRoutes";
 import { saveActiveTrip } from "@/lib/activeTrip";
 import { ROUTE_SAVE_URL } from "@/lib/config";
 import { getAccessToken } from "@/lib/supabase";
+import { friendlyErrorMessage } from "@/lib/middleware";
+import AlertBanner from "@/components/AlertBanner";
 import { groupRoutes, routeUsesTrain, routeWalkDistance } from "@/lib/routeRanking";
 import type { Route, RouteStop, SearchSuggestion } from "@/types/places";
 import HorizontalView from "@/components/horizontalView";
@@ -58,6 +61,33 @@ interface RouteEndpoint {
     placeId?: string;
     lat: number;
     lng: number;
+}
+
+/** Same place? Matches on Place ID when both have one, else on ~1m coordinates. */
+function sameEndpoint(
+    a: { lat: number; lng: number; placeId?: string } | null | undefined,
+    b: { lat: number; lng: number; placeId?: string } | null | undefined,
+): boolean {
+    if (!a || !b) return false;
+    if (a.placeId && b.placeId) return a.placeId === b.placeId;
+    return Math.abs(a.lat - b.lat) < 1e-5 && Math.abs(a.lng - b.lng) < 1e-5;
+}
+
+function endpointKey(e: { lat: number; lng: number } | null | undefined): string {
+    return e ? `${e.lat.toFixed(5)},${e.lng.toFixed(5)}` : "-";
+}
+
+/**
+ * Drop cached routes so the focus-restore can't resurrect them. While a trip is
+ * live, Commute reads the selected route + destination from the store, so those
+ * are left alone.
+ */
+function clearRouteCache() {
+    routeStore.setRoutes([]);
+    if (!routeStore.getTripSession()) {
+        routeStore.setSelectedRoute(null);
+        routeStore.setDestination(null);
+    }
 }
 
 // ─── Screen ───────────────────────────────────────────────────────────────────
@@ -93,6 +123,10 @@ export default function RouteScreen() {
     } | null>(null);
     const [origin, setOrigin] = useState<RouteEndpoint | null>(null);
     const [destination, setDestination] = useState<RouteEndpoint | null>(null);
+    const destinationRef = useRef<RouteEndpoint | null>(null);
+    useEffect(() => {
+        destinationRef.current = destination;
+    }, [destination]);
     const [originLabel, setOriginLabel] = useState("Current Location");
     const [destinationLabel, setDestinationLabel] = useState("");
     const [focusedField, setFocusedField] = useState<
@@ -106,6 +140,14 @@ export default function RouteScreen() {
     const [activeFilter, setActiveFilter] = useState<string>("All");
     const [isStarting, setIsStarting] = useState(false);
     const [startError, setStartError] = useState<string | null>(null);
+    // origin|destination key of the last completed search; "No routes" only
+    // shows when it matches the current endpoints.
+    const [searchedKey, setSearchedKey] = useState<string | null>(null);
+    const [locationStatus, setLocationStatus] = useState<
+        "pending" | "granted" | "denied" | "unavailable"
+    >("pending");
+    // Shown when Find Routes can't resolve an origin (location denied/unavailable).
+    const [originPrompt, setOriginPrompt] = useState<string | null>(null);
 
     const originSearch = useDestinationSearch(gpsLocation);
     const destinationSearch = useDestinationSearch(gpsLocation);
@@ -119,18 +161,30 @@ export default function RouteScreen() {
     // ── Location ─────────────────────────────────────────────────────────────────
     useEffect(() => {
         (async () => {
-            const { status } =
-                await Location.requestForegroundPermissionsAsync();
-            if (status !== "granted") return;
-            const { coords } = await Location.getCurrentPositionAsync({
-                accuracy: Location.Accuracy.Balanced,
-            });
-            const loc = {
-                latitude: coords.latitude,
-                longitude: coords.longitude,
-            };
-            setGpsLocation(loc);
-            setOrigin({ lat: coords.latitude, lng: coords.longitude });
+            try {
+                const { status } =
+                    await Location.requestForegroundPermissionsAsync();
+                if (status !== "granted") {
+                    setLocationStatus("denied");
+                    return;
+                }
+                const { coords } = await Location.getCurrentPositionAsync({
+                    accuracy: Location.Accuracy.Balanced,
+                });
+                const loc = {
+                    latitude: coords.latitude,
+                    longitude: coords.longitude,
+                };
+                setGpsLocation(loc);
+                setLocationStatus("granted");
+                // Don't clobber an origin the user (or a restore) already set.
+                setOrigin(
+                    (prev) => prev ?? { lat: coords.latitude, lng: coords.longitude },
+                );
+            } catch (e) {
+                console.warn("[routes] location unavailable:", e);
+                setLocationStatus("unavailable");
+            }
         })();
     }, []);
 
@@ -141,13 +195,31 @@ export default function RouteScreen() {
             const cached = routeStore.getRoutes();
             if (cached.length === 0) return;
 
+            // Only restore results that belong to the destination we're showing:
+            // the one passed in from Map, else the one already on screen.
+            const cachedDest = routeStore.getDestination();
+            const paramDest =
+                destinationLat && destinationLng
+                    ? {
+                          lat: parseFloat(destinationLat),
+                          lng: parseFloat(destinationLng),
+                          placeId: destinationId,
+                      }
+                    : null;
+            const wanted = paramDest ?? destination;
+            if (!cachedDest || (wanted && !sameEndpoint(wanted, cachedDest))) {
+                return;
+            }
+
             setRoutes(cached);
             const cachedSelected =
                 routeStore.getSelectedRoute() ?? cached[0] ?? null;
             setSelectedRoute(cachedSelected);
 
-            const cachedDest = routeStore.getDestination();
             const cachedOrigin = routeStore.getOrigin();
+            setSearchedKey(
+                `${endpointKey(cachedOrigin)}|${endpointKey(cachedDest)}`,
+            );
             if (cachedDest) {
                 setDestinationLabel(cachedDest.label);
                 setDestination({
@@ -164,23 +236,32 @@ export default function RouteScreen() {
                     placeId: cachedOrigin.placeId,
                 });
             }
-        }, [routes.length]),
+            // eslint-disable-next-line react-hooks/exhaustive-deps
+        }, [routes.length, destinationId, destinationLat, destinationLng]),
     );
 
     useEffect(() => {
-        if (
-            !destinationId ||
-            !destinationLat ||
-            !destinationLng ||
-            !destNameParam
-        )
-            return;
-        setDestination({
-            placeId: destinationId,
+        // destinationId may be "" (saved places without a Google Place ID) —
+        // OTP only needs coordinates.
+        if (!destinationLat || !destinationLng || !destNameParam) return;
+        const next = {
+            placeId: destinationId || undefined,
             lat: parseFloat(destinationLat),
             lng: parseFloat(destinationLng),
-        });
+        };
         setDestinationLabel(destNameParam);
+        // A new destination from Map invalidates whatever is on screen and in
+        // the store; keep results only if it's the same place.
+        if (sameEndpoint(destinationRef.current, next)) return;
+        routeAbortRef.current?.abort();
+        setRoutes([]);
+        setSelectedRoute(null);
+        setRouteError(null);
+        setIsLoadingRoutes(false);
+        setActiveFilter("All");
+        setSearchedKey(null);
+        if (!sameEndpoint(routeStore.getDestination(), next)) clearRouteCache();
+        setDestination(next);
     }, [destinationId, destinationLat, destinationLng, destNameParam]);
 
     useEffect(() => {
@@ -188,6 +269,11 @@ export default function RouteScreen() {
             routeAbortRef.current?.abort();
         };
     }, []);
+
+    // Once an origin resolves (GPS fix or picked suggestion), drop the prompt.
+    useEffect(() => {
+        if (origin || gpsLocation) setOriginPrompt(null);
+    }, [origin, gpsLocation]);
 
     useEffect(() => {
         if (!destination) {
@@ -205,7 +291,24 @@ export default function RouteScreen() {
             (gpsLocation
                 ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
                 : null);
-        if (!effectiveOrigin || !destination) return;
+        if (!destination) return;
+        if (!effectiveOrigin) {
+            Keyboard.dismiss();
+            setFocusedField(null);
+            const typed =
+                originLabel.trim() && originLabel !== "Current Location";
+            setOriginPrompt(
+                typed
+                    ? "Pick your starting point from the suggestions."
+                    : locationStatus === "denied"
+                      ? "Location access is off. Turn it on in Settings, or type a starting point."
+                      : locationStatus === "pending"
+                        ? "Still finding your location — try again in a moment, or type a starting point."
+                        : "Your location is unavailable. Type a starting point instead.",
+            );
+            return;
+        }
+        setOriginPrompt(null);
 
         routeAbortRef.current?.abort();
         const ctrl = new AbortController();
@@ -216,8 +319,10 @@ export default function RouteScreen() {
         setRoutes([]);
         setSelectedRoute(null);
         setActiveFilter("All");
+        setSearchedKey(null);
         Keyboard.dismiss();
         setFocusedField(null);
+        const key = `${endpointKey(effectiveOrigin)}|${endpointKey(destination)}`;
 
         // ── Routing engine select ────────────────────────────────────────────
         // OTP (active): plans from coordinates, no Place ID required. The fetched
@@ -250,6 +355,7 @@ export default function RouteScreen() {
                 const firstRoute = fetchedRoutes[0] ?? null;
                 setSelectedRoute(firstRoute);
                 setIsLoadingRoutes(false);
+                setSearchedKey(key);
 
                 routeStore.setRoutes(fetchedRoutes);
                 routeStore.setSelectedRoute(firstRoute);
@@ -276,13 +382,15 @@ export default function RouteScreen() {
                         Math.max(...lats),
                     ];
                     setTimeout(() => {
+                        // Keep the route clear of the search card on top and the
+                        // route sheet at the bottom, which both overlay the map.
                         cameraRef.current?.fitBounds(bounds, {
                             duration: 800,
                             padding: {
-                                top: 50,
-                                right: 50,
-                                bottom: 50,
-                                left: 50,
+                                top: 210,
+                                right: 40,
+                                bottom: 380,
+                                left: 40,
                             },
                         });
                     }, 400);
@@ -290,14 +398,29 @@ export default function RouteScreen() {
             })
             .catch((err: unknown) => {
                 if (err instanceof Error && err.name === "AbortError") return;
-                const msg =
-                    err instanceof Error
-                        ? err.message
-                        : "Failed to load routes";
-                setRouteError(msg);
+                console.warn("[routes] route fetch failed:", err);
+                setRouteError(friendlyErrorMessage(err, "routes"));
                 setIsLoadingRoutes(false);
+                setSearchedKey(key);
             });
-    }, [origin, gpsLocation, destination, originLabel, destinationLabel]);
+    }, [
+        origin,
+        gpsLocation,
+        destination,
+        originLabel,
+        destinationLabel,
+        locationStatus,
+    ]);
+
+    const currentSearchKey = useMemo(() => {
+        const eo =
+            origin ??
+            (gpsLocation
+                ? { lat: gpsLocation.latitude, lng: gpsLocation.longitude }
+                : null);
+        return `${endpointKey(eo)}|${endpointKey(destination)}`;
+    }, [origin, gpsLocation, destination]);
+    const hasSearched = searchedKey !== null && searchedKey === currentSearchKey;
 
     // ── Polyline GeoJSON ──────────────────────────────────────────────────────────
     // One LineString per *leg* so walking legs can render dotted and transit legs
@@ -489,6 +612,26 @@ export default function RouteScreen() {
         return routeGroups.get(activeFilter) ?? [];
     }, [activeFilter, routeGroups, overallFastest, routeMeta]);
 
+    // Lines ridden by the selected + visible itineraries, for service alerts.
+    const alertRouteIds = useMemo(() => {
+        const ids = new Set<string>();
+        const list = selectedRoute
+            ? [selectedRoute, ...filteredRoutes]
+            : filteredRoutes;
+        for (const r of list) {
+            for (const leg of r.otpItinerary?.legs ?? []) {
+                if (leg.mode !== "WALK" && leg.route_short_name)
+                    ids.add(leg.route_short_name);
+            }
+            for (const l of r.legs ?? [])
+                for (const st of l.steps ?? []) {
+                    const n = st.transitDetails?.transitLine?.nameShort;
+                    if (st.travelMode === "TRANSIT" && n) ids.add(n);
+                }
+        }
+        return [...ids].sort();
+    }, [selectedRoute, filteredRoutes]);
+
     // ── Search handlers ───────────────────────────────────────────────────────────
     // Editing either endpoint invalidates any routes on screen. Clearing the
     // routeStore too is load-bearing: the focus-restore effect above would
@@ -499,12 +642,15 @@ export default function RouteScreen() {
         setSelectedRoute(null);
         setRouteError(null);
         setActiveFilter("All");
-        routeStore.setRoutes([]);
+        clearRouteCache();
     }, [routes.length, selectedRoute, routeError]);
 
     const handleOriginChange = useCallback(
         (text: string) => {
             setOriginLabel(text);
+            // Typed text no longer matches the picked place's coordinates.
+            setOrigin(null);
+            setOriginPrompt(null);
             clearStaleResults();
             if (text.trim()) originSearch.search(text);
             else originSearch.reset();
@@ -518,10 +664,11 @@ export default function RouteScreen() {
             originSearch.reset();
             Keyboard.dismiss();
             setOriginLabel(suggestion.mainText);
+            setOriginPrompt(null);
             setRoutes([]);
             setSelectedRoute(null);
             setRouteError(null);
-            routeStore.setRoutes([]);
+            clearRouteCache();
             if (suggestion.location) {
                 setOrigin({
                     placeId: suggestion.placeId,
@@ -539,7 +686,7 @@ export default function RouteScreen() {
                         lng: details.location.longitude,
                     });
                 } catch (e) {
-                    console.error("[routes] origin details fetch failed:", e);
+                    console.warn("[routes] origin details fetch failed:", e);
                     setRouteError("Could not load origin. Please try again.");
                 }
             }
@@ -550,6 +697,9 @@ export default function RouteScreen() {
     const handleDestChange = useCallback(
         (text: string) => {
             setDestinationLabel(text);
+            // Typed text no longer matches the picked suggestion's coordinates;
+            // Find Routes stays disabled until a suggestion is picked again.
+            setDestination(null);
             clearStaleResults();
             if (text.trim()) destinationSearch.search(text);
             else destinationSearch.reset();
@@ -566,7 +716,7 @@ export default function RouteScreen() {
             setRoutes([]);
             setSelectedRoute(null);
             setRouteError(null);
-            routeStore.setRoutes([]);
+            clearRouteCache();
             let coords: { lat: number; lng: number } | null = null;
             if (suggestion.location) {
                 coords = {
@@ -585,7 +735,7 @@ export default function RouteScreen() {
                     };
                     setDestination({ placeId: suggestion.placeId, ...coords });
                 } catch (e) {
-                    console.error(
+                    console.warn(
                         "[routes] destination details fetch failed:",
                         e,
                     );
@@ -625,7 +775,7 @@ export default function RouteScreen() {
         setRoutes([]);
         setSelectedRoute(null);
         setRouteError(null);
-        routeStore.setRoutes([]);
+        clearRouteCache();
     }, [gpsLocation, originSearch]);
 
     const dismissSearch = useCallback(() => {
@@ -1059,14 +1209,11 @@ export default function RouteScreen() {
                                         setRoutes([]);
                                         setSelectedRoute(null);
                                         setRouteError(null);
-                                        routeStore.setRoutes([]);
+                                        clearRouteCache();
                                     }}
-                                    hitSlop={{
-                                        top: 8,
-                                        bottom: 8,
-                                        left: 8,
-                                        right: 8,
-                                    }}
+                                    hitSlop={12}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Clear origin, use current location"
                                 >
                                     <Ionicons
                                         name="close-circle"
@@ -1117,14 +1264,11 @@ export default function RouteScreen() {
                                     setRoutes([]);
                                     setSelectedRoute(null);
                                     setRouteError(null);
-                                    routeStore.setRoutes([]);
+                                    clearRouteCache();
                                 }}
-                                hitSlop={{
-                                    top: 8,
-                                    bottom: 8,
-                                    left: 8,
-                                    right: 8,
-                                }}
+                                hitSlop={12}
+                                accessibilityRole="button"
+                                accessibilityLabel="Clear destination"
                             >
                                 <Ionicons
                                     name="close-circle"
@@ -1152,6 +1296,14 @@ export default function RouteScreen() {
                                 onPress={handleFindRoutes}
                                 disabled={!destination}
                                 activeOpacity={0.8}
+                                accessibilityRole="button"
+                                accessibilityLabel="Find routes"
+                                accessibilityState={{ disabled: !destination }}
+                                accessibilityHint={
+                                    destination
+                                        ? undefined
+                                        : "Pick a destination from the suggestions first"
+                                }
                             >
                                 <Ionicons
                                     name="search"
@@ -1180,6 +1332,9 @@ export default function RouteScreen() {
                     style={styles.cancelBtn}
                     onPress={dismissSearch}
                     activeOpacity={0.75}
+                    accessibilityRole="button"
+                    accessibilityLabel="Cancel route search"
+                    hitSlop={12}
                 >
                     <Text style={styles.cancelText}>Cancel</Text>
                 </TouchableOpacity>
@@ -1217,6 +1372,14 @@ export default function RouteScreen() {
                     {destinationSearch.status === "empty" && (
                         <Text style={styles.emptyText}>No results found</Text>
                     )}
+                    {destinationSearch.status === "error" && (
+                        <DestinationSuggestionsList
+                            suggestions={[]}
+                            onSelect={handleSelectDest}
+                            error
+                            onRetry={destinationSearch.retry}
+                        />
+                    )}
                 </View>
             ) : focusedField === "origin" ? (
                 <View
@@ -1230,6 +1393,8 @@ export default function RouteScreen() {
                             style={styles.currentLocRow}
                             onPress={useCurrentLocationOrigin}
                             activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel="Use current location as origin"
                         >
                             <AntDesign
                                 name="aim"
@@ -1264,6 +1429,14 @@ export default function RouteScreen() {
                     {originSearch.status === "empty" && (
                         <Text style={styles.emptyText}>No results found</Text>
                     )}
+                    {originSearch.status === "error" && (
+                        <DestinationSuggestionsList
+                            suggestions={[]}
+                            onSelect={handleSelectOrigin}
+                            error
+                            onRetry={originSearch.retry}
+                        />
+                    )}
                 </View>
             ) : (
                 <View style={styles.routeArea} pointerEvents="box-none">
@@ -1279,7 +1452,52 @@ export default function RouteScreen() {
                         </View>
                     )}
 
-                    {!isLoadingRoutes && routeError && (
+                    {!isLoadingRoutes && originPrompt && (
+                        <View style={styles.centerState} pointerEvents="box-none">
+                            <Ionicons
+                                name="locate-outline"
+                                size={36}
+                                color={colors.ink2}
+                            />
+                            <Text style={styles.stateText}>
+                                Where are you starting from?
+                            </Text>
+                            <Text style={styles.stateSubText}>
+                                {originPrompt}
+                            </Text>
+                            <View style={styles.stateActions}>
+                                {locationStatus === "denied" && (
+                                    <TouchableOpacity
+                                        style={styles.retryBtn}
+                                        onPress={() => {
+                                            Linking.openSettings().catch(() => {});
+                                        }}
+                                        accessibilityRole="button"
+                                        accessibilityLabel="Open Settings to allow location access"
+                                    >
+                                        <Text style={styles.retryBtnText}>
+                                            Open Settings
+                                        </Text>
+                                    </TouchableOpacity>
+                                )}
+                                <TouchableOpacity
+                                    style={styles.secondaryBtn}
+                                    onPress={() => {
+                                        setOriginPrompt(null);
+                                        originInputRef.current?.focus();
+                                    }}
+                                    accessibilityRole="button"
+                                    accessibilityLabel="Type a starting point"
+                                >
+                                    <Text style={styles.secondaryBtnText}>
+                                        Type a starting point
+                                    </Text>
+                                </TouchableOpacity>
+                            </View>
+                        </View>
+                    )}
+
+                    {!isLoadingRoutes && !originPrompt && routeError && (
                         <View style={styles.centerState} pointerEvents="box-none">
                             <Ionicons
                                 name="warning-outline"
@@ -1292,23 +1510,58 @@ export default function RouteScreen() {
                             <Text style={styles.stateSubText}>
                                 {routeError}
                             </Text>
+                            <TouchableOpacity
+                                style={styles.retryBtn}
+                                onPress={handleFindRoutes}
+                                accessibilityRole="button"
+                                accessibilityLabel="Retry finding routes"
+                            >
+                                <Text style={styles.retryBtnText}>Retry</Text>
+                            </TouchableOpacity>
                         </View>
                     )}
 
-                    {!isLoadingRoutes && !routeError && routes.length === 0 && (
-                        <View style={styles.centerState} pointerEvents="box-none">
-                            <Ionicons
-                                name="navigate-outline"
-                                size={36}
-                                color={colors.ink2}
-                            />
-                            <Text style={styles.stateText}>
-                                {destination
-                                    ? "No routes found"
-                                    : "Set a destination to see routes"}
-                            </Text>
-                        </View>
-                    )}
+                    {!isLoadingRoutes &&
+                        !originPrompt &&
+                        !routeError &&
+                        routes.length === 0 && (
+                            <View
+                                style={styles.centerState}
+                                pointerEvents="box-none"
+                            >
+                                <Ionicons
+                                    name="navigate-outline"
+                                    size={36}
+                                    color={colors.ink2}
+                                />
+                                <Text style={styles.stateText}>
+                                    {!destination
+                                        ? "Set a destination to see routes"
+                                        : hasSearched
+                                          ? "No routes for this time"
+                                          : "Tap Find Routes to see your options"}
+                                </Text>
+                                {destination && hasSearched && (
+                                    <>
+                                        <Text style={styles.stateSubText}>
+                                            Transit may not be running right now,
+                                            or the trip is out of range. Try again
+                                            later or pick a different place.
+                                        </Text>
+                                        <TouchableOpacity
+                                            style={styles.retryBtn}
+                                            onPress={handleFindRoutes}
+                                            accessibilityRole="button"
+                                            accessibilityLabel="Search routes again"
+                                        >
+                                            <Text style={styles.retryBtnText}>
+                                                Search again
+                                            </Text>
+                                        </TouchableOpacity>
+                                    </>
+                                )}
+                            </View>
+                        )}
 
                 </View>
             )}
@@ -1353,13 +1606,21 @@ export default function RouteScreen() {
                                         ]}
                                         onPress={() => setActiveFilter(key)}
                                         activeOpacity={0.8}
+                                        hitSlop={12}
+                                        accessibilityRole="button"
+                                        accessibilityLabel={
+                                            key === "All"
+                                                ? "Show all route options"
+                                                : `Show ${key} routes${timeLabel ? `, fastest ${timeLabel}` : ""}`
+                                        }
+                                        accessibilityState={{ selected: isActive }}
                                     >
                                         <FontAwesome5
                                             name={icon as any}
                                             size={12}
                                             color={
                                                 isActive
-                                                    ? colors.selected
+                                                    ? colors.onPrimary
                                                     : colors.ink2
                                             }
                                         />
@@ -1388,6 +1649,16 @@ export default function RouteScreen() {
                             })}
                         </HorizontalView>
 
+                        {alertRouteIds.length > 0 && (
+                            <View
+                                style={{
+                                    paddingHorizontal: spacing.screen,
+                                    paddingBottom: 6,
+                                }}
+                            >
+                                <AlertBanner routeIds={alertRouteIds} compact />
+                            </View>
+                        )}
                         {filteredRoutes.length > 0 ? (
                             <RoutePickerSheet
                                 routes={filteredRoutes}
@@ -1528,6 +1799,35 @@ function makeStyles(t: AppTheme) {
             textAlign: "center",
             maxWidth: 260,
         },
+        stateActions: {
+            flexDirection: "row",
+            gap: spacing.element,
+            marginTop: 4,
+            flexWrap: "wrap",
+            justifyContent: "center",
+        },
+        retryBtn: {
+            backgroundColor: colors.primary,
+            borderRadius: radii.pill,
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+            marginTop: 4,
+        },
+        retryBtnText: {
+            ...typography.bodySmallStrong,
+            color: colors.onPrimary,
+        },
+        secondaryBtn: {
+            backgroundColor: colors.surface2,
+            borderRadius: radii.pill,
+            paddingHorizontal: 18,
+            paddingVertical: 10,
+            marginTop: 4,
+        },
+        secondaryBtnText: {
+            ...typography.bodySmallStrong,
+            color: colors.primary,
+        },
 
         modeChip: {
             backgroundColor: colors.surface2,
@@ -1538,14 +1838,14 @@ function makeStyles(t: AppTheme) {
             alignItems: "center",
             gap: 4,
         },
-        modeChipActive: { backgroundColor: colors.secondary },
+        modeChipActive: { backgroundColor: colors.primary },
         modeChipText: {
             ...typography.bodyStrong,
             color: colors.ink,
         },
-        modeChipTextActive: { color: colors.selected },
+        modeChipTextActive: { color: colors.onPrimary },
         modeChipDist: { ...typography.caption, color: colors.ink3 },
-        modeChipDistActive: { color: colors.selected },
+        modeChipDistActive: { color: colors.onPrimary, opacity: 0.85 },
 
         sheetContent: { flex: 1 },
         footerWrap: {

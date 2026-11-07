@@ -9,6 +9,7 @@ import type {
 } from "../types/places";
 import { parseRouteResponse } from "@/lib/routeParser";
 import { authHeader } from "@/lib/supabase";
+import { fetchWithTimeout, httpError } from "@/lib/middleware";
 
 import { ROUTE_SERVICE_URL as BASE_URL } from "@/lib/config";
 
@@ -22,9 +23,9 @@ export const TranzitApiService = {
     if (userLocation) {
       url += `&lat=${userLocation.latitude}&lng=${userLocation.longitude}`;
     }
-    const res = await fetch(url, { headers: await authHeader(), signal });
+    const res = await fetchWithTimeout(url, { headers: await authHeader(), signal });
     if (res.status === 404) return [];
-    if (!res.ok) throw new Error(`Search failed: ${res.status}`);
+    if (!res.ok) throw httpError("Search failed", res.status);
     const data: PlacesSearchResponse = await res.json();
     return data.places ?? [];
   },
@@ -33,13 +34,13 @@ export const TranzitApiService = {
     placeId: string,
     signal?: AbortSignal,
   ): Promise<PlaceDetails> {
-    const res = await fetch(`${BASE_URL}/details`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/details`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify({ place_id: placeId }),
       signal,
     });
-    if (!res.ok) throw new Error(`Details failed: ${res.status}`);
+    if (!res.ok) throw httpError("Details failed", res.status);
     return res.json() as Promise<PlaceDetails>;
   },
 
@@ -49,14 +50,14 @@ export const TranzitApiService = {
     request: RouteRequest,
     signal?: AbortSignal,
   ): Promise<RouteResponse> {
-    const res = await fetch(`${BASE_URL}/route`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/route`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify(request),
       signal,
     });
     if (res.status === 204) return { routes: [] }; // no transit route exists
-    if (!res.ok) throw new Error(`Route failed: ${res.status}`);
+    if (!res.ok) throw httpError("Route failed", res.status);
     const data = await res.json();
     return { routes: parseRouteResponse(data) };
   },
@@ -68,14 +69,14 @@ export const TranzitApiService = {
     request: OTPRouteRequest,
     signal?: AbortSignal,
   ): Promise<RouteResponse> {
-    const res = await fetch(`${BASE_URL}/route/otp`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/route/otp`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...(await authHeader()) },
       body: JSON.stringify(request),
       signal,
     });
     if (res.status === 204) return { routes: [] }; // no itinerary found
-    if (!res.ok) throw new Error(`OTP route failed: ${res.status}`);
+    if (!res.ok) throw httpError("OTP route failed", res.status);
     const data = await res.json();
     return { routes: parseRouteResponse(data) };
   },
@@ -84,7 +85,7 @@ export const TranzitApiService = {
     query: string,
     signal?: AbortSignal,
   ): Promise<AutocompletePrediction[]> {
-    const res = await fetch(
+    const res = await fetchWithTimeout(
       `${BASE_URL}/autocomplete/json?input=${encodeURIComponent(query)}`,
       { headers: await authHeader(), signal },
     );
@@ -98,12 +99,12 @@ export const TranzitApiService = {
     lng: number,
     signal?: AbortSignal,
   ): Promise<PlaceResult[]> {
-    const res = await fetch(`${BASE_URL}/searchnearby?lat=${lat}&lng=${lng}`, {
+    const res = await fetchWithTimeout(`${BASE_URL}/searchnearby?lat=${lat}&lng=${lng}`, {
       headers: await authHeader(),
       signal,
     });
     if (res.status === 404) return [];
-    if (!res.ok) throw new Error(`Nearby search failed: ${res.status}`);
+    if (!res.ok) throw httpError("Nearby search failed", res.status);
     const data = await res.json();
     return data.places ?? [];
   },

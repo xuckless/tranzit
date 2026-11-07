@@ -38,15 +38,44 @@ export function routeGroupKey(r: Route): string {
 }
 
 /**
- * When the route reaches the destination, as a Unix epoch (seconds). Uses the
- * last transit leg's arrival time; walk-only/missing-time routes fall back to
- * `nowEpoch + duration` so they still sort sensibly.
+ * When the route reaches the destination, as a Unix epoch (seconds) — the
+ * itinerary's true end, including any final walk after alighting.
+ *
+ * 1. OTP: the itinerary's `end_time` (or its last leg's `end_time`).
+ * 2. Otherwise: the last transit step's arrival time plus the durations of
+ *    every step after it (the walk from the alighting stop).
+ * 3. Walk-only / missing times: `nowEpoch + duration`.
  */
 export function routeArrivalEpoch(r: Route, nowEpoch: number): number {
-  const last = isoToEpoch(
-    transitSteps(r).at(-1)?.transitDetails?.stopDetails?.arrivalTime,
-  );
-  return last ?? nowEpoch + parseDurationSecs(r.duration);
+  const otp = r.otpItinerary;
+  if (otp) {
+    const end = isoToEpoch(otp.end_time) ?? isoToEpoch(otp.legs?.at(-1)?.end_time);
+    if (end != null) return end;
+  }
+
+  const steps = (r.legs ?? []).flatMap((l) => l.steps ?? []);
+  let lastTransitIdx = -1;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    if (steps[i].travelMode === "TRANSIT") {
+      lastTransitIdx = i;
+      break;
+    }
+  }
+  if (lastTransitIdx >= 0) {
+    const alight = isoToEpoch(
+      steps[lastTransitIdx].transitDetails?.stopDetails?.arrivalTime,
+    );
+    if (alight != null) {
+      const tail = steps
+        .slice(lastTransitIdx + 1)
+        .reduce(
+          (sum, s) => sum + parseDurationSecs(s.duration ?? s.staticDuration),
+          0,
+        );
+      return alight + tail;
+    }
+  }
+  return nowEpoch + parseDurationSecs(r.duration);
 }
 
 /**

@@ -42,7 +42,13 @@ function HeaderBar() {
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   return (
-    <View style={styles.headerContainer}>
+    <View
+      style={[
+        styles.headerContainer,
+        // Status bar / notch height + breathing room (min 20 when there's no inset).
+        { paddingTop: Math.max(insets.top, 20) + 10 },
+      ]}
+    >
       <View style={styles.headerLeft}>
         <TranzitLogoMark size={18} />
       </View>
@@ -50,6 +56,9 @@ function HeaderBar() {
       <TouchableOpacity
         style={styles.settingsButton}
         onPress={() => router.push("/settings")}
+        accessibilityRole="button"
+        accessibilityLabel="Settings"
+        hitSlop={12}
       >
         <Ionicons name="settings-outline" size={20} color={colors.onPrimary} />
       </TouchableOpacity>
@@ -61,6 +70,10 @@ export default function RootLayout() {
   const { theme } = useTheme();
   const { colors, typography, semantic, radii, spacing } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
+  const insets = useSafeAreaInsets();
+  // Home-indicator inset, or a small floor on devices with none (older
+  // iPhones, Android with 3-button nav).
+  const tabBarBottomPad = Math.max(insets.bottom, 8);
 
   // Hard auth gate: no tab is reachable until Supabase reports a session. Also
   // covers the top-level settings/add-trip stack routes, which are only
@@ -83,7 +96,12 @@ export default function RootLayout() {
         tabBarInactiveTintColor: colors.ink3,
         tabBarStyle: [
           styles.tabBar,
-          { backgroundColor: colors.card, borderTopColor: colors.divider },
+          {
+            backgroundColor: colors.card,
+            borderTopColor: colors.divider,
+            height: 56 + tabBarBottomPad,
+            paddingBottom: tabBarBottomPad,
+          },
         ],
         tabBarLabelStyle: styles.tabBarLabel,
         tabBarItemStyle: styles.tabBarItem,
@@ -183,7 +201,6 @@ function makeStyles(t: AppTheme) {
       flexDirection: "row",
       justifyContent: "space-between",
       alignItems: "center",
-      paddingTop: 60,
       paddingHorizontal: spacing.screen,
       paddingBottom: 10,
       backgroundColor: colors.surface,
@@ -218,8 +235,6 @@ function makeStyles(t: AppTheme) {
       backgroundColor: colors.card,
       borderTopWidth: 1,
       borderTopColor: colors.divider,
-      height: 68,
-      paddingBottom: 6,
       paddingHorizontal: 8,
       ...shadow.soft,
       shadowColor: semantic.shadowCardOverlay,

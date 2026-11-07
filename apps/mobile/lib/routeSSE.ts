@@ -93,7 +93,12 @@ function openStream(st: RouteStream): void {
   // react-native-sse reuses these headers on auto-reconnect — fine while the
   // middleware is log-first; revisit before it hard-enforces.
   void (async () => {
-    const headers = await authHeader();
+    let headers: Record<string, string> = {};
+    try {
+      headers = await authHeader();
+    } catch (e) {
+      console.warn("[routeSSE] auth header failed", e);
+    }
     if (st.refCount === 0 || st.es) {
       st.opening = false;
       return;
@@ -110,7 +115,13 @@ function openStream(st: RouteStream): void {
 
     es.addEventListener("snapshot", (e) => {
       if (!e.data) return;
-      const { data } = JSON.parse(e.data) as { data: RouteSSEStop[] };
+      let data: RouteSSEStop[];
+      try {
+        data = (JSON.parse(e.data) as { data: RouteSSEStop[] }).data ?? [];
+      } catch (err) {
+        console.warn("[routeSSE] bad snapshot", err);
+        return;
+      }
       st.stops.clear();
       for (const stop of data) st.stops.set(stop.stop_id, stop);
       st.dirty = true;
@@ -119,11 +130,18 @@ function openStream(st: RouteStream): void {
 
     es.addEventListener("update", (e) => {
       if (!e.data) return;
-      const { added, updated, removed } = JSON.parse(e.data) as {
+      let parsed: {
         added?: RouteSSEStop[];
         updated?: RouteSSEStop[];
         removed?: string[];
       };
+      try {
+        parsed = JSON.parse(e.data);
+      } catch (err) {
+        console.warn("[routeSSE] bad update", err);
+        return;
+      }
+      const { added, updated, removed } = parsed;
       for (const id of removed ?? []) st.stops.delete(id);
       for (const s of [...(updated ?? []), ...(added ?? [])]) {
         st.stops.set(s.stop_id, s);

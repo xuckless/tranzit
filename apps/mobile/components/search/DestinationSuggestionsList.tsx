@@ -17,12 +17,17 @@ interface Props {
   onSelect: (suggestion: SearchSuggestion) => void;
   /** "recent" swaps the leading icon for a clock to mark search-history rows. */
   variant?: "default" | "recent";
+  /** Show a "Search unavailable" row (network failure) with an optional Retry. */
+  error?: boolean;
+  onRetry?: () => void;
 }
 
 export const DestinationSuggestionsList: React.FC<Props> = ({
   suggestions,
   onSelect,
   variant = "default",
+  error = false,
+  onRetry,
 }) => {
   const { theme } = useTheme();
   const { colors, typography, semantic } = theme;
@@ -71,6 +76,27 @@ export const DestinationSuggestionsList: React.FC<Props> = ({
     [onSelect, variant, suggestions.length, styles, colors.ink, colors.ink3, semantic.primaryChipBlue],
   );
 
+  if (error && suggestions.length === 0) {
+    return (
+      <View style={[styles.list, styles.errorRow]} accessibilityLiveRegion="polite">
+        <Ionicons name="cloud-offline-outline" size={18} color={colors.ink3} />
+        <Text style={[styles.errorText, { color: colors.ink2 }]}>
+          Search unavailable — check your connection
+        </Text>
+        {onRetry ? (
+          <TouchableOpacity
+            onPress={onRetry}
+            accessibilityRole="button"
+            accessibilityLabel="Retry search"
+            hitSlop={12}
+          >
+            <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+    );
+  }
+
   return (
     <FlatList
       data={suggestions}
@@ -114,6 +140,15 @@ const makeStyles = (t: AppTheme) => {
       color: colors.ink2,
       marginTop: 2,
     },
+    errorRow: {
+      flexDirection: "row",
+      alignItems: "center",
+      gap: 10,
+      paddingVertical: 12,
+      paddingHorizontal: spacing.xs,
+    },
+    errorText: { ...typography.bodySmall, flex: 1 },
+    retryText: { ...typography.bodySmallStrong },
     divider: {
       height: 0.5,
       backgroundColor: colors.divider,
