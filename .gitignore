@@ -68,3 +68,6 @@ yarn-error.*
 .agents/
 skills-lock.json
 .DS_Store
+
+# --- local demo ---
+/demo/.stats.pid

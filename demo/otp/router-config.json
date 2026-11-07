@@ -1,0 +1,35 @@
+{
+  "routingDefaults": {
+    "numItineraries": 8,
+    "streetRoutingTimeout": "10s",
+    "transferSlack": "2m",
+    "itineraryFilters": {
+      "transitGeneralizedCostLimit": {
+        "costLimitFunction": "30m + 2.0 x",
+        "intervalRelaxFactor": 0.75
+      }
+    }
+  },
+  "updaters": [
+    {
+      "type": "stop-time-updater",
+      "feedId": "CT",
+      "frequency": "30s",
+      "fuzzyTripMatching": true,
+      "url": "http://rt-service:8765/gtfs-rt/trip-updates"
+    },
+    {
+      "type": "vehicle-positions",
+      "feedId": "CT",
+      "frequency": "30s",
+      "fuzzyTripMatching": true,
+      "url": "http://rt-feed:8780/vehicles.pb"
+    },
+    {
+      "type": "real-time-alerts",
+      "feedId": "CT",
+      "frequency": "1m",
+      "url": "http://rt-feed:8780/alerts.pb"
+    }
+  ]
+}
