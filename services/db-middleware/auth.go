@@ -75,6 +75,13 @@ func (v *jwksVerifier) Verify(_ context.Context, token string) (string, error) {
 	return sub, nil
 }
 
+// demoVerifier is the DEMO_USER_ID mode: every request on the public listener is
+// the one demo user, whatever token (if any) it carries. No Supabase is contacted.
+// Never set DEMO_USER_ID on a real deployment.
+type demoVerifier struct{ uid string }
+
+func (d demoVerifier) Verify(context.Context, string) (string, error) { return d.uid, nil }
+
 // ── request context ────────────────────────────────────────────────────────────
 
 type ctxKeyUser struct{}
@@ -121,6 +128,11 @@ func requireUserAuth(v Verifier, enforce bool, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/health" {
 			next.ServeHTTP(w, r)
+			return
+		}
+		if d, ok := v.(demoVerifier); ok {
+			// demo mode: authenticated as the demo user, token or not.
+			next.ServeHTTP(w, r.WithContext(withUserID(r.Context(), d.uid)))
 			return
 		}
 		token := bearerToken(r)

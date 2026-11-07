@@ -199,11 +199,13 @@ On connect, the server immediately pushes a full `STATE`. Then:
 
 ### Step 5 — End the trip
 
-Close the WebSocket, or:
 ```http
 DELETE /trips/9f3c…
 ```
-Either tears the session down. The trip can be closed anytime.
+ends the trip at any time. Closing the WebSocket does **not**: a dropped socket
+(network blip, app backgrounded or killed) leaves the session running for 15
+minutes (`SessionReattachGraceS`) so the client can reconnect to the same
+`ws_url` and send `RESUME`. After that window the session tears itself down.
 
 ### Step 6 — Let it drive (automatic rerouting)
 

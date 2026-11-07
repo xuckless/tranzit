@@ -14,21 +14,16 @@ type PlaceRequest struct {
 	Query string `json:"query"`
 }
 
+// PlaceResponse's elements share NearbyPlace's shape (id, formattedAddress,
+// displayName.text, location) — the same JSON either way.
 type PlaceResponse struct {
-	Places []struct {
-		ID               string `json:"id"`
-		FormattedAddress string `json:"formattedAddress"`
-		DisplayName      struct {
-			Text string `json:"text"`
-		} `json:"displayName"`
-		Location struct {
-			Latitude  float64 `json:"latitude"`
-			Longitude float64 `json:"longitude"`
-		} `json:"location"`
-	} `json:"places"`
+	Places []NearbyPlace `json:"places"`
 }
 
 func FetchPlace(query string) (*PlaceResponse, error) {
+	if !useGoogle() {
+		return photonFetchPlace(query)
+	}
 	apiKey := os.Getenv("GMAPS_API_KEY")
 	url := "https://places.googleapis.com/v1/places:searchText"
 

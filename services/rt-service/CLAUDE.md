@@ -29,7 +29,7 @@
 | `trip_updates` | `trip_id` PK, `route_id`, `timestamp` | One row per active trip; `timestamp` = feed header timestamp |
 | `stop_time_updates` | `(trip_id, stop_sequence)` PK | See delay columns below |
 | `vehicle_positions` | `vehicle_id` PK | `bearing` and `speed` are computed locally from consecutive positions; `route_id` is imputed from `trip_updates` when absent from the feed |
-| `alerts` | `alert_id` PK | Service alerts from GTFS-RT alerts feed |
+| `alerts` | `alert_id` PK | Service alerts from GTFS-RT alerts feed; `informed_route_id` / `informed_stop_id` hold every distinct informed entity, comma-joined |
 | `trip_stop_delays` | `(trip_id, stop_sequence)` PK | Reserved for geospatial state machine (not yet populated) |
 
 ### Delay columns in `stop_time_updates`
@@ -50,7 +50,10 @@ The feed self-corrects predicted times as the bus approaches, so using `arrival_
 | Variable | Required | Notes |
 |---|---|---|
 | `SUPABASE_DIRECT_CONNECTION_STRING` | Yes | Full Postgres DSN; used for both local and Supabase |
-| `APP_TOKEN` | No | Calgary Open Data app token; improves rate limits |
+| `APP_TOKEN` | No | Calgary Open Data app token; improves rate limits (header omitted when unset — Socrata serves unauthenticated at lower limits) |
+| `RT_VEHICLES_URL` / `RT_TRIPS_URL` / `RT_ALERTS_URL` | No | Override the GTFS-RT feed URLs (e.g. a local replay server); defaults in `config.go` |
+| `GTFS_STATIC_URL` | No | Override the static GTFS zip URL |
+| `STOPS_URL` / `ROUTES_URL` / `TRAIN_STATIONS_URL` | No | Override the Socrata SODA2 dataset URLs |
 | `PORT` | No | Overrides `wsPort` (8765); injected by Cloud Run |
 
 ## Running locally

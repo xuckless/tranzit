@@ -3,7 +3,7 @@ package main
 // userdb.go adds a SECOND, fully separate database: the tranzit-user-db Postgres
 // that lives privately on the tailnet. It does NOT touch the Supabase pool (`db`)
 // or any existing route — it stands up its own pgxpool (`userDB`) and serves the
-// 12 user-data tables under the /api/v1/user/ prefix:
+// 13 user-data tables under the /api/v1/user/ prefix:
 //
 //   GET    /api/v1/user/          → list user tables
 //   GET    /api/v1/user/{table}   → query a user table (same PostgREST-ish filters as /api/v1)
@@ -54,13 +54,15 @@ var userTables = map[string]struct{}{
 	"user_calendar":                   {},
 	"user_posts":                      {},
 	"user_friendships":                {},
+	"route_reports":                   {},
 }
 
 // userOwnedTables are the user-data tables whose every row belongs to one user via
 // the `user_id` column. On these, an end user may only touch their own rows: the
 // authenticated token `sub` is forced onto reads/deletes and required on upserts
-// (auth.go, AUTH.md). Service (mTLS) callers bypass this. Inherently-shared tables
-// (posts, user_posts, user_friendships) are intentionally excluded.
+// (ownership.go, AUTH.md). Service (mTLS) callers bypass this. user_friendships
+// (two parties) and posts (owned via its event) have their own rules in
+// ownership.go.
 var userOwnedTables = map[string]struct{}{
 	"user_info":                       {},
 	"user_defined_default_categories": {},
@@ -71,75 +73,75 @@ var userOwnedTables = map[string]struct{}{
 	"user_themes":                     {},
 	"user_history":                    {},
 	"user_calendar":                   {},
+	"user_posts":                      {},
+	"route_reports":                   {},
 }
 
-// scopeToOwner enforces row ownership on a read/delete query for user-owned tables.
-// It returns the (possibly user-scoped) query and ok=false if the request was
-// rejected (a response has already been written). Non-owned tables and service
-// callers pass through untouched. When enforcing, the owner's id is forced onto the
-// `user_id` filter (overriding any client value); in soft mode mismatches are only
-// logged so legitimate traffic is never altered before the flip.
+// ownerLookupsImpl is swapped in tests; production queries the user DB.
+var ownerLookupsImpl = dbOwnerLookups()
+
+// scopeToOwner enforces row ownership on a read/delete query (decideScope). It
+// returns the (possibly user-scoped) query and ok=false if the request was
+// rejected (a response has already been written). Ungoverned tables and service
+// callers pass through untouched. In soft mode violations are only logged and the
+// query is never altered, so legitimate traffic is unchanged before the flip.
 func scopeToOwner(w http.ResponseWriter, r *http.Request, table string, q url.Values) (url.Values, bool) {
-	if _, owned := userOwnedTables[table]; !owned {
+	if !ownershipGoverned(table) || isServiceCaller(r.Context()) {
 		return q, true
 	}
-	if isServiceCaller(r.Context()) {
-		return q, true
+	scoped, note, v, err := decideScope(r.Context(), r.Method, table, userIDOf(r.Context()), q, ownerLookupsImpl)
+	if err != nil {
+		log.Printf("ownership: %s /api/v1/user/%s lookup: %v", r.Method, table, err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return q, false
 	}
-	uid := userIDOf(r.Context())
-	if uid == "" {
+	if v != nil {
 		if authEnforce {
-			jsonError(w, "authentication required", http.StatusUnauthorized)
+			log.Printf("ownership: rejected %s /api/v1/user/%s: %s", r.Method, table, v.msg)
+			jsonError(w, v.msg, v.status)
 			return q, false
 		}
-		log.Printf("ownership(soft): %s /api/v1/user/%s without an identity — not scoping", r.Method, table)
+		log.Printf("ownership(soft): %s /api/v1/user/%s would reject (%d %s) — allowing", r.Method, table, v.status, v.msg)
 		return q, true
 	}
-	if cur := q.Get("user_id"); cur != "" && cur != uid {
-		if !authEnforce {
-			log.Printf("ownership(soft): %s /api/v1/user/%s user_id=%s != owner %s — would scope; allowing as-is", r.Method, table, cur, uid)
-			return q, true
+	if !authEnforce {
+		if note != "" {
+			log.Printf("ownership(soft): %s /api/v1/user/%s %s — would scope; allowing as-is", r.Method, table, note)
 		}
-		log.Printf("ownership: %s /api/v1/user/%s user_id=%s != owner %s — scoping to owner", r.Method, table, cur, uid)
+		return q, true
 	}
-	if authEnforce {
-		q.Set("user_id", uid)
+	if note != "" {
+		log.Printf("ownership: %s /api/v1/user/%s %s", r.Method, table, note)
 	}
-	return q, true
+	return scoped, true
 }
 
-// enforceUpsertOwner applies ownership to an upsert body: when enforcing, every row
-// on a user-owned table must carry the authenticated user_id (absent ones are
-// stamped, foreign ones rejected with 403). Soft mode only logs. Returns false when
-// the request was rejected (response already written).
+// enforceUpsertOwner applies ownership to an upsert body (decideUpsert): when
+// enforcing, violations are rejected (401/403) and owner columns are stamped onto
+// the rows; soft mode only logs. Returns false when the request was rejected
+// (response already written).
 func enforceUpsertOwner(w http.ResponseWriter, r *http.Request, table string, rows []map[string]any) bool {
-	if _, owned := userOwnedTables[table]; !owned {
+	if !ownershipGoverned(table) || isServiceCaller(r.Context()) {
 		return true
 	}
-	if isServiceCaller(r.Context()) {
-		return true
+	stamps, v, err := decideUpsert(r.Context(), table, userIDOf(r.Context()), rows, ownerLookupsImpl)
+	if err != nil {
+		log.Printf("ownership: POST /api/v1/user/%s lookup: %v", table, err)
+		jsonError(w, "internal server error", http.StatusInternalServerError)
+		return false
 	}
-	uid := userIDOf(r.Context())
-	if uid == "" {
+	if v != nil {
 		if authEnforce {
-			jsonError(w, "authentication required", http.StatusUnauthorized)
+			log.Printf("ownership: rejected POST /api/v1/user/%s: %s", table, v.msg)
+			jsonError(w, v.msg, v.status)
 			return false
 		}
-		log.Printf("ownership(soft): POST /api/v1/user/%s without an identity — allowing", table)
+		log.Printf("ownership(soft): POST /api/v1/user/%s would reject (%d %s) — allowing", table, v.status, v.msg)
 		return true
 	}
-	for i, row := range rows {
-		cur, has := row["user_id"]
-		if has && fmt.Sprintf("%v", cur) != uid {
-			if authEnforce {
-				jsonError(w, fmt.Sprintf("row %d: user_id does not match the authenticated user", i), http.StatusForbidden)
-				return false
-			}
-			log.Printf("ownership(soft): POST /api/v1/user/%s row %d user_id=%v != owner %s — would reject; allowing", table, i, cur, uid)
-			continue
-		}
-		if authEnforce {
-			row["user_id"] = uid // stamp absent / re-affirm matching
+	if authEnforce {
+		for _, st := range stamps {
+			rows[st.row][st.col] = st.val // stamp absent / re-affirm matching
 		}
 	}
 	return true
@@ -200,7 +202,7 @@ func withCORSWrite(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -683,6 +685,37 @@ func pgWriteError(err error, rowIdx int) (int, string) {
 	return http.StatusInternalServerError, "internal server error"
 }
 
+// naturalKeys lists tables whose primary key is DB-generated but which carry a
+// UNIQUE natural key the client always supplies. Upserts on these conflict on the
+// natural key, so re-saving a row updates it instead of failing with 409.
+var naturalKeys = map[string][]string{
+	"user_calendar": {"user_id", "event_id"}, // UNIQUE (user_id, event_id)
+}
+
+// conflictTarget picks the ON CONFLICT columns for an upsert: the PK when every
+// PK column is present, else the table's natural key when every one of its
+// columns is present, else nil (plain INSERT).
+func conflictTarget(table string, row map[string]any, pk []string) []string {
+	all := func(cols []string) bool {
+		if len(cols) == 0 {
+			return false
+		}
+		for _, c := range cols {
+			if _, ok := row[c]; !ok {
+				return false
+			}
+		}
+		return true
+	}
+	if all(pk) {
+		return pk
+	}
+	if nk := naturalKeys[table]; all(nk) {
+		return nk
+	}
+	return nil
+}
+
 // buildUserUpsert builds an INSERT … ON CONFLICT … RETURNING * for one row.
 //
 //   - Only whitelisted, writable columns are inserted; GENERATED ALWAYS / identity
@@ -737,33 +770,29 @@ func buildUserUpsert(table string, row map[string]any, m *userColMeta) (sqlText 
 	fmt.Fprintf(&b, "INSERT INTO %s (%s) VALUES (%s)",
 		quoteIdent(table), strings.Join(cols, ", "), strings.Join(placeholders, ", "))
 
-	// Upsert only when the full PK is supplied; otherwise the PK is DB-generated.
-	pkSupplied := len(m.pk) > 0
-	for _, pk := range m.pk {
-		if _, present := row[pk]; !present {
-			pkSupplied = false
-			break
-		}
-	}
-	if pkSupplied {
-		pkSet := make(map[string]struct{}, len(m.pk))
-		quotedPK := make([]string, len(m.pk))
-		for i, pk := range m.pk {
-			pkSet[pk] = struct{}{}
-			quotedPK[i] = quoteIdent(pk)
+	// Upsert on the full PK when it is supplied. A table whose PK is DB-generated
+	// can still name a UNIQUE natural key (naturalKeys) to upsert on; otherwise it
+	// is a plain INSERT.
+	conflict := conflictTarget(table, row, m.pk)
+	if len(conflict) > 0 {
+		keySet := make(map[string]struct{}, len(conflict))
+		quotedKey := make([]string, len(conflict))
+		for i, k := range conflict {
+			keySet[k] = struct{}{}
+			quotedKey[i] = quoteIdent(k)
 		}
 		var updates []string
 		for _, c := range insertCols {
-			if _, isPK := pkSet[c]; isPK {
+			if _, isKey := keySet[c]; isKey {
 				continue
 			}
 			updates = append(updates, fmt.Sprintf("%s = EXCLUDED.%s", quoteIdent(c), quoteIdent(c)))
 		}
 		if len(updates) > 0 {
 			fmt.Fprintf(&b, " ON CONFLICT (%s) DO UPDATE SET %s",
-				strings.Join(quotedPK, ", "), strings.Join(updates, ", "))
+				strings.Join(quotedKey, ", "), strings.Join(updates, ", "))
 		} else {
-			fmt.Fprintf(&b, " ON CONFLICT (%s) DO NOTHING", strings.Join(quotedPK, ", "))
+			fmt.Fprintf(&b, " ON CONFLICT (%s) DO NOTHING", strings.Join(quotedKey, ", "))
 		}
 	}
 	b.WriteString(" RETURNING *")

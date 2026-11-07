@@ -63,6 +63,10 @@ const (
 	// before a client WebSocket attaches. A session never attached within this
 	// window tears itself down rather than ticking forever.
 	SessionAttachGraceS = 60
+	// SessionReattachGraceS is how long a session survives after its client's
+	// WebSocket drops (network blip, app backgrounded or killed). The client
+	// reconnects and sends RESUME within this window; after it, the trip ends.
+	SessionReattachGraceS = 15 * 60
 )
 
 // OTP routing defaults (the /tranzit-route path). The client may override these per

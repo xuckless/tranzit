@@ -1,6 +1,9 @@
 package config
 
-import "os"
+import (
+	"os"
+	"strings"
+)
 
 // Endpoints holds the runtime-configurable addresses Route Save talks to. They
 // are read from the environment with sibling-service defaults.
@@ -15,6 +18,9 @@ type Endpoints struct {
 	// JWKS endpoint auth tokens are verified against. No default — it is
 	// environment-specific and auth cannot run without it.
 	SupabaseURL string
+	// DemoUserID (DEMO_USER_ID), when non-empty, disables JWT auth: every request is
+	// this user and SUPABASE_URL is not needed. Local demo stack only.
+	DemoUserID string
 
 	// mTLS client material for service-to-service calls (AUTH.md). Route Save is a
 	// client only. Cert paths default to the container mount; the *MTLSAddr fields
@@ -47,6 +53,7 @@ func LoadEndpoints() Endpoints {
 		MiddlewareURL:   getenv("MIDDLEWARE_URL", defaultMiddlewareURL),
 		RouteServiceURL: getenv("ROUTE_SERVICE_URL", defaultRouteServiceURL),
 		SupabaseURL:     os.Getenv("SUPABASE_URL"),
+		DemoUserID:      strings.TrimSpace(os.Getenv("DEMO_USER_ID")),
 
 		MTLSCACert:                 getenv("MTLS_CA_CERT", "/certs/ca.crt"),
 		MTLSCert:                   getenv("MTLS_CERT", "/certs/tranzit-route-save.crt"),

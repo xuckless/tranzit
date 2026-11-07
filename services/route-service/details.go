@@ -31,6 +31,9 @@ type PlaceDetailsResponse struct {
 }
 
 func FetchPlaceDetails(placeID string) (*PlaceDetailsResponse, error) {
+	if !useGoogle() {
+		return photonFetchPlaceDetails(placeID)
+	}
 	apiKey := os.Getenv("GMAPS_API_KEY")
 	url := fmt.Sprintf("https://places.googleapis.com/v1/places/%s", placeID)
 

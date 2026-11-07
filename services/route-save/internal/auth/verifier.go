@@ -69,3 +69,11 @@ func (v *JWKSVerifier) Verify(_ context.Context, token string) (string, error) {
 	}
 	return sub, nil
 }
+
+// DemoVerifier is the DEMO_USER_ID mode for the local demo stack: every request is
+// UserID, whatever token (if any) it carries, and no Supabase is contacted.
+// Never configure it on a real deployment.
+type DemoVerifier struct{ UserID string }
+
+// Verify ignores the token and returns the demo user id.
+func (d DemoVerifier) Verify(context.Context, string) (string, error) { return d.UserID, nil }

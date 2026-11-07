@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	gtfs "github.com/MobilityData/gtfs-realtime-bindings/golang/gtfs"
@@ -28,7 +29,9 @@ func getRTFeed(appToken, url string, retries int) (*gtfs.FeedMessage, []byte) {
 			fmt.Printf("  RT build request error (%d/%d): %v\n", attempt, retries, err)
 			continue
 		}
-		req.Header.Set("X-App-Token", appToken)
+		if appToken != "" { // optional: Socrata serves unauthenticated at lower rate limits
+			req.Header.Set("X-App-Token", appToken)
+		}
 
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -292,13 +295,17 @@ func scrapeRealtime(ctx context.Context, pool *pgxpool.Pool, hub *wsHub, tuFeed 
 				periodStart = &s
 				periodEnd = &e
 			}
-			var agencyID, routeID, stopID *string
-			if len(a.InformedEntity) > 0 {
-				ie := a.InformedEntity[0]
-				agencyID = nullStr(ie.GetAgencyId())
-				routeID = nullStr(ie.GetRouteId())
-				stopID = nullStr(ie.GetStopId())
+			// An alert may inform several entities; keep every distinct route/stop
+			// (comma-joined) so readers can filter on any of them.
+			var agencies, routes, stops []string
+			for _, ie := range a.InformedEntity {
+				agencies = appendUnique(agencies, ie.GetAgencyId())
+				routes = appendUnique(routes, ie.GetRouteId())
+				stops = appendUnique(stops, ie.GetStopId())
 			}
+			agencyID := nullStr(strings.Join(agencies, ","))
+			routeID := nullStr(strings.Join(routes, ","))
+			stopID := nullStr(strings.Join(stops, ","))
 
 			cause := enumStr(alertCause, int(a.GetCause()), "")
 			effect := enumStr(alertEffect, int(a.GetEffect()), "")
@@ -353,4 +360,17 @@ func nullStr(s string) *string {
 		return nil
 	}
 	return &s
+}
+
+// appendUnique appends v to list unless it is empty or already present.
+func appendUnique(list []string, v string) []string {
+	if v == "" {
+		return list
+	}
+	for _, x := range list {
+		if x == v {
+			return list
+		}
+	}
+	return append(list, v)
 }

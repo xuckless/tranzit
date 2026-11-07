@@ -1063,7 +1063,7 @@ func main() {
 
 	// Auth: end users hit the public (Funnel) listener with a Supabase JWT; sibling
 	// services hit the separate mTLS listener (auth.go / mtls.go, AUTH.md).
-	authEnforce = envBool("AUTH_ENFORCE", false)
+	authEnforce = envBool("AUTH_ENFORCE", true)
 	verifier := buildVerifier(authEnforce)
 
 	mux := registerRoutes()
@@ -1093,7 +1093,7 @@ func main() {
 	log.Fatal(srv.ListenAndServe())
 }
 
-// authEnforce gates hard 401/403 (true) vs log-and-allow soft rollout (false).
+// authEnforce gates hard 401/403 (true, the default) vs log-and-allow soft rollout (false).
 var authEnforce bool
 
 // registerRoutes builds the shared route mux mounted behind both listeners.
@@ -1107,6 +1107,10 @@ func registerRoutes() *http.ServeMux {
 	mux.HandleFunc("/api/v1/stream/route", withCORS(handleRouteSSE))
 	mux.HandleFunc("/api/v1/resolve_trip", withCORS(withGzip(handleResolveTrip)))
 	mux.HandleFunc("/api/v1/trip_stops", withCORS(withGzip(handleTripStops)))
+	// Shaped read endpoints (feeds.go). /api/v1/alerts overrides the generic table read.
+	mux.HandleFunc("/api/v1/alerts", withCORS(withGzip(handleAlerts)))
+	mux.HandleFunc("/api/v1/reports/summary", withCORS(withGzip(handleReportsSummary)))
+	mux.HandleFunc("/api/v1/reports/recent", withCORS(withGzip(handleReportsRecent)))
 	// User-data DB (tailnet) — GET reads + POST upserts. More specific prefix than
 	// /api/v1/, so it takes precedence in the mux.
 	mux.HandleFunc("/api/v1/user/", withCORSWrite(withGzip(handleUserData)))
@@ -1117,7 +1121,14 @@ func registerRoutes() *http.ServeMux {
 // buildVerifier constructs the Supabase JWT verifier. SUPABASE_URL is required when
 // enforcing; in soft mode an empty/unreachable JWKS only disables verification (with
 // a warning) so the service still starts.
+//
+// DEMO_USER_ID (non-empty) short-circuits all of that: no Supabase, and every
+// public request is that user (demoVerifier) — for the local demo stack only.
 func buildVerifier(enforce bool) Verifier {
+	if uid := strings.TrimSpace(os.Getenv("DEMO_USER_ID")); uid != "" {
+		log.Printf("DEMO MODE: every request is user %s; auth disabled", uid)
+		return demoVerifier{uid: uid}
+	}
 	supabaseURL := os.Getenv("SUPABASE_URL")
 	if supabaseURL == "" {
 		if enforce {
@@ -1231,7 +1242,7 @@ func withCORS(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
+		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 		if r.Method == http.MethodOptions {
 			w.WriteHeader(http.StatusNoContent)
 			return

@@ -9,9 +9,12 @@ import (
 )
 
 func FetchAutocomplete(queryString string) ([]byte, error) {
+	params, _ := url.ParseQuery(queryString)
+	if !useGoogle() {
+		return photonFetchAutocomplete(params.Get("input"))
+	}
 	apiKey := os.Getenv("GMAPS_API_KEY")
 
-	params, _ := url.ParseQuery(queryString)
 	if input := params.Get("input"); input != "" {
 		params.Set("input", input+" calgary")
 	}

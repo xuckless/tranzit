@@ -28,6 +28,9 @@ type NearbyResponse struct {
 // FetchNearbyPlaces returns up to 4 closest establishments to the given coordinates.
 // Uses a 50 m radius with DISTANCE ranking so results are ordered nearest-first.
 func FetchNearbyPlaces(lat, lng float64) ([]NearbyPlace, error) {
+	if !useGoogle() {
+		return photonFetchNearby(lat, lng)
+	}
 	apiKey := os.Getenv("GMAPS_API_KEY")
 	url := "https://places.googleapis.com/v1/places:searchNearby"
 

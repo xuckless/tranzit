@@ -173,4 +173,22 @@ CREATE UNIQUE INDEX uq_friendship_pair ON user_friendships
 CREATE TRIGGER trg_friendships_updated BEFORE UPDATE ON user_friendships
   FOR EACH ROW EXECUTE FUNCTION set_updated_at();
 
+-- Community route reports (crowding, delays, …) posted by riders via
+-- POST /api/v1/user/route_reports; aggregated anonymously by
+-- GET /api/v1/reports/{summary,recent} in tranzit-db-middleware.
+CREATE TABLE route_reports (
+  report_id  VARCHAR(255) PRIMARY KEY,
+  user_id    VARCHAR(255) NOT NULL REFERENCES user_info(user_id) ON DELETE CASCADE,
+  kind       TEXT NOT NULL CHECK (kind IN ('crowd','delay','safety','vandal','cons','other')),
+  severity   SMALLINT NOT NULL DEFAULT 1 CHECK (severity BETWEEN 1 AND 3),
+  route_id   TEXT,
+  trip_id    TEXT,
+  stop_id    TEXT,
+  lat        DOUBLE PRECISION,
+  lng        DOUBLE PRECISION,
+  note       TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX idx_route_reports_route_created ON route_reports(route_id, created_at);
+
 COMMIT;

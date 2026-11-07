@@ -34,11 +34,16 @@ func extractToken(r *http.Request) string {
 	return r.URL.Query().Get("token")
 }
 
-// RequireAuth verifies the request's token and injects the resolved user id into
+// RequireAuth verifies the request's token (DemoVerifier: skips the token entirely) and injects the resolved user id into
 // the request context before calling next. A missing or invalid token gets a 401.
 // The token itself is never logged.
 func RequireAuth(v Verifier, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if d, ok := v.(DemoVerifier); ok {
+			// demo mode: every request is the demo user, token or not.
+			next.ServeHTTP(w, r.WithContext(WithUserID(r.Context(), d.UserID)))
+			return
+		}
 		token := extractToken(r)
 		if token == "" {
 			http.Error(w, "missing bearer token", http.StatusUnauthorized)

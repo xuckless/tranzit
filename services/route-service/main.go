@@ -30,7 +30,7 @@ func main() {
 
 	// Auth: end users hit the public (Funnel) listener with a Supabase JWT; sibling
 	// services hit the separate tailnet-only mTLS listener (auth.go / mtls.go, AUTH.md).
-	enforce := envBool("AUTH_ENFORCE", false)
+	enforce := envBool("AUTH_ENFORCE", true)
 	verifier := buildVerifier(enforce)
 
 	port := os.Getenv("PORT")

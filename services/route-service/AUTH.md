@@ -28,12 +28,20 @@ Code: `auth.go` (JWT verifier + `fiberAuth` middleware), `mtls.go` (server + cli
 TLS, outbound `middlewareCall`), `main.go` (`registerRoutes`, `startMTLSListener`),
 `otp.go` (`fetchVehicleIDByTrip` uses the mTLS client).
 
-## Rollout — `AUTH_ENFORCE` (soft → hard)
+## Rollout — `AUTH_ENFORCE` (hard by default)
 
-Default is **soft** (`AUTH_ENFORCE=false`): the JWT is verified and the result
-logged, but requests pass through; the mTLS listener uses `VerifyClientCertIfGiven`.
-Flip to **hard** (`AUTH_ENFORCE=true`, redeploy) once logs are clean: missing/invalid
-JWT → `401` (except the open paths); mTLS → `RequireAndVerifyClientCert`.
+Default is **hard** (`AUTH_ENFORCE=true`, also the code default when unset):
+missing/invalid JWT → `401` (except the open paths); mTLS →
+`RequireAndVerifyClientCert`. Set `AUTH_ENFORCE=false` explicitly for a **soft**
+rollout: the JWT is verified and the result logged, but requests pass through; the
+mTLS listener uses `VerifyClientCertIfGiven`.
+
+## Demo mode — `DEMO_USER_ID`
+
+When `DEMO_USER_ID` is non-empty the service logs
+`DEMO MODE: every request is user <id>; auth disabled`, never contacts
+`SUPABASE_URL`, and treats every public request (any or no bearer token) as that
+user. Local demo stack only.
 
 Open paths (no JWT): `GET /` (landing) and `GET /limits` (quota). Protected:
 `/search`, `/details`, `/autocomplete/json`, `/route`, `/route/otp`, `/searchnearby`.
@@ -72,8 +80,9 @@ env var once middleware's mTLS listener is up.
 
 | Var | Purpose |
 |---|---|
-| `SUPABASE_URL` | Supabase project URL for JWKS verification (required when enforcing) |
-| `AUTH_ENFORCE` | `false` (soft, default) / `true` (hard) |
+| `SUPABASE_URL` | Supabase project URL for JWKS verification (required when enforcing, unless `DEMO_USER_ID` is set) |
+| `AUTH_ENFORCE` | `true` (hard, default) / `false` (soft, log-only) |
+| `DEMO_USER_ID` | Demo only: every public request is this user; no Supabase contacted |
 | `MTLS_LISTEN_ADDR` | mTLS server listener, e.g. `:8443` (unset disables it) |
 | `MTLS_CA_CERT` / `MTLS_CERT` / `MTLS_KEY` | CA + this service's leaf (container paths) |
 | `MTLS_ALLOWED_CLIENTS` | client CNs allowed over mTLS (`tranzit-route-save`) |
@@ -91,3 +100,12 @@ curl -i -H "Authorization: Bearer $JWT" "$FUNNEL/searchnearby?lat=51&lng=-114"
 curl --cacert certs/ca.crt --cert certs/tranzit-route-save.crt --key certs/tranzit-route-save.key \
      -X POST "https://<tailnet-ip>:8443/route/otp" -d '{...}'
 ```
+
+## Place search without Google
+
+When `GMAPS_API_KEY` is empty, `/search`, `/autocomplete/json`, `/details` and
+`/searchnearby` use Photon (OpenStreetMap; `PHOTON_URL`, default
+`https://photon.komoot.io`, User-Agent `tranzit-demo`) biased to Calgary and filtered
+to the same bbox as the Google text search — same JSON shapes (`photon.go`). Place ids
+are `osm:<osm_type><osm_id>@<lat>,<lng>`; `/details` resolves them by reverse lookup.
+`/route` (Google Routes) still needs the key — use `/route/otp` without it.
