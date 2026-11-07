@@ -1,7 +1,8 @@
 // Command tranzit-route-save is the live trip-tracking service. A client POSTs a
 // chosen route to /trips, then opens a per-trip WebSocket; the service takes
 // over — streaming real-time STATE, polling GTFS-RT, and rerouting via Map
-// Service — until the client closes the socket.
+// Service — until the client ends the trip (DELETE) or stays disconnected past
+// the reattach grace.
 package main
 
 import (
@@ -31,9 +32,18 @@ func main() {
 	_ = godotenv.Load()
 	endpoints := config.LoadEndpoints()
 
-	verifier, err := auth.NewJWKSVerifier(endpoints.SupabaseURL)
-	if err != nil {
-		log.Fatalf("route-save: auth setup failed (is SUPABASE_URL set?): %v", err)
+	var verifier auth.Verifier
+	if endpoints.DemoUserID != "" {
+		// Demo stack: no Supabase. Siblings are reached over plain HTTP
+		// (MIDDLEWARE_URL / ROUTE_SERVICE_URL, no *_MTLS_ADDR) and run in demo mode too.
+		log.Printf("DEMO MODE: every request is user %s; auth disabled", endpoints.DemoUserID)
+		verifier = auth.DemoVerifier{UserID: endpoints.DemoUserID}
+	} else {
+		jwks, err := auth.NewJWKSVerifier(endpoints.SupabaseURL)
+		if err != nil {
+			log.Fatalf("route-save: auth setup failed (is SUPABASE_URL set?): %v", err)
+		}
+		verifier = jwks
 	}
 
 	// Resolve how to reach each sibling: mTLS over the tailnet when its *_MTLS_ADDR

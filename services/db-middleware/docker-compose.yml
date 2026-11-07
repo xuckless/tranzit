@@ -44,7 +44,9 @@ services:
       # Auth (see AUTH.md): JWT for end users on the Funnel port, mTLS for siblings
       # on MTLS_LISTEN_ADDR (tailnet-only, not Funnel-published).
       - SUPABASE_URL=${SUPABASE_URL:-https://vxpjxjokuzyqigrlvjzb.supabase.co}
-      - AUTH_ENFORCE=${AUTH_ENFORCE:-false}
+      - AUTH_ENFORCE=${AUTH_ENFORCE:-true}
+      # Demo stack only (AUTH.md): every request is this user; Supabase not contacted.
+      - DEMO_USER_ID=${DEMO_USER_ID:-}
       - MTLS_LISTEN_ADDR=${MTLS_LISTEN_ADDR:-:8443}
       - MTLS_CA_CERT=/certs/ca.crt
       - MTLS_CERT=/certs/tranzit-db-middleware.crt

@@ -73,7 +73,7 @@ export const SearchOverlay: React.FC<Props> = ({
   const styles = useMemo(() => makeStyles(theme), [theme]);
 
   const [query, setQuery] = useState("");
-  const { status, suggestions, search, reset } =
+  const { status, suggestions, search, reset, retry } =
     useDestinationSearch(userLocation);
   const { recents, refresh } = useRecentSearches();
   const inputRef = useRef<TextInput>(null);
@@ -139,7 +139,7 @@ export const SearchOverlay: React.FC<Props> = ({
           const details = await TranzitApiService.getPlaceDetails(s.placeId);
           coordinate = details.location;
         } catch (e) {
-          console.error("[SearchOverlay] details fetch failed:", e);
+          console.warn("[SearchOverlay] details fetch failed:", e);
           requestClose();
           return;
         }
@@ -233,7 +233,8 @@ export const SearchOverlay: React.FC<Props> = ({
                 {query.length > 0 && (
                   <Pressable
                     onPress={handleClearText}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    hitSlop={12}
+                    accessibilityRole="button"
                     accessibilityLabel="Clear search"
                   >
                     <Ionicons name="close-circle" size={18} color={colors.ink2} />
@@ -242,8 +243,9 @@ export const SearchOverlay: React.FC<Props> = ({
               </View>
               <Pressable
                 onPress={requestClose}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                hitSlop={12}
                 style={styles.exitBtn}
+                accessibilityRole="button"
                 accessibilityLabel="Close search"
               >
                 <Ionicons name="close" size={22} color={colors.ink3} />
@@ -274,6 +276,13 @@ export const SearchOverlay: React.FC<Props> = ({
             <Text style={[styles.emptyText, { color: colors.ink3 }]}>
               No results found
             </Text>
+          ) : status === "error" ? (
+            <DestinationSuggestionsList
+              suggestions={[]}
+              onSelect={handleSelect}
+              error
+              onRetry={retry}
+            />
           ) : null}
         </Animated.View>
       </Animated.View>

@@ -202,9 +202,27 @@ func TestLifecycle_StartConnectStream(t *testing.T) {
 		t.Errorf("boarding stop type = %q, want FETCHED", frame.Stops[0].StopType)
 	}
 
-	// Closing the socket tears the session down ("closed anytime").
+	// Dropping the socket does NOT end the trip: the session waits for the client
+	// to reconnect (network blip, app backgrounded) and RESUME.
 	conn.Close()
-	waitFor(t, 2*time.Second, func() bool { return mgr.Count() == 0 })
+	time.Sleep(200 * time.Millisecond)
+	if mgr.Count() != 1 {
+		t.Fatalf("session count after disconnect = %d, want 1 (held for reconnect)", mgr.Count())
+	}
+
+	// Reconnecting gets a fresh STATE on the same session.
+	conn2, _, err := dialWS(t, srv.URL, start.WSURL, tokenA)
+	if err != nil {
+		t.Fatalf("ws re-dial: %v", err)
+	}
+	defer conn2.Close()
+	conn2.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, raw, err = conn2.ReadMessage(); err != nil {
+		t.Fatalf("read STATE after reconnect: %v", err)
+	}
+	if err := json.Unmarshal(raw, &frame); err != nil || frame.Type != "STATE" {
+		t.Fatalf("first frame after reconnect = %q (%v), want STATE", frame.Type, err)
+	}
 }
 
 // TestStart_WalkOnlyRoute: a route with no transit steps (pure walk) is accepted

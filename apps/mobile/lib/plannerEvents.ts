@@ -12,7 +12,10 @@
 //  • Deleting an event CASCADEs to user_calendar / cached_pre_routes.
 //  • travel_time is owned by lib/preRoutes.ts (arrive-by pre-routing); every save
 //    nulls it so a stale pre-route never survives a time/place edit.
-//  • Deferred this pass: recurrence_rule.
+//  • recurrence_rule holds an RRULE subset (components/planner/recurrence.ts);
+//    edits/deletes apply to the whole series.
+//  • Deletes are tombstoned locally (lib/db.ts) and replayed by pushPending, so an
+//    offline delete survives the next fetch instead of resurrecting the row.
 
 import type { User } from "@supabase/supabase-js";
 import * as Crypto from "expo-crypto";
@@ -24,12 +27,16 @@ import {
 } from "@/lib/middleware";
 import { syncUserInfo } from "@/lib/userSync";
 import {
+  isPermanentFailure,
   mirrorClearPendingEvent,
-  mirrorDeleteEvent,
   mirrorReadEvents,
   mirrorReadPendingEvents,
   mirrorReplaceAllEvents,
   mirrorUpsertEvent,
+  outboxHttpStatus,
+  tombstoneDelete,
+  tombstoneDrop,
+  tombstoneRead,
   type PlannedEventMirrorRow,
 } from "@/lib/db";
 import {
@@ -53,6 +60,8 @@ export interface SaveEventInput {
   start: string; // ISO
   end: string; // ISO
   timezone?: string | null;
+  /** RRULE subset (see components/planner/recurrence.ts); null/omitted = one-off. */
+  recurrenceRule?: string | null;
 }
 
 /** A row from `user_defined_events` (timestamptz columns arrive as ISO strings). */
@@ -94,6 +103,7 @@ function toPlannedEvents(rows: PlannedEventMirrorRow[]): PlannedEvent[] {
     end: r.end_time,
     timezone: r.timezone,
     travelTime: r.travel_time,
+    recurrenceRule: r.recurrence_rule ?? null,
     pending: r.pending === 1,
     imported: r.event_id.startsWith("device:"),
   }));
@@ -115,17 +125,13 @@ async function pushRow(user: User, row: PlannedEventMirrorRow): Promise<void> {
     location_lng: row.location_lng,
     place_id: row.place_id,
     travel_time: row.travel_time,
-    // recurrence_rule stays NULL (deferred to the recurring pass)
+    recurrence_rule: row.recurrence_rule,
   });
-  // user_calendar stub. Its PK is generated, so the middleware does a plain INSERT
-  // and a re-save would hit UNIQUE(user_id,event_id) → 409. Delete-then-insert makes
-  // it idempotent (mirrors the remote-dedup in lib/searchHistory.ts).
+  // user_calendar link. Its PK is generated, but the middleware upserts it on its
+  // UNIQUE (user_id, event_id) natural key, so re-saving updates the row in place
+  // (an older delete-then-insert raced itself into 409s when two pushes overlapped).
   // cached_pre_route_id FK is safe: travel_time is only non-null after preRoutes has
   // upserted the cached_pre_routes row (see lib/preRoutes.ts persistPreRoute).
-  await middlewareUserDelete("user_calendar", {
-    user_id: row.user_id,
-    event_id: row.event_id,
-  });
   await middlewareUpsert("user_calendar", {
     user_id: row.user_id,
     event_id: row.event_id,
@@ -163,6 +169,7 @@ export async function fetchEvents(user: User): Promise<PlannedEvent[]> {
       end_time: r.end_time,
       timezone: r.timezone ?? null,
       travel_time: r.travel_time ?? null,
+      recurrence_rule: r.recurrence_rule ?? null,
       pending: 0,
     }));
     await mirrorReplaceAllEvents(userId, rows);
@@ -199,6 +206,7 @@ export async function saveEvent(params: {
     // Every save invalidates the pre-route (time/place may have changed);
     // lib/preRoutes.ts recomputes and writes it back via setEventTravelTime.
     travel_time: null,
+    recurrence_rule: event.recurrenceRule ?? null,
     pending: 1,
   };
 
@@ -214,7 +222,25 @@ export async function saveEvent(params: {
   return toPlannedEvents([row])[0];
 }
 
-/** Retry any events saved locally but not yet confirmed remotely. */
+/** Remote delete; a 404 means it's already gone, which is what we wanted. */
+async function deleteRemote(userId: string, eventId: string): Promise<void> {
+  try {
+    await middlewareUserDelete("user_defined_events", {
+      user_id: userId,
+      event_id: eventId,
+    });
+  } catch (err) {
+    if (outboxHttpStatus(err) !== 404) throw err;
+  }
+}
+
+/**
+ * Flush the outbox: retry events saved locally but not yet confirmed remotely,
+ * then replay tombstoned deletes. A row failing with a permanent 4xx (not
+ * 408/429) is logged and given up on so it doesn't retry forever: a save loses
+ * its pending flag (the next fetch reconciles it with the server), a delete
+ * drops its tombstone.
+ */
 export async function pushPending(user: User): Promise<void> {
   const userId = user.id;
   let pending: PlannedEventMirrorRow[];
@@ -228,8 +254,30 @@ export async function pushPending(user: User): Promise<void> {
       await pushRow(user, row);
       await mirrorClearPendingEvent(userId, row.event_id);
     } catch (err) {
-      if (__DEV__)
+      if (isPermanentFailure(err)) {
+        console.warn("[plannerEvents] giving up on save", row.event_id, err);
+        await mirrorClearPendingEvent(userId, row.event_id).catch(() => {});
+      } else if (__DEV__)
         console.warn("[plannerEvents] pushPending failed", row.event_id, err);
+    }
+  }
+
+  let tombs: { entity_key: string }[] = [];
+  try {
+    tombs = await tombstoneRead(userId, "planner_event");
+  } catch {
+    return;
+  }
+  for (const t of tombs) {
+    try {
+      await deleteRemote(userId, t.entity_key);
+      await tombstoneDrop(userId, "planner_event", t.entity_key);
+    } catch (err) {
+      if (isPermanentFailure(err)) {
+        console.warn("[plannerEvents] giving up on delete", t.entity_key, err);
+        await tombstoneDrop(userId, "planner_event", t.entity_key).catch(() => {});
+      } else if (__DEV__)
+        console.warn("[plannerEvents] delete replay failed", t.entity_key, err);
     }
   }
 }
@@ -262,18 +310,28 @@ export async function setEventTravelTime(
 }
 
 /**
- * Delete an event. Removes the mirror row immediately, then the remote event (its
- * user_calendar / cached_pre_routes rows cascade away with it). Also cancels any
+ * Delete an event (a repeating event's whole series). Removes the mirror row and
+ * records a tombstone atomically, then tries the remote delete (its user_calendar /
+ * cached_pre_routes rows cascade away with it). Offline/5xx: the tombstone stays
+ * and pushPending replays it — the call still resolves. A permanent 4xx drops the
+ * tombstone and rethrows so the caller can restore the list. Also cancels any
  * queued leave-now notification — the single choke point for every delete path.
  */
 export async function deleteEvent(user: User, eventId: string): Promise<void> {
   const userId = user.id;
   await cancelLeaveNow(eventId);
-  await mirrorDeleteEvent(userId, eventId);
-  await middlewareUserDelete("user_defined_events", {
-    user_id: userId,
-    event_id: eventId,
-  });
+  await tombstoneDelete(userId, "planner_event", eventId);
+  try {
+    await deleteRemote(userId, eventId);
+    await tombstoneDrop(userId, "planner_event", eventId);
+  } catch (err) {
+    if (isPermanentFailure(err)) {
+      await tombstoneDrop(userId, "planner_event", eventId).catch(() => {});
+      throw err;
+    }
+    if (__DEV__)
+      console.warn("[plannerEvents] remote delete failed, tombstoned", err);
+  }
 }
 
 // ─── Device-calendar import ─────────────────────────────────────────────────
@@ -285,6 +343,8 @@ const IMPORT_FWD_DAYS = 60;
 export interface ImportResult {
   granted: boolean;
   imported: number;
+  /** Previously imported events in the window that are gone from the device. */
+  removed?: number;
   /**
    * Why the import couldn't run:
    *  - "module-missing"  — expo-calendar's native module isn't in this build
@@ -297,9 +357,12 @@ export interface ImportResult {
 
 /**
  * Request calendar permission and import device-calendar events into the user DB.
- * Each event is keyed `device:{calId}:{eventId}` so re-import UPSERTs in place
- * (idempotent — no duplicates). Never throws — every native failure maps to a
- * `reason` the UI can explain.
+ * Each event is keyed `device:{calId}:{eventId}:{startMs}` — expo-calendar returns
+ * a recurring event's expanded occurrences with the same id, so the occurrence
+ * start keeps a weekly class from collapsing into one row — and re-import UPSERTs
+ * in place (idempotent — no duplicates). Previously imported `device:` events in
+ * the window that no longer exist on the device are deleted. Never throws — every
+ * native failure maps to a `reason` the UI can explain.
  *
  * ponytail: re-import overwrites local edits to imported events; acceptable until a
  * source/synced flag is added.
@@ -333,8 +396,13 @@ export async function importDeviceEvents(user: User): Promise<ImportResult> {
     );
 
     let imported = 0;
+    const seen = new Set<string>();
     for (const e of events) {
       if (!e.startDate || !e.endDate) continue;
+      const occurrenceMs = new Date(e.startDate).getTime();
+      if (!Number.isFinite(occurrenceMs)) continue;
+      const eventId = `device:${e.calendarId}:${e.id}:${occurrenceMs}`;
+      seen.add(eventId);
       let startD = new Date(e.startDate);
       let endD = new Date(e.endDate);
       if (e.allDay) {
@@ -357,7 +425,7 @@ export async function importDeviceEvents(user: User): Promise<ImportResult> {
       await saveEvent({
         user,
         event: {
-          eventId: `device:${e.calendarId}:${e.id}`,
+          eventId,
           name: e.title || "Calendar event",
           location: e.location ?? null,
           notes: e.notes ?? null,
@@ -368,7 +436,26 @@ export async function importDeviceEvents(user: User): Promise<ImportResult> {
       });
       imported++;
     }
-    return { granted: true, imported };
+
+    // Prune imports in the window that the device no longer has (deleted there,
+    // or keyed the old pre-occurrence way `device:{calId}:{eventId}`).
+    let removed = 0;
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    for (const row of await mirrorReadEvents(user.id)) {
+      if (!row.event_id.startsWith("device:") || seen.has(row.event_id)) continue;
+      const s = new Date(row.start_time).getTime();
+      const f = new Date(row.end_time).getTime();
+      if (!(s < endMs && f > startMs)) continue; // outside the window — keep
+      try {
+        await deleteEvent(user, row.event_id);
+        removed++;
+      } catch (err) {
+        if (__DEV__)
+          console.warn("[plannerEvents] stale import delete failed", row.event_id, err);
+      }
+    }
+    return { granted: true, imported, removed };
   } catch (err) {
     // Calendar.* throws when the native module is missing from the installed
     // build (plugin added after the last native build) — the "massive error".

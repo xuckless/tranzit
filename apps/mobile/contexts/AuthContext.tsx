@@ -11,6 +11,8 @@ import { router } from "expo-router";
 import type { Session, User } from "@supabase/supabase-js";
 import { supabase } from "@/lib/supabase";
 import { completeAuthFromUrl } from "@/lib/authLinking";
+import { DEMO_MODE, DEMO_SESSION } from "@/lib/demo";
+import { cleanUpAfterSignOut } from "@/lib/signOutCleanup";
 
 interface AuthContextValue {
   /** False until the cached session has been restored. */
@@ -49,6 +51,27 @@ const AuthContext = createContext<AuthContextValue>({
  * `{ isLoaded, isSignedIn }` shape the route guards relied on under Clerk.
  */
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  // Demo mode: a fixed, always-signed-in demo user and no Supabase at all.
+  if (DEMO_MODE) return <DemoAuthProvider>{children}</DemoAuthProvider>;
+  return <SupabaseAuthProvider>{children}</SupabaseAuthProvider>;
+}
+
+const DEMO_VALUE: AuthContextValue = {
+  isLoaded: true,
+  isSignedIn: true,
+  isGuest: false,
+  session: DEMO_SESSION,
+  user: DEMO_SESSION.user,
+  recoveryMode: false,
+  clearRecoveryMode: () => {},
+  signOut: async () => {},
+};
+
+function DemoAuthProvider({ children }: { children: React.ReactNode }) {
+  return <AuthContext.Provider value={DEMO_VALUE}>{children}</AuthContext.Provider>;
+}
+
+function SupabaseAuthProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null);
   const [isLoaded, setIsLoaded] = useState(false);
   const [recoveryMode, setRecoveryMode] = useState(false);
@@ -124,6 +147,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearRecoveryMode: () => setRecoveryMode(false),
       signOut: async () => {
         await supabase.auth.signOut();
+        await cleanUpAfterSignOut();
       },
     }),
     [isLoaded, session, recoveryMode],

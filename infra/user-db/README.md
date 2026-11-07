@@ -49,13 +49,17 @@ Credentials are not committed. Set `POSTGRES_PASSWORD` in `.env` (see `.env.exam
 
 ## Schema
 
-The user-data schema (12 tables) lives in `schema.sql`. It is also copied to
+The user-data schema (13 tables, incl. `route_reports` for community reports) lives in `schema.sql`. It is also copied to
 `initdb/01-schema.sql`, which the postgres image auto-runs **only on a fresh volume**. To apply
 it to an already-running DB:
 
 ```bash
 docker exec -i tranzit-user-db psql -U tranzit-user -d tranzit-user -v ON_ERROR_STOP=1 < schema.sql
 ```
+
+`schema.sql` is not idempotent. A DB created before `route_reports` existed needs only that
+table: run its `CREATE TABLE route_reports …` + `CREATE INDEX idx_route_reports_route_created …`
+block from `schema.sql` by hand.
 
 ## Notes
 

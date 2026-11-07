@@ -8,6 +8,8 @@
 //    FKs user_info. So writes MUST go user_info → category → address.
 //  • category_code is a GLOBAL primary key, so it must be globally unique →
 //    "${user_id}:${slug(name)}".
+//  • Deletes are tombstoned locally (lib/db.ts) and replayed by pushPending, so an
+//    offline delete survives the next fetch instead of resurrecting the place.
 
 import type { User } from "@supabase/supabase-js";
 import {
@@ -18,12 +20,16 @@ import {
 import { syncUserInfo } from "@/lib/userSync";
 import { categoryIconFor } from "@/styles/categoryStyle";
 import {
+  isPermanentFailure,
   mirrorClearPending,
-  mirrorDeleteSavedPlace,
   mirrorReadPending,
   mirrorReadSavedPlaces,
   mirrorReplaceAll,
   mirrorUpsertSavedPlace,
+  outboxHttpStatus,
+  tombstoneDelete,
+  tombstoneDrop,
+  tombstoneRead,
   type SavedPlaceMirrorRow,
 } from "@/lib/db";
 
@@ -218,7 +224,12 @@ export async function savePlace(params: {
   return toSavedPlaces([row])[0];
 }
 
-/** Retry any rows that were saved locally but not yet confirmed remotely. */
+/**
+ * Flush the outbox: retry rows saved locally but not yet confirmed remotely, then
+ * replay tombstoned deletes. A permanent 4xx (not 408/429) is logged and given up
+ * on so it doesn't retry forever (a save loses its pending flag, a delete drops its
+ * tombstone).
+ */
 export async function pushPending(user: User): Promise<void> {
   const userId = user.id;
   let pending: SavedPlaceMirrorRow[];
@@ -232,28 +243,79 @@ export async function pushPending(user: User): Promise<void> {
       await pushRow(user, row);
       await mirrorClearPending(userId, row.category_code);
     } catch (err) {
-      if (__DEV__)
+      if (isPermanentFailure(err)) {
+        console.warn("[savedPlaces] giving up on save", row.category_code, err);
+        await mirrorClearPending(userId, row.category_code).catch(() => {});
+      } else if (__DEV__)
         console.warn("[savedPlaces] pushPending failed", row.category_code, err);
+    }
+  }
+
+  let tombs: { entity_key: string }[] = [];
+  try {
+    tombs = await tombstoneRead(userId, "saved_place");
+  } catch {
+    return;
+  }
+  for (const t of tombs) {
+    try {
+      await deleteRemote(userId, t.entity_key);
+      await tombstoneDrop(userId, "saved_place", t.entity_key);
+    } catch (err) {
+      if (isPermanentFailure(err)) {
+        console.warn("[savedPlaces] giving up on delete", t.entity_key, err);
+        await tombstoneDrop(userId, "saved_place", t.entity_key).catch(() => {});
+      } else if (__DEV__)
+        console.warn("[savedPlaces] delete replay failed", t.entity_key, err);
     }
   }
 }
 
+/** DELETE that treats 404 (already gone) as success. */
+async function deleteIgnoringMissing(
+  table: string,
+  params: Record<string, string>,
+): Promise<void> {
+  try {
+    await middlewareUserDelete(table, params);
+  } catch (err) {
+    if (outboxHttpStatus(err) !== 404) throw err;
+  }
+}
+
+/** Remote delete: the address first (it's the FK child), then its category. */
+async function deleteRemote(userId: string, categoryCode: string): Promise<void> {
+  await deleteIgnoringMissing("saved_addresses", {
+    user_id: userId,
+    category_code: categoryCode,
+  });
+  await deleteIgnoringMissing("user_defined_default_categories", {
+    user_id: userId,
+    category_code: categoryCode,
+  });
+}
+
 /**
- * Delete a saved place. Removes the mirror row immediately, then deletes the
- * remote address and its category (address first — it's the FK child).
+ * Delete a saved place. Removes the mirror row and records a tombstone
+ * atomically, then tries the remote delete. Offline/5xx: the tombstone stays and
+ * pushPending replays it — the call still resolves. A permanent 4xx drops the
+ * tombstone and rethrows so the caller can restore the list.
  */
 export async function deletePlace(
   user: User,
   categoryCode: string,
 ): Promise<void> {
   const userId = user.id;
-  await mirrorDeleteSavedPlace(userId, categoryCode);
-  await middlewareUserDelete("saved_addresses", {
-    user_id: userId,
-    category_code: categoryCode,
-  });
-  await middlewareUserDelete("user_defined_default_categories", {
-    user_id: userId,
-    category_code: categoryCode,
-  });
+  await tombstoneDelete(userId, "saved_place", categoryCode);
+  try {
+    await deleteRemote(userId, categoryCode);
+    await tombstoneDrop(userId, "saved_place", categoryCode);
+  } catch (err) {
+    if (isPermanentFailure(err)) {
+      await tombstoneDrop(userId, "saved_place", categoryCode).catch(() => {});
+      throw err;
+    }
+    if (__DEV__)
+      console.warn("[savedPlaces] remote delete failed, tombstoned", err);
+  }
 }

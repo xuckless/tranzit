@@ -1,16 +1,30 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useCallback, useRef } from "react";
 import {
   View,
   Text,
   StyleSheet,
   TouchableOpacity,
   ScrollView,
+  ActivityIndicator,
 } from "react-native";
+import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
 import { useTheme } from "@/contexts/ThemeContext";
+import { routeStore } from "@/lib/routeStore";
+import { getLastLocationFix } from "@/lib/tripWebSocket";
+import {
+  submitReport,
+  fetchReportSummary,
+  fetchRecentReports,
+  summaryThanksText,
+  newReportId,
+  isReportKind,
+  type RecentReport,
+  type ReportSeverity,
+} from "@/lib/reports";
 import type { AppTheme, PastelKey } from "@/styles/themes";
 
 // ─── Data ─────────────────────────────────────────────────────────────────────
@@ -68,7 +82,35 @@ const REPORT_TYPES: ReportType[] = [
   },
 ];
 
-const SEVERITY_LABELS = ["A little", "Notable", "Pretty bad", "Critical"];
+// Severity 1..3 as stored in route_reports.
+const SEVERITY_LABELS = ["A little", "Pretty bad", "Critical"];
+
+function timeAgo(iso: string, nowMs: number): string {
+  const t = new Date(iso).getTime();
+  if (isNaN(t)) return "";
+  const mins = Math.max(0, Math.round((nowMs - t) / 60000));
+  if (mins < 1) return "just now";
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if (hrs < 24) return `${hrs} h ago`;
+  return `${Math.round(hrs / 24)} d ago`;
+}
+
+/** Transit route names of the active journey (if any), for the route picker. */
+function activeRouteIds(): string[] {
+  if (!routeStore.getTripSession()) return [];
+  const r = routeStore.getSelectedRoute();
+  const ids = (r?.legs ?? [])
+    .flatMap((l) => l.steps ?? [])
+    .filter((st) => st.travelMode === "TRANSIT")
+    .map(
+      (st) =>
+        st.transitDetails?.transitLine?.nameShort ||
+        st.transitDetails?.transitLine?.name,
+    )
+    .filter((id): id is string => Boolean(id));
+  return [...new Set(ids)];
+}
 
 // ─── Icon helper ──────────────────────────────────────────────────────────────
 
@@ -96,7 +138,7 @@ function ReportIcon({
 
 // ─── Thank-you state ──────────────────────────────────────────────────────────
 
-function ThankYou({ onReset }: { onReset: () => void }) {
+function ThankYou({ text, onReset }: { text: string; onReset: () => void }) {
   const { theme } = useTheme();
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const { colors } = theme;
@@ -109,13 +151,7 @@ function ThankYou({ onReset }: { onReset: () => void }) {
         <Ionicons name="checkmark" size={48} color={colors.primary} />
       </View>
       <Text style={styles.thankYouTitle}>Thanks for the heads up!</Text>
-      <Text style={styles.thankYouBody}>
-        We just told{" "}
-        <Text style={{ fontWeight: "800", color: colors.ink }}>
-          1,240 commuters
-        </Text>{" "}
-        on this line. You&apos;re a real one.
-      </Text>
+      <Text style={styles.thankYouBody}>{text}</Text>
       <TouchableOpacity
         style={styles.secondaryBtn}
         onPress={onReset}
@@ -131,19 +167,91 @@ function ThankYou({ onReset }: { onReset: () => void }) {
 
 export default function ReportScreen() {
   const { theme } = useTheme();
-  const { colors } = theme;
+  const { colors, semantic } = theme;
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [selected, setSelected] = useState<string | null>(null);
   const [severity, setSeverity] = useState(1);
-  const [sent, setSent] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [thanks, setThanks] = useState<string | null>(null);
+  // Kept across a failed attempt so a retry upserts the same row.
+  const reportIdRef = useRef<string | null>(null);
 
-  if (sent) {
+  const [routeOptions, setRouteOptions] = useState<string[]>([]);
+  const [routeId, setRouteId] = useState<string | null>(null);
+
+  const [recent, setRecent] = useState<RecentReport[] | null>(null);
+  const [recentError, setRecentError] = useState(false);
+  const [loadedAt, setLoadedAt] = useState(() => Date.now());
+
+  const loadRecent = useCallback(async () => {
+    try {
+      const rows = await fetchRecentReports({ limit: 20 });
+      setRecent(rows);
+      setRecentError(false);
+    } catch (e) {
+      console.warn("[report] recent reports failed:", e);
+      setRecentError(true);
+    } finally {
+      setLoadedAt(Date.now());
+    }
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      const ids = activeRouteIds();
+      setRouteOptions(ids);
+      setRouteId((cur) => (cur && ids.includes(cur) ? cur : (ids[0] ?? null)));
+      void loadRecent();
+    }, [loadRecent]),
+  );
+
+  const handleSend = useCallback(async () => {
+    if (!selected || !isReportKind(selected) || sending) return;
+    setSending(true);
+    setError(null);
+    try {
+      if (!reportIdRef.current) reportIdRef.current = newReportId();
+      const fix = getLastLocationFix();
+      await submitReport({
+        reportId: reportIdRef.current,
+        kind: selected,
+        severity: severity as ReportSeverity,
+        routeId,
+        lat: fix?.lat,
+        lng: fix?.lng,
+      });
+      reportIdRef.current = null;
+      let text = "Thanks — your report was sent.";
+      try {
+        const summary = await fetchReportSummary({ routeId, minutes: 60 });
+        text = summaryThanksText(summary, routeId ? `Route ${routeId}` : null);
+      } catch (e) {
+        console.warn("[report] summary failed:", e);
+      }
+      setThanks(text);
+      void loadRecent();
+    } catch (e) {
+      console.warn("[report] submit failed:", e);
+      setError(
+        e instanceof Error && /sign in/i.test(e.message)
+          ? e.message
+          : "Couldn't send your report. Check your connection and try again.",
+      );
+    } finally {
+      setSending(false);
+    }
+  }, [selected, severity, sending, routeId, loadRecent]);
+
+  if (thanks) {
     return (
       <ThankYou
+        text={thanks}
         onReset={() => {
-          setSent(false);
+          setThanks(null);
           setSelected(null);
           setSeverity(1);
+          setError(null);
         }}
       />
     );
@@ -163,13 +271,35 @@ export default function ReportScreen() {
         <View style={styles.headerCopy}>
           <Text style={styles.title}>What&apos;s happening?</Text>
           <Text style={styles.subtitle}>
-            Your report helps{" "}
-            <Text style={{ fontWeight: "800", color: colors.ink }}>
-              1,240 commuters
-            </Text>{" "}
-            on this line right now.
+            Reports are shared with other riders on the same route.
           </Text>
         </View>
+
+        {/* Optional route — only offered while a journey is active */}
+        {routeOptions.length > 0 && (
+          <View style={styles.routeRow}>
+            {[...routeOptions, null].map((id) => {
+              const active = routeId === id;
+              return (
+                <TouchableOpacity
+                  key={id ?? "__none__"}
+                  onPress={() => setRouteId(id)}
+                  activeOpacity={0.8}
+                  style={[styles.severityChip, styles.routeChip, active && styles.severityChipActive]}
+                >
+                  <Text
+                    style={[
+                      styles.severityChipText,
+                      active && styles.severityChipTextActive,
+                    ]}
+                  >
+                    {id ? `Route ${id}` : "No route"}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
 
         {/* 2-column category grid */}
         <View style={styles.grid}>
@@ -234,18 +364,73 @@ export default function ReportScreen() {
             </View>
           </View>
         )}
+
+        {/* Recent reports */}
+        <View style={styles.recentCard}>
+          <Text style={styles.severityHeading}>Recent reports</Text>
+          {recent == null && !recentError ? (
+            <ActivityIndicator color={colors.ink3} />
+          ) : recentError && !recent?.length ? (
+            <TouchableOpacity onPress={() => void loadRecent()} activeOpacity={0.8}>
+              <Text style={styles.recentEmpty}>
+                Couldn&apos;t load recent reports. Tap to retry.
+              </Text>
+            </TouchableOpacity>
+          ) : !recent?.length ? (
+            <Text style={styles.recentEmpty}>No reports yet.</Text>
+          ) : (
+            recent.map((r) => {
+              const type = REPORT_TYPES.find((t) => t.id === r.kind);
+              const p = theme.colors.pastels[type?.pastel ?? "lavender"];
+              const sev = SEVERITY_LABELS[Math.min(3, Math.max(1, r.severity)) - 1];
+              return (
+                <View key={r.report_id} style={styles.recentRow}>
+                  <View style={[styles.recentIcon, { backgroundColor: p.bg }]}>
+                    <ReportIcon
+                      lib={type?.iconLib ?? "ionicons"}
+                      name={type?.icon ?? "sparkles"}
+                      size={16}
+                      color={p.ink}
+                    />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.recentTitle}>
+                      {type?.label ?? r.kind}
+                      {r.route_id ? ` · Route ${r.route_id}` : ""}
+                    </Text>
+                    <Text style={styles.recentMeta}>
+                      {sev} · {timeAgo(r.created_at, loadedAt)}
+                    </Text>
+                  </View>
+                </View>
+              );
+            })
+          )}
+        </View>
       </ScrollView>
 
       {/* Send button — pinned to bottom */}
       <View style={styles.bottomBar}>
+        {error && (
+          <Text style={[styles.errorText, { color: semantic.danger }]}>{error}</Text>
+        )}
         <TouchableOpacity
-          onPress={() => selected && setSent(true)}
+          onPress={() => void handleSend()}
+          disabled={!selected || sending}
           activeOpacity={0.85}
-          style={[styles.sendBtn, !selected && styles.sendBtnDisabled]}
+          style={[styles.sendBtn, (!selected || sending) && styles.sendBtnDisabled]}
         >
-          <Ionicons name="send" size={20} color={colors.onPrimary} />
+          {sending ? (
+            <ActivityIndicator size="small" color={colors.onPrimary} />
+          ) : (
+            <Ionicons name={error ? "refresh" : "send"} size={20} color={colors.onPrimary} />
+          )}
           <Text style={styles.sendBtnText}>
-            {sel ? `Send "${sel.label}" report` : "Pick what you saw"}
+            {sending
+              ? "Sending…"
+              : sel
+                ? `${error ? "Retry" : "Send"} "${sel.label}" report`
+                : "Pick what you saw"}
           </Text>
         </TouchableOpacity>
       </View>
@@ -362,6 +547,40 @@ function makeStyles(t: AppTheme) {
     severityChipTextActive: {
       color: colors.primaryInk,
     },
+
+    // Route picker
+    routeRow: {
+      flexDirection: "row",
+      flexWrap: "wrap",
+      gap: spacing.element,
+      paddingHorizontal: spacing.screen,
+      paddingBottom: 14,
+    },
+    routeChip: { flex: 0, paddingHorizontal: 14 },
+
+    // Recent reports
+    recentCard: {
+      marginHorizontal: spacing.screen,
+      marginTop: 18,
+      backgroundColor: colors.card,
+      borderRadius: 20,
+      borderWidth: 1,
+      borderColor: colors.divider,
+      padding: spacing.card,
+      gap: 12,
+    },
+    recentEmpty: { ...typography.body, color: colors.ink3 },
+    recentRow: { flexDirection: "row", alignItems: "center", gap: 12 },
+    recentIcon: {
+      width: 32,
+      height: 32,
+      borderRadius: 10,
+      justifyContent: "center",
+      alignItems: "center",
+    },
+    recentTitle: { ...typography.subtitleStrong, color: colors.ink },
+    recentMeta: { ...typography.badge, color: colors.ink3 },
+    errorText: { ...typography.body, textAlign: "center", marginBottom: 8 },
 
     // Bottom bar
     bottomBar: {

@@ -40,6 +40,14 @@ services:
       - PORT=8765
       - SUPABASE_DIRECT_CONNECTION_STRING=${SUPABASE_DIRECT_CONNECTION_STRING:-}
       - APP_TOKEN=${APP_TOKEN:-}
+      # Optional feed URL overrides (empty = Calgary Open Data defaults in config.go).
+      - RT_VEHICLES_URL=${RT_VEHICLES_URL:-}
+      - RT_TRIPS_URL=${RT_TRIPS_URL:-}
+      - RT_ALERTS_URL=${RT_ALERTS_URL:-}
+      - GTFS_STATIC_URL=${GTFS_STATIC_URL:-}
+      - STOPS_URL=${STOPS_URL:-}
+      - ROUTES_URL=${ROUTES_URL:-}
+      - TRAIN_STATIONS_URL=${TRAIN_STATIONS_URL:-}
     restart: unless-stopped
 
 volumes:

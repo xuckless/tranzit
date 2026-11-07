@@ -11,6 +11,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 	_ "time/tzdata" // embed the tz database; the alpine runtime image ships no tzdata
 )
@@ -136,6 +137,7 @@ query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $
     searchWindow: $searchWindow
     arriveBy: $arriveBy
   ) {
+    date
     searchWindowUsed
     itineraries {
       duration
@@ -166,6 +168,7 @@ query Plan($fromLat: Float!, $fromLon: Float!, $toLat: Float!, $toLon: Float!, $
 type otpResponse struct {
 	Data struct {
 		Plan struct {
+			Date             int64          `json:"date"`
 			SearchWindowUsed int            `json:"searchWindowUsed"`
 			Itineraries      []otpItinerary `json:"itineraries"`
 		} `json:"plan"`
@@ -338,8 +341,39 @@ func FetchOTPRoutes(req OTPRouteRequest) ([]CleanItinerary, error) {
 // returning the mapped itineraries and the searchWindow OTP actually used (for logging).
 // With arriveBy the anchor is the arrival deadline (window extends back); otherwise it is
 // the departure instant (window extends forward).
+// otpClockSkew corrects for OTP and this service disagreeing about Calgary's UTC
+// offset. plan() takes a wall-clock date/time, which OTP reads in its own tz
+// database; when the two databases differ (e.g. Alberta's move to permanent
+// daylight time is in one but not the other), every plan silently shifts by an
+// hour. OTP echoes the instant it searched from as plan.date, so the first plan
+// measures the gap and later ones send a corrected wall-clock time.
+var otpClockSkew atomic.Int64 // seconds to add to the anchor before formatting
+
+// skewFrom returns how far OTP's searched instant is from the one we meant,
+// rounded to the nearest 15 minutes (UTC offsets are multiples of that), or 0
+// when OTP didn't report one.
+func skewFrom(anchor time.Time, otpDateMs int64) time.Duration {
+	if otpDateMs == 0 {
+		return 0
+	}
+	return anchor.Sub(time.UnixMilli(otpDateMs)).Round(15 * time.Minute)
+}
+
 func planOnce(req OTPRouteRequest, modes []transportMode, num int, anchor time.Time, windowSecs int, arriveBy bool) ([]CleanItinerary, int, error) {
-	local := anchor.In(calgaryTZ)
+	out, used, otpDate, err := planAt(req, modes, num, anchor, windowSecs, arriveBy)
+	if err != nil {
+		return nil, 0, err
+	}
+	if d := skewFrom(anchor, otpDate); d != 0 {
+		total := time.Duration(otpClockSkew.Add(int64(d/time.Second))) * time.Second
+		log.Printf("[/route/otp] OTP read our Calgary time %s off; correcting by %s from now on", d, total)
+		out, used, _, err = planAt(req, modes, num, anchor, windowSecs, arriveBy)
+	}
+	return out, used, err
+}
+
+func planAt(req OTPRouteRequest, modes []transportMode, num int, anchor time.Time, windowSecs int, arriveBy bool) ([]CleanItinerary, int, int64, error) {
+	local := anchor.Add(time.Duration(otpClockSkew.Load()) * time.Second).In(calgaryTZ)
 	payload := map[string]any{
 		"query": otpPlanQuery,
 		"variables": map[string]any{
@@ -363,25 +397,25 @@ func planOnce(req OTPRouteRequest, modes []transportMode, num int, anchor time.T
 	u := otpBaseURL() + otpGraphQLPath()
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, u, bytes.NewReader(body))
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	httpReq.Header.Set("Content-Type", "application/json")
 
 	resp, err := otpHTTPClient().Do(httpReq)
 	if err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return nil, 0, fmt.Errorf("otp http %d", resp.StatusCode)
+		return nil, 0, 0, fmt.Errorf("otp http %d", resp.StatusCode)
 	}
 
 	var parsed otpResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, 0, err
+		return nil, 0, 0, err
 	}
 	if len(parsed.Errors) > 0 {
-		return nil, 0, fmt.Errorf("otp graphql error: %s", parsed.Errors[0].Message)
+		return nil, 0, 0, fmt.Errorf("otp graphql error: %s", parsed.Errors[0].Message)
 	}
 
 	out := make([]CleanItinerary, 0, len(parsed.Data.Plan.Itineraries))
@@ -425,7 +459,7 @@ func planOnce(req OTPRouteRequest, modes []transportMode, num int, anchor time.T
 		out = append(out, ci)
 	}
 
-	return out, parsed.Data.Plan.SearchWindowUsed, nil
+	return out, parsed.Data.Plan.SearchWindowUsed, parsed.Data.Plan.Date, nil
 }
 
 // enrichVehicleIDs fills in CleanLeg.VehicleID for transit legs by looking up the live

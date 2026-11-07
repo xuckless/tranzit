@@ -14,17 +14,24 @@ import type { AppTheme } from "@/styles/themes";
 import {
     type PlannedEvent,
     formatClock,
-    minutesOfDay,
     HOUR_HEIGHT,
-    GUTTER_WIDTH,
     EVENT_MIN_HEIGHT,
-    DAY_MIN,
     SNAP_MIN,
 } from "./trip";
 
 type Props = {
+    /** The stored event (a repeating event's series); ids go back through callbacks. */
     event: PlannedEvent;
-    rightInset: number;
+    /** This day's slice of the event/occurrence, in timeline minutes. */
+    startMin: number;
+    endMin: number;
+    continuesBefore: boolean;
+    continuesAfter: boolean;
+    /** Lane geometry from ./layout.ts, in px. */
+    left: number;
+    width: number;
+    /** Long-press drag (off for repeats and multi-day slices). */
+    draggable: boolean;
     onPress: (id: string) => void;
     onDrag: (id: string, deltaMin: number) => void;
 };
@@ -33,7 +40,18 @@ function triggerHaptic() {
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium).catch(() => {});
 }
 
-function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
+function TripEventCardBase({
+    event,
+    startMin,
+    endMin,
+    continuesBefore,
+    continuesAfter,
+    left,
+    width,
+    draggable,
+    onPress,
+    onDrag,
+}: Props) {
     const { theme } = useTheme();
     const { colors } = theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
@@ -41,20 +59,26 @@ function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
     const translateY = useSharedValue(0);
     const active = useSharedValue(0);
 
-    const startMin = minutesOfDay(event.start);
-    let endMin = minutesOfDay(event.end);
-    if (endMin <= startMin) endMin = DAY_MIN; // ends next day → clamp to end of day
-
     const top = (startMin / 60) * HOUR_HEIGHT;
-    const height = Math.max(
-        ((endMin - startMin) / 60) * HOUR_HEIGHT,
-        EVENT_MIN_HEIGHT,
+    const height = Math.min(
+        Math.max(((endMin - startMin) / 60) * HOUR_HEIGHT, EVENT_MIN_HEIGHT),
+        24 * HOUR_HEIGHT - top,
     );
+    const narrow = width < 110;
+    // How many caption lines fit under the title + time (≈18px each after the
+    // ~50px those two take with padding). A one-hour card fits one: show the
+    // travel time if there is one (it explains the lead-in block above), else
+    // the location.
+    const extraLines = narrow ? 0 : Math.max(0, Math.floor((height - 50) / 18));
+    const showTravel = !!event.travelTime && extraLines >= 1;
+    const showLocation =
+        !!event.location && extraLines >= (event.travelTime ? 2 : 1);
 
     // Tap → open detail. Long-press + drag → reschedule (snapped to 5 min).
     // Long-press is required to start the drag so a quick tap never fights the
     // surrounding vertical ScrollView.
     const pan = Gesture.Pan()
+        .enabled(draggable)
         .activateAfterLongPress(220)
         .onStart(() => {
             active.value = withTiming(1, { duration: 120 });
@@ -95,16 +119,25 @@ function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
             <Animated.View
                 style={[
                     styles.container,
-                    {
-                        top,
-                        height,
-                        left: GUTTER_WIDTH + 8,
-                        right: rightInset,
-                    },
+                    { top, height, left, width },
+                    continuesBefore && styles.contTop,
+                    continuesAfter && styles.contBottom,
                     animStyle,
                 ]}
             >
+                {continuesBefore && (
+                    <Text style={styles.cont} numberOfLines={1}>
+                        ↑ cont.
+                    </Text>
+                )}
                 <View style={styles.titleRow}>
+                    {!!event.recurrenceRule && (
+                        <Ionicons
+                            name="repeat"
+                            size={13}
+                            color={colors.ink2}
+                        />
+                    )}
                     {event.imported && (
                         <Ionicons
                             name="calendar-outline"
@@ -119,12 +152,12 @@ function TripEventCardBase({ event, rightInset, onPress, onDrag }: Props) {
                 <Text style={styles.time} numberOfLines={1}>
                     {formatClock(startMin)} – {formatClock(endMin)}
                 </Text>
-                {!!event.location && (
+                {showLocation && (
                     <Text style={styles.location} numberOfLines={1}>
                         {event.location}
                     </Text>
                 )}
-                {!!event.travelTime && (
+                {showTravel && (
                     <Text style={styles.travel} numberOfLines={1}>
                         ⏱ {event.travelTime} min travel
                     </Text>
@@ -153,6 +186,21 @@ function makeStyles(t: AppTheme) {
             overflow: "hidden",
             ...shadow.card,
             shadowOpacity: 0.12,
+        },
+        // Multi-day slices: square the edge that continues into another day.
+        contTop: {
+            borderTopLeftRadius: 0,
+            borderTopRightRadius: 0,
+            borderTopWidth: 0,
+        },
+        contBottom: {
+            borderBottomLeftRadius: 0,
+            borderBottomRightRadius: 0,
+            borderBottomWidth: 0,
+        },
+        cont: {
+            ...typography.micro,
+            color: colors.ink3,
         },
         titleRow: {
             flexDirection: "row",

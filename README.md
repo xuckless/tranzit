@@ -113,6 +113,8 @@ tranzit/
 │   └── otp/             OpenTripPlanner 2 — the routing graph
 ├── infra/
 │   └── user-db/         PostgreSQL — user data schema + compose stack
+├── demo/                the local demo stack — compose file, rt-feed, seed, GPS tracks
+├── demo.sh              one command to run all of it on your machine
 └── docs/
 ```
 
@@ -143,7 +145,7 @@ Polls Calgary's three GTFS-Realtime feeds and upserts trip updates, vehicle posi
 </td></tr>
 
 <tr><td valign="top"><b>services/otp</b></td><td valign="top">OpenTripPlanner 2.6<br/>Java 21</td><td valign="top">
-Builds a routing graph from Calgary's static GTFS plus an OpenStreetMap extract clipped to the city bbox, then applies the live GTFS-RT feeds through OTP's realtime updaters — so delays and cancellations change trip plans without a graph rebuild. Rebuilt weekly in CI.
+Builds a routing graph from Calgary's static GTFS plus an OpenStreetMap extract clipped to the city bbox, then applies the live GTFS-RT feeds through OTP's realtime updaters — so delays and cancellations change trip plans without a graph rebuild. The demo builds the graph on first run; <code>./demo.sh rebuild-graph</code> refreshes it when Calgary publishes a new schedule.
 </td></tr>
 
 <tr><td valign="top"><b>apps/stats</b></td><td valign="top">Nuxt 4<br/>Tailwind · Chart.js</td><td valign="top">
@@ -197,7 +199,7 @@ Two layers, because the threat is different in each direction.
 
 | Direction | Mechanism | Enforcement |
 |---|---|---|
-| **Rider → any public service** | Supabase JWT (ES256), verified against the project JWKS — `iss`, `aud=authenticated`, `exp` | Hard-enforced on route-save. Soft-rollout flag (`AUTH_ENFORCE`) on route-service and db-middleware |
+| **Rider → any public service** | Supabase JWT (ES256), verified against the project JWKS — `iss`, `aud=authenticated`, `exp` | Hard-enforced on route-save. Enforced by default on route-service and db-middleware (`AUTH_ENFORCE=false` is the old log-only rollout mode) |
 | **Service → service** | Mutual TLS with leaf certificates from a shared private CA, over the private mesh | Per-sibling: mTLS when that sibling's `*_MTLS_ADDR` is set, public URL otherwise |
 | **Anything → the databases** | No route. Both databases are unpublished; db-middleware is the only reachable surface | Topological — there is no port to attack |
 
@@ -205,7 +207,43 @@ The honest caveat, which is written down in each service's `AUTH.md` rather than
 
 ## ✦ Run it yourself
 
-> Running this needs your own Supabase project, a MapTiler key, a Google Maps key, and roughly 4&nbsp;GB of RAM free for the OTP graph build. Every service reads its configuration from the environment; no deployment detail is committed anywhere in this repository. See [LICENSE](LICENSE) for what you may do with a local build.
+### The demo — one command, no accounts
+
+Everything runs on your machine: PostgreSQL, the four Go services, OpenTripPlanner, and live Calgary transit data. There is no sign-in; the app runs as a seeded demo rider with saved places and a week of planned trips.
+
+You need **Docker** (with Compose v2), **Node 20+ or Bun**, ~6&nbsp;GB of free RAM, and either the **Android SDK** with an emulator and JDK 17 or 21 (any OS; `demo.sh` finds one if your default Java is newer) or **Xcode** (macOS, for the iOS Simulator).
+
+```bash
+./demo.sh up            # first run: builds the images and the OTP graph (~10–15 min), then ~30 s
+./demo.sh app android   # or: ./demo.sh app ios — builds the app once, then launches it
+```
+
+Then, in another terminal, start a journey in the app and let the emulator ride it:
+
+```bash
+./demo.sh drive android            # plays demo/gps/kensington-to-downtown.csv (walk → Route 1 → walk)
+SPEED=4 ./demo.sh drive android    # 4× faster
+```
+
+| Command | What it does |
+|---|---|
+| `./demo.sh up [--stats]` | Start the stack; `--stats` also starts the ops dashboard on localhost:3000 |
+| `./demo.sh app [android\|ios]` | Build (first time) and launch the app in demo mode against localhost |
+| `./demo.sh drive [android\|ios] [track.csv]` | Feed a GPS track into the emulator / simulator |
+| `./demo.sh status` · `logs [service]` | What's running, and whether live data is coming from Calgary or the recording |
+| `./demo.sh record [minutes]` | Record the live GTFS-RT feeds into `demo/recordings` for the offline fallback |
+| `./demo.sh rebuild-graph` | Rebuild the OTP graph from the latest Calgary GTFS |
+| `./demo.sh down` · `reset` | Stop (data kept) · stop and delete the demo database (graph kept) |
+
+**Live data.** `rt-feed` proxies Calgary's three GTFS-Realtime feeds for rt-service and OTP. If they can't be reached, it replays `demo/recordings`, shifting every timestamp so the data reads as current. `FEED_MODE=replay` forces the recording. Late at night Calgary runs very few buses, so the map is quiet; a daytime recording makes for a livelier offline demo.
+
+**No keys needed.** Place search uses [Photon](https://photon.komoot.io) (OpenStreetMap), and the map uses [OpenFreeMap](https://openfreemap.org) tiles. Put a `GMAPS_API_KEY` or `EXPO_PUBLIC_MAPTILER_KEY` in `demo/.env` (see `demo/.env.example`) to use Google Places or MapTiler instead.
+
+**How demo mode works.** The services start with `DEMO_USER_ID`, which makes every request that one user and skips Supabase entirely; the app is built with `EXPO_PUBLIC_DEMO_MODE=true`, which skips the sign-in screens. Neither flag is set outside the demo.
+
+### A real deployment
+
+> This needs your own Supabase project, and roughly 4&nbsp;GB of RAM free for the OTP graph build. Every service reads its configuration from the environment; no deployment detail is committed anywhere in this repository. See [LICENSE](LICENSE) for what you may do with a local build.
 
 **1 — The routing graph** (slowest step; do it first)
 
@@ -243,8 +281,8 @@ cd services/db-middleware && docker compose up -d --build
 ```bash
 cd apps/mobile
 bun install
-cp .env.example .env.local      # point the three service URLs at your deployment
-bunx expo start
+cp .env.example .env.local      # Supabase URL + anon key, and the three service URLs
+bunx expo run:android           # or run:ios — a development build (MapLibre needs native code)
 ```
 
 The app fails fast and names the variable if one is missing, rather than silently fetching from an empty host.
@@ -259,7 +297,7 @@ Each component also carries its own docs: `AUTH.md` for the auth model, `DOCS.md
 
 ## ✦ Built with
 
-[OpenTripPlanner 2](https://www.opentripplanner.org/) · [Expo](https://expo.dev) · [MapLibre](https://maplibre.org) + [MapTiler](https://maptiler.com) · [Supabase](https://supabase.com) · [PostgreSQL](https://postgresql.org) · [Tailscale](https://tailscale.com) · [Nuxt](https://nuxt.com) · [Chart.js](https://chartjs.org) · Go · TypeScript
+[OpenTripPlanner 2](https://www.opentripplanner.org/) · [Expo](https://expo.dev) · [MapLibre](https://maplibre.org) + [OpenFreeMap](https://openfreemap.org) / [MapTiler](https://maptiler.com) · [Photon](https://photon.komoot.io) · [Supabase](https://supabase.com) · [PostgreSQL](https://postgresql.org) · [Tailscale](https://tailscale.com) · [Nuxt](https://nuxt.com) · [Chart.js](https://chartjs.org) · Go · TypeScript
 
 Transit data © [City of Calgary](https://data.calgary.ca) under its Open Data Licence. Street data © [OpenStreetMap](https://www.openstreetmap.org/copyright) contributors, ODbL. Neither is redistributed here — both are fetched at build time.
 

@@ -33,12 +33,32 @@ import BottomSheet, {
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { MarqueeText } from "@/components/MarqueeText";
 import { useVehiclesForRoutes, vehiclesToGeoJSON } from "@/lib/vehicleSSE";
-import { useTripWebSocket } from "@/lib/tripWebSocket";
+import {
+  useTripWebSocket,
+  getLastLocationFix,
+  serverNowS,
+} from "@/lib/tripWebSocket";
+// Side effect: defines the background-location TaskManager task at module scope
+// (must happen before the OS delivers a batch). See lib/backgroundLocation.ts.
+import {
+  startBackgroundTracking,
+  stopBackgroundTracking,
+} from "@/lib/backgroundLocation";
+import {
+  submitReport,
+  fetchReportSummary,
+  summaryThanksText,
+  newReportId,
+  isReportKind,
+  type ReportSeverity,
+} from "@/lib/reports";
+import AlertBanner from "@/components/AlertBanner";
+import { CompletionCard } from "@/components/commute/CompletionCard";
 import { Ionicons } from "@expo/vector-icons";
 import FontAwesome5 from "@expo/vector-icons/FontAwesome5";
 import FontAwesome6 from "@expo/vector-icons/FontAwesome6";
 import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
-import { useFocusEffect } from "@react-navigation/native";
+import { useFocusEffect, useIsFocused } from "@react-navigation/native";
 import { useRouter } from "expo-router";
 import * as Location from "expo-location";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -51,7 +71,11 @@ import {
   formatDuration,
   formatDistance,
 } from "@/components/routes/RoutePickerSheet";
-import { scheduleBoarding, cancelBoarding } from "@/lib/boardingNotifications";
+import {
+  scheduleBoarding,
+  cancelBoarding,
+  ensureNotificationPermission,
+} from "@/lib/boardingNotifications";
 import { scheduleLeaveBy, cancelLeaveBy } from "@/lib/leaveByNotifications";
 import {
   startTripActivity,
@@ -101,6 +125,8 @@ interface CommuteStop {
   transitName?: string;
   transitColor?: string;
   timeRemaining?: number;
+  /** Server ETA (Unix seconds, server clock) for live countdowns. */
+  eta?: number;
   /** Present only on walking-segment rows (not origin/destination anchors). */
   walkInfo?: { distance?: string; transfer?: boolean };
 }
@@ -150,7 +176,19 @@ const REPORT_TYPES: ReportType[] = [
   },
 ];
 
-const SEVERITY_LABELS = ["A little", "Notable", "Pretty bad", "Critical"];
+// Severity 1..3 as stored in route_reports.
+const SEVERITY_LABELS = ["A little", "Pretty bad", "Critical"];
+
+/** Leave-by / countdown refresh cadence while the screen is focused. */
+const TICK_MS = 15000;
+/** How long without a socket before "CONNECTING" becomes "Offline · retrying". */
+const OFFLINE_AFTER_MS = 10000;
+/** The leave-by hint has served its purpose once the rider is this close to the stop… */
+/** Within this many metres of the destination counts as arrived. */
+const ARRIVED_M = 40;
+const NEAR_STOP_M = 100;
+/** …or moving at walking pace or faster. */
+const MOVING_MPS = 1.0;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -204,10 +242,9 @@ function serverStatusToLocal(s: ServerStopStatus): CommuteStopStatus {
 
 function formatEta(eta: number): string {
   if (eta <= 0) return "";
-  return new Date(eta * 1000).toLocaleTimeString("en-CA", {
-    hour: "2-digit",
+  return new Date(eta * 1000).toLocaleTimeString("en-US", {
+    hour: "numeric",
     minute: "2-digit",
-    hour12: false,
   });
 }
 
@@ -669,9 +706,20 @@ export default function CommuteScreen() {
   const [reportSelected, setReportSelected] = useState<string | null>(null);
   const [reportSeverity, setReportSeverity] = useState(1);
   const [reportSent, setReportSent] = useState(false);
+  const [reportSending, setReportSending] = useState(false);
+  const [reportError, setReportError] = useState<string | null>(null);
+  const [reportThanks, setReportThanks] = useState<string | null>(null);
+  // Kept across a failed attempt so a retry upserts the same row.
+  const reportIdRef = useRef<string | null>(null);
   const cameraRef = useRef<CameraRef>(null);
+  const isFocused = useIsFocused();
 
   const [route, setRoute] = useState<Route | null>(null);
+  // Session whose rider came within ARRIVED_M of the destination. Route Save only
+  // tracks transit stops, so a walk-only trip (or the final walk) never reaches
+  // COMPLETED on the server; the client detects arrival itself.
+  const [arrivedSession, setArrivedSession] = useState<string | null>(null);
+  const destinationCoordRef = useRef<{ lat: number; lng: number } | null>(null);
   const [destinationInfo, setDestinationInfo] = useState<{
     label: string;
     lat: number;
@@ -696,6 +744,25 @@ export default function CommuteScreen() {
     null,
   );
   const [pendingReroute, setPendingReroute] = useState(false);
+  // Set when the server reports the trip COMPLETED; shows the arrival card until Done.
+  const [completion, setCompletion] = useState<{
+    destination: string;
+    durationMin: number | null;
+    arrivedAt: string;
+  } | null>(null);
+  // Device time the current trip was started in this process (null after a cold
+  // restore, where the real start time isn't known).
+  const tripStartedAtRef = useRef<{ sessionId: string; at: number } | null>(null);
+  // Session whose COMPLETED state has already been handled (teardown runs once).
+  const completionHandledRef = useRef<string | null>(null);
+  // The session whose rider has left for the stop (moving / near it): the
+  // leave-by hint has served its purpose for that trip.
+  const [departedSession, setDepartedSession] = useState<string | null>(null);
+  const boardingStopCoordRef = useRef<{ lat: number; lng: number } | null>(null);
+  const departedRef = useRef(false);
+  const sessionIdRef = useRef<string | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const [offline, setOffline] = useState(false);
 
   const speedBadgeRef = useRef<SpeedBadgeHandle>(null);
 
@@ -714,6 +781,7 @@ export default function CommuteScreen() {
     isConnected,
     sendLocation,
     sendUnsureResponse,
+    reconnect,
     disconnect,
   } = useTripWebSocket(wsPath);
 
@@ -753,13 +821,22 @@ export default function CommuteScreen() {
         if (storedDest) setDestinationInfo(storedDest);
         if (storedOrigin) setOriginInfo(storedOrigin);
         if (storedSession) {
+          if (tripStartedAtRef.current?.sessionId !== storedSession.sessionId) {
+            tripStartedAtRef.current = {
+              sessionId: storedSession.sessionId,
+              at: Date.now(),
+            };
+          }
           setSessionId(storedSession.sessionId);
           setWsPath(storedSession.wsUrl);
+          setCompletion(null);
         }
         setReportSelected(null);
         setReportSeverity(1);
         setReportSent(false);
-        activityStartedRef.current = false;
+        setReportError(null);
+        // NB: don't reset activityStartedRef here — the Live Activity is still
+        // running; resetting it made the next STATE start a duplicate one.
         return;
       }
 
@@ -771,7 +848,7 @@ export default function CommuteScreen() {
         const saved = await loadActiveTrip();
         if (cancelled) return;
         if (!saved) {
-          setRoute(null); // genuinely no active trip
+          setRoute(null); // genuinely no active trip (the arrival card, if any, stays)
           return;
         }
 
@@ -812,7 +889,7 @@ export default function CommuteScreen() {
             activityStartedRef.current = false;
           }
         } catch (e) {
-          console.error("[commute] trip restore failed:", e);
+          console.warn("[commute] trip restore failed:", e);
         } finally {
           if (!cancelled) setRestoring(false);
         }
@@ -827,6 +904,10 @@ export default function CommuteScreen() {
   useEffect(() => {
     boardingConfirmStopRef.current = boardingConfirmStop;
   }, [boardingConfirmStop]);
+  useEffect(() => {
+    sessionIdRef.current = sessionId;
+    departedRef.current = sessionId != null && departedSession === sessionId;
+  }, [sessionId, departedSession]);
   useEffect(() => {
     tripStateRef.current = tripState;
   }, [tripState]);
@@ -896,6 +977,35 @@ export default function CommuteScreen() {
               speedBadgeRef.current?.setSpeed(Math.round(coords.speed * 3.6));
             }
 
+            // One-shot: the rider has set off for (or reached) the boarding stop,
+            // so the leave-by hint has done its job.
+            if (!departedRef.current) {
+              const stop = boardingStopCoordRef.current;
+              const moving = coords.speed != null && coords.speed >= MOVING_MPS;
+              const near =
+                stop != null &&
+                haversineMeters(coords.latitude, coords.longitude, stop.lat, stop.lng) <
+                  NEAR_STOP_M;
+              if (moving || near) {
+                const sid = sessionIdRef.current;
+                if (sid) {
+                  departedRef.current = true;
+                  setDepartedSession(sid);
+                }
+              }
+            }
+
+            const dest = destinationCoordRef.current;
+            const sidNow = sessionIdRef.current;
+            if (
+              dest &&
+              sidNow &&
+              haversineMeters(coords.latitude, coords.longitude, dest.lat, dest.lng) <
+                ARRIVED_M
+            ) {
+              setArrivedSession(sidNow);
+            }
+
             const now = Date.now();
             if (now - lastLocationSentRef.current >= 5000) {
               lastLocationSentRef.current = now;
@@ -915,7 +1025,7 @@ export default function CommuteScreen() {
         }
         locationSubRef.current = sub;
       } catch (e) {
-        console.error("[commute] GPS subscription failed:", e);
+        console.warn("[commute] GPS subscription failed:", e);
       }
     })();
 
@@ -994,12 +1104,41 @@ export default function CommuteScreen() {
     return null;
   }, [boardingStopServer, firstTransitStep]);
 
+  // ── Local clock tick ──────────────────────────────────────────────────────
+  // Server frames only arrive on change, so countdowns are recomputed from the
+  // absolute ETAs against `now`, ticking while the screen is focused and a trip
+  // is active.
+  const tripActive = route != null && completion == null;
+  useEffect(() => {
+    if (!isFocused || !tripActive) return;
+    const tick = () => setNow(Date.now());
+    const first = setTimeout(tick, 0); // catch up immediately on (re)focus
+    const id = setInterval(tick, TICK_MS);
+    return () => {
+      clearTimeout(first);
+      clearInterval(id);
+    };
+  }, [isFocused, tripActive]);
+
+  // Server ETAs are on the server clock; route-planned times are device clock.
   const busArrivesInMin = useMemo(() => {
     if (boardingStopServer && boardingStopServer.eta > 0)
-      return Math.max(0, Math.round(boardingStopServer.time_remaining_s / 60));
+      return Math.max(
+        0,
+        Math.round((boardingStopServer.eta - serverNowS(now)) / 60),
+      );
     if (busArrivalEpoch == null) return null;
-    return Math.max(0, Math.round((busArrivalEpoch - Date.now() / 1000) / 60));
-  }, [boardingStopServer, busArrivalEpoch]);
+    return Math.max(0, Math.round((busArrivalEpoch - now / 1000) / 60));
+  }, [boardingStopServer, busArrivalEpoch, now]);
+
+  useEffect(() => {
+    boardingStopCoordRef.current =
+      boardingStopServer && (boardingStopServer.lat || boardingStopServer.lng)
+        ? { lat: boardingStopServer.lat, lng: boardingStopServer.lng }
+        : null;
+  }, [boardingStopServer]);
+
+  const departed = sessionId != null && departedSession === sessionId;
 
   const boardingStopName =
     boardingStopServer?.stop_name ??
@@ -1008,10 +1147,20 @@ export default function CommuteScreen() {
 
   // Leave-by = bus arrival − walk to the stop − 3 min buffer. Shown (and
   // notified) only until boarding is confirmed.
+  // Also dropped once the rider is walking / at the stop: it has served its purpose.
   const leaveByEpoch = useMemo(() => {
-    if (boardingConfirmed || busArrivalEpoch == null) return null;
+    if (boardingConfirmed || departed || busArrivalEpoch == null) return null;
     return busArrivalEpoch - (firstWalkSecs ?? 0) - 180;
-  }, [boardingConfirmed, busArrivalEpoch, firstWalkSecs]);
+  }, [boardingConfirmed, departed, busArrivalEpoch, firstWalkSecs]);
+
+  const leaveByPassed = useMemo(() => {
+    if (leaveByEpoch == null) return false;
+    const nowS =
+      boardingStopServer && boardingStopServer.eta > 0
+        ? serverNowS(now)
+        : now / 1000;
+    return nowS >= leaveByEpoch;
+  }, [leaveByEpoch, boardingStopServer, now]);
 
   const lastScheduledLeaveByRef = useRef<number | null>(null);
   useEffect(() => {
@@ -1070,6 +1219,7 @@ export default function CommuteScreen() {
       mode: "TRANSIT",
       transitName: s.route_id || undefined,
       timeRemaining: s.eta > 0 ? s.time_remaining_s : undefined,
+      eta: s.eta > 0 ? s.eta : undefined,
     }));
 
     // ── Interleave walking segments from the route steps ──
@@ -1333,6 +1483,9 @@ export default function CommuteScreen() {
 
   useEffect(() => {
     if (!tripState?.stops?.length) return;
+    // A finished/ended trip must never (re)start an activity; completion
+    // teardown ends it.
+    if (tripState.overall === "COMPLETED" || !wsPath) return;
 
     const activeIdx = tripState.stops.findIndex(
       (s) => s.status === "ACTIVE" || s.status === "UNSURE",
@@ -1388,7 +1541,7 @@ export default function CommuteScreen() {
     } else {
       updateTripActivity(input);
     }
-  }, [tripState, destinationInfo]);
+  }, [tripState, destinationInfo, wsPath]);
 
   // ETA to the FINAL destination (the old hero number — kept for the journey
   // card and the post-boarding fallback, renamed so it can't be mistaken for
@@ -1397,31 +1550,31 @@ export default function CommuteScreen() {
     const serverStops = tripState?.stops;
     if (serverStops?.length) {
       const last = serverStops[serverStops.length - 1];
+      if (last.eta > 0)
+        return Math.max(0, Math.round((last.eta - serverNowS(now)) / 60));
       return Math.max(0, Math.round(last.time_remaining_s / 60));
     }
     if (!route) return null;
     const secs = parseDurationSecs(route.duration);
     return secs != null ? Math.round(secs / 60) : null;
-  }, [tripState, route]);
+  }, [tripState, route, now]);
 
   const arrivalTime = useMemo(() => {
     const serverStops = tripState?.stops;
     if (serverStops?.length) {
       const last = serverStops[serverStops.length - 1];
-      return new Date(last.eta * 1000).toLocaleTimeString("en-CA", {
-        hour: "2-digit",
-        minute: "2-digit",
-        hour12: false,
-      });
+      return new Date(last.eta * 1000).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
     }
     if (!route) return null;
     const secs = parseDurationSecs(route.duration);
     if (secs == null) return null;
-    return new Date(Date.now() + secs * 1000).toLocaleTimeString("en-CA", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
-    });
+    return new Date(Date.now() + secs * 1000).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  });
   }, [tripState, route]);
 
   const serverStopTotal = tripState?.stops?.length ?? 0;
@@ -1520,6 +1673,13 @@ export default function CommuteScreen() {
     [stops],
   );
 
+  const heroNextStopMin =
+    heroNextStop?.eta != null
+      ? Math.max(0, Math.round((heroNextStop.eta - serverNowS(now)) / 60))
+      : heroNextStop?.timeRemaining != null
+        ? Math.max(0, Math.round(heroNextStop.timeRemaining / 60))
+        : null;
+
   // One-line "what to do now" caption for the journey rail. Kept deliberately
   // non-redundant with the hero rows (which already state "Board at <stop>").
   const activeInstruction = useMemo((): {
@@ -1617,7 +1777,7 @@ export default function CommuteScreen() {
           setPendingReroute(false);
         }
       } catch (e) {
-        console.error("[commute] trip snapshot fetch failed:", e);
+        console.warn("[commute] trip snapshot fetch failed:", e);
       }
     })();
 
@@ -1634,26 +1794,197 @@ export default function CommuteScreen() {
     setPendingReroute(false);
   }, [lastReroute]);
 
+  // Shared trip teardown for End Journey and server-side completion: stop the
+  // Live Activity / sticky notification, close the socket, stop background GPS,
+  // cancel pending notifications and drop the durable active-trip pointer.
+  const teardownTrip = useCallback(
+    async ({
+      deleteSession,
+      finalSubtitle,
+    }: {
+      deleteSession: boolean;
+      finalSubtitle?: string;
+    }) => {
+      void endTripActivity(finalSubtitle);
+      activityStartedRef.current = false;
+      disconnect();
+      void stopBackgroundTracking();
+      const pendingStop = boardingConfirmStopRef.current;
+      if (pendingStop) void cancelBoarding(pendingStop).catch(() => {});
+      if (sessionId) {
+        void cancelLeaveBy(sessionId).catch(() => {});
+        lastScheduledLeaveByRef.current = null;
+      }
+      if (deleteSession && sessionId && ROUTE_SAVE_URL) {
+        // Owner token required: Route Save only tears the trip down for its owner.
+        const token = await getAccessToken();
+        fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, {
+          method: "DELETE",
+          headers: token ? { Authorization: `Bearer ${token}` } : {},
+        }).catch(() => {});
+      }
+      routeStore.clearJourney();
+      void clearActiveTrip();
+    },
+    [disconnect, sessionId],
+  );
+
+  // Back to the idle "No Active Journey" state.
+  const resetToIdle = useCallback(() => {
+    setCompletion(null);
+    setRoute(null);
+    setSessionId(null);
+    setWsPath(null);
+    setDestinationInfo(null);
+    setOriginInfo(null);
+    setBoardingConfirmStop(null);
+    setBoardingConfirmMsg(null);
+    setNotifyBanner(null);
+    setPendingReroute(false);
+    setReportSelected(null);
+    setReportSeverity(1);
+    setReportSent(false);
+    setReportError(null);
+    reportIdRef.current = null;
+    tripStartedAtRef.current = null;
+    completionHandledRef.current = null;
+  }, []);
+
   const handleExit = useCallback(async () => {
-    endTripActivity();
-    activityStartedRef.current = false;
-    disconnect();
-    if (sessionId) {
-      cancelLeaveBy(sessionId);
-      lastScheduledLeaveByRef.current = null;
-    }
-    if (sessionId && ROUTE_SAVE_URL) {
-      // Owner token required: Route Save only tears the trip down for its owner.
-      const token = await getAccessToken();
-      fetch(`${ROUTE_SAVE_URL}/trips/${sessionId}`, {
-        method: "DELETE",
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      }).catch(() => {});
-    }
-    routeStore.clearJourney();
-    void clearActiveTrip();
+    await teardownTrip({ deleteSession: true });
+    resetToIdle();
     router.navigate("/(tabs)/routes" as never);
-  }, [disconnect, sessionId, router]);
+  }, [teardownTrip, resetToIdle, router]);
+
+  useEffect(() => {
+    destinationCoordRef.current = destinationInfo
+      ? { lat: destinationInfo.lat, lng: destinationInfo.lng }
+      : null;
+  }, [destinationInfo]);
+
+  // ── Trip completion ─────────────────────────────────────────────────────────
+  // Either the server reports COMPLETED, or the rider reached the destination.
+  useEffect(() => {
+    if (!sessionId) return;
+    const serverDone = tripState?.overall === "COMPLETED";
+    const arrived = arrivedSession === sessionId;
+    if (!serverDone && !arrived) return;
+    if (completionHandledRef.current === sessionId) return;
+    completionHandledRef.current = sessionId;
+    const started =
+      tripStartedAtRef.current?.sessionId === sessionId
+        ? tripStartedAtRef.current.at
+        : null;
+    const endedAt = Date.now();
+    const destination = destinationInfo?.label ?? "your destination";
+    setCompletion({
+      destination,
+      durationMin: started != null ? Math.max(1, Math.round((endedAt - started) / 60000)) : null,
+      arrivedAt: new Date(endedAt).toLocaleTimeString("en-US", {
+    hour: "numeric",
+    minute: "2-digit",
+  }),
+    });
+    // The server only knows the trip is over if it said so itself.
+    void teardownTrip({ deleteSession: !serverDone, finalSubtitle: `Arrived at ${destination}` });
+  }, [tripState, sessionId, arrivedSession, destinationInfo, teardownTrip]);
+
+  // ── Trip start: permissions + background tracking ─────────────────────────
+  // Notification permission is asked once here (not on every schedule call);
+  // background location is asked with an explanation, and if refused the
+  // foreground watcher keeps tracking while the app is open.
+  useEffect(() => {
+    if (!sessionId) return;
+    let cancelled = false;
+    (async () => {
+      await ensureNotificationPermission();
+      if (cancelled || completionHandledRef.current === sessionId) return;
+      await startBackgroundTracking();
+      // Trip ended while we were waiting on the permission dialog.
+      if (cancelled || completionHandledRef.current === sessionId)
+        void stopBackgroundTracking();
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId]);
+
+  // ── Connection badge: CONNECTING → "Offline · retrying" after a while ─────
+  useEffect(() => {
+    if (isConnected || !wsPath) return;
+    const t = setTimeout(() => setOffline(true), OFFLINE_AFTER_MS);
+    return () => {
+      clearTimeout(t);
+      setOffline(false);
+    };
+  }, [isConnected, wsPath]);
+
+  // ── Community report ────────────────────────────────────────────────────────
+  const reportRouteId = useMemo(() => {
+    const st = tripState?.stops ?? [];
+    const cur =
+      st.find((x) => x.status === "ACTIVE" || x.status === "UNSURE") ??
+      st.find((x) => x.status === "EXPECTED");
+    return cur?.route_id || transitRouteIds[0] || null;
+  }, [tripState, transitRouteIds]);
+
+  const reportStopId = useMemo(() => {
+    const st = tripState?.stops ?? [];
+    return (
+      st.find((x) => x.status === "ACTIVE" || x.status === "UNSURE")?.stop_id ??
+      st[0]?.stop_id ??
+      null
+    );
+  }, [tripState]);
+
+  const handleSendReport = useCallback(async () => {
+    if (!reportSelected || !isReportKind(reportSelected) || reportSending) return;
+    setReportSending(true);
+    setReportError(null);
+    const routeId = reportRouteId;
+    try {
+      if (!reportIdRef.current) reportIdRef.current = newReportId();
+      const fix = getLastLocationFix();
+      const gtfsTripId =
+        lastReroute?.legs?.find((l) => l.route_id === routeId)?.trip_id ?? null;
+      await submitReport({
+        reportId: reportIdRef.current,
+        kind: reportSelected,
+        severity: reportSeverity as ReportSeverity,
+        routeId,
+        tripId: gtfsTripId,
+        stopId: reportStopId,
+        lat: fix?.lat,
+        lng: fix?.lng,
+      });
+      reportIdRef.current = null;
+      let text = "Thanks — your report was sent.";
+      try {
+        const summary = await fetchReportSummary({ routeId, minutes: 60 });
+        text = summaryThanksText(summary, routeId ? `Route ${routeId}` : null);
+      } catch (e) {
+        console.warn("[commute] report summary failed:", e);
+      }
+      setReportThanks(text);
+      setReportSent(true);
+    } catch (e) {
+      console.warn("[commute] report submit failed:", e);
+      setReportError(
+        e instanceof Error && /sign in/i.test(e.message)
+          ? e.message
+          : "Couldn't send your report. Check your connection and try again.",
+      );
+    } finally {
+      setReportSending(false);
+    }
+  }, [
+    reportSelected,
+    reportSeverity,
+    reportSending,
+    reportRouteId,
+    reportStopId,
+    lastReroute,
+  ]);
 
   const renderSheetFooter = useCallback(
     (props: BottomSheetFooterProps) => (
@@ -1682,6 +2013,17 @@ export default function CommuteScreen() {
     [styles, insets.bottom, handleExit, colors.onPrimary],
   );
 
+  if (completion) {
+    return (
+      <CompletionCard
+        destination={completion.destination}
+        durationMin={completion.durationMin}
+        arrivedAt={completion.arrivedAt}
+        onDone={resetToIdle}
+      />
+    );
+  }
+
   if (!route) {
     return (
       <View style={[styles.emptyScreen, { backgroundColor: colors.surface }]}>
@@ -1701,6 +2043,18 @@ export default function CommuteScreen() {
             <Text style={[styles.emptySubtitle, { color: colors.ink2 }]}>
               Go to Routes, select a route, and tap &ldquo;Start Journey&rdquo;.
             </Text>
+            <TouchableOpacity
+              style={[styles.emptyCta, { backgroundColor: colors.primary }]}
+              onPress={() => router.navigate("/(tabs)/routes")}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel="Plan a trip"
+            >
+              <Ionicons name="search" size={16} color={colors.onPrimary} />
+              <Text style={[styles.emptyCtaText, { color: colors.onPrimary }]}>
+                Plan a trip
+              </Text>
+            </TouchableOpacity>
           </>
         )}
       </View>
@@ -1946,7 +2300,16 @@ export default function CommuteScreen() {
             </GeoJSONSource>
       </Map>
 
-      <View style={styles.liveBadge}>
+      <TouchableOpacity
+        style={styles.liveBadge}
+        disabled={!offline || isConnected}
+        onPress={reconnect}
+        activeOpacity={0.8}
+        accessibilityRole={offline && !isConnected ? "button" : undefined}
+        accessibilityLabel={
+          offline && !isConnected ? "Offline, retrying. Tap to retry now" : undefined
+        }
+      >
         <View
           style={[
             styles.liveBadgeDot,
@@ -1954,12 +2317,15 @@ export default function CommuteScreen() {
           ]}
         />
         <Text style={styles.liveBadgeText}>
-          {isConnected ? "LIVE" : "CONNECTING"}
+          {isConnected ? "LIVE" : offline ? "Offline · retrying" : "CONNECTING"}
         </Text>
-      </View>
+        {offline && !isConnected && (
+          <Ionicons name="refresh" size={12} color={colors.onPrimary} />
+        )}
+      </TouchableOpacity>
 
       <BottomSheet
-        index={2}
+        index={1}
         snapPoints={sheetSnapPoints}
         enablePanDownToClose={false}
         enableContentPanningGesture={false}
@@ -1971,6 +2337,12 @@ export default function CommuteScreen() {
           showsVerticalScrollIndicator={false}
           contentContainerStyle={{ paddingBottom: 120 }}
         >
+          {transitRouteIds.length > 0 && (
+            <View style={styles.alertBannerWrap}>
+              <AlertBanner routeIds={transitRouteIds} compact />
+            </View>
+          )}
+
           {/* ── Hero Section ── */}
           <View style={styles.hero}>
             <View style={styles.heroHeaderRow}>
@@ -2017,28 +2389,36 @@ export default function CommuteScreen() {
                     text={boardingStopName ?? ""}
                   />
                 </View>
-                {leaveByEpoch != null && formatEta(leaveByEpoch) !== "" && (
-                  <View style={styles.infoRow}>
-                    <Text style={styles.infoLabel}>Leave by</Text>
-                    <Text style={styles.infoValue}>
-                      {formatEta(leaveByEpoch)}
-                    </Text>
-                  </View>
-                )}
+                {leaveByEpoch != null &&
+                  (leaveByPassed ? (
+                    <View style={styles.infoRow}>
+                      <Text style={styles.infoLabel}>Leave</Text>
+                      <Text
+                        style={[styles.infoValueStrong, { color: semantic.warning }]}
+                      >
+                        Now
+                      </Text>
+                    </View>
+                  ) : (
+                    formatEta(leaveByEpoch) !== "" && (
+                      <View style={styles.infoRow}>
+                        <Text style={styles.infoLabel}>Leave by</Text>
+                        <Text style={styles.infoValue}>
+                          {formatEta(leaveByEpoch)}
+                        </Text>
+                      </View>
+                    )
+                  ))}
               </>
             ) : (
               <>
                 {/* On board (or walk-only route): the next stop ahead. */}
                 <View style={styles.infoRow}>
                   <Text style={styles.infoLabel}>
-                    {heroNextStop?.timeRemaining != null
-                      ? "Next stop"
-                      : "Arriving"}
+                    {heroNextStopMin != null ? "Next stop" : "Arriving"}
                   </Text>
                   <Text style={styles.infoValueStrong}>
-                    {heroNextStop?.timeRemaining != null
-                      ? Math.max(0, Math.round(heroNextStop.timeRemaining / 60))
-                      : (destinationEtaMinutes ?? "--")}{" "}
+                    {heroNextStopMin ?? destinationEtaMinutes ?? "--"}{" "}
                     min
                   </Text>
                 </View>
@@ -2258,17 +2638,16 @@ export default function CommuteScreen() {
                   Thanks for the heads up!
                 </Text>
                 <Text style={[styles.reportThanksBody, { color: colors.ink2 }]}>
-                  We just told{" "}
-                  <Text style={{ fontWeight: "800", color: colors.ink }}>
-                    1,240 commuters
-                  </Text>{" "}
-                  on this line. You&apos;re a real one.
+                  {reportThanks ?? "Thanks — your report was sent."}
                 </Text>
                 <TouchableOpacity
                   onPress={() => {
                     setReportSelected(null);
                     setReportSeverity(1);
                     setReportSent(false);
+                    setReportError(null);
+                    setReportThanks(null);
+                    reportIdRef.current = null;
                   }}
                   activeOpacity={0.8}
                   style={styles.reportAgainBtn}
@@ -2368,32 +2747,41 @@ export default function CommuteScreen() {
                   </View>
                 )}
 
+                {reportError && (
+                  <Text style={[styles.reportErrorText, { color: semantic.danger }]}>
+                    {reportError}
+                  </Text>
+                )}
+
                 <TouchableOpacity
-                  onPress={() => reportSelected && setReportSent(true)}
+                  onPress={() => void handleSendReport()}
+                  disabled={!reportSelected || reportSending}
                   activeOpacity={0.85}
                   style={[
                     styles.reportSendBtn,
-                    !reportSelected && styles.reportSendBtnDisabled,
+                    (!reportSelected || reportSending) &&
+                      styles.reportSendBtnDisabled,
                   ]}
                 >
-                  <Ionicons name="send" size={18} color={colors.onPrimary} />
+                  {reportSending ? (
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                  ) : (
+                    <Ionicons
+                      name={reportError ? "refresh" : "send"}
+                      size={18}
+                      color={colors.onPrimary}
+                    />
+                  )}
                   <Text style={styles.reportSendBtnText}>
-                    {reportSelected
-                      ? `Send "${REPORT_TYPES.find((r) => r.id === reportSelected)?.label}" report`
-                      : "Pick what you saw"}
+                    {reportSending
+                      ? "Sending…"
+                      : reportSelected
+                        ? `${reportError ? "Retry" : "Send"} "${REPORT_TYPES.find((r) => r.id === reportSelected)?.label}" report`
+                        : "Pick what you saw"}
                   </Text>
                 </TouchableOpacity>
               </>
             )}
-
-            <TouchableOpacity style={styles.thankButton} activeOpacity={0.85}>
-              <FontAwesome5
-                name="thumbs-up"
-                size={16}
-                color={colors.selected}
-              />
-              <Text style={styles.thankButtonText}>Thank a Driver</Text>
-            </TouchableOpacity>
           </View>
         </View>
         </BottomSheetScrollView>
@@ -2411,7 +2799,8 @@ function makeStyles(t: AppTheme) {
     container: { flex: 1 },
     content: {
       paddingHorizontal: spacing.screen,
-      paddingTop: spacing.card,
+      // The hero above already ends with 16px of padding; don't double it.
+      paddingTop: spacing.xs,
       gap: spacing.card,
       flexDirection: "column",
     },
@@ -2506,7 +2895,17 @@ function makeStyles(t: AppTheme) {
       fontWeight: "700",
       color: colors.ink,
     },
-    emptySubtitle: {
+    emptyCta: {
+    marginTop: 20,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingHorizontal: 22,
+    paddingVertical: 12,
+    borderRadius: 999,
+  },
+  emptyCtaText: { fontSize: 15, fontWeight: "700" },
+  emptySubtitle: {
       ...typography.body,
       color: colors.ink2,
       textAlign: "center",
@@ -2539,6 +2938,11 @@ function makeStyles(t: AppTheme) {
       color: colors.onPrimary,
       ...typography.badge,
       letterSpacing: 0.5,
+    },
+
+    alertBannerWrap: {
+      paddingHorizontal: spacing.screen,
+      paddingBottom: 8,
     },
 
     // ── Hero ──
@@ -3011,23 +3415,10 @@ function makeStyles(t: AppTheme) {
       color: colors.ink,
     },
 
-    thankButton: {
-      backgroundColor: colors.secondary,
-      borderRadius: radii.pill,
-      paddingVertical: 18,
-      flexDirection: "row",
-      justifyContent: "center",
-      alignItems: "center",
-      gap: 10,
-      shadowColor: semantic.shadow,
-      shadowOffset: { width: 0, height: 2 },
-      shadowOpacity: 0.08,
-      shadowRadius: 4,
-      elevation: 3,
-    },
-    thankButtonText: {
-      ...typography.subtitleStrong,
-      color: colors.accentInk,
+    reportErrorText: {
+      ...typography.body,
+      textAlign: "center",
+      marginTop: 4,
     },
 
     // ── Exit bar ──

@@ -35,7 +35,7 @@ Query parameters:
 Example:
 GET /api/v1/vehicle_positions?route_id=3&order_by=timestamp&order=DESC&limit=50
 GET /api/v1/calgary_transit_stops?status=ACTIVE&limit=200
-GET /api/v1/alerts
+GET /api/v1/alerts            (shaped, active-only — see feeds.go / CLAUDE.md)
 
 Response shape:
 { "table": "vehicle_positions", "count": 50, "limit": 50, "offset": 0, "data": [...] }
@@ -89,7 +89,20 @@ Auth — see AUTH.md (full reference)
 
 - Two listeners: end users hit the Funnel port with a Supabase JWT (Bearer/?token);
   sibling services hit a separate tailnet-only mTLS port (client cert + CN allow-list).
-- /api/v1/user/* enforces per-user ownership (token sub == user_id) on the user-owned
-  tables; service (mTLS) callers bypass. /health is always open.
-- Rollout is soft (AUTH_ENFORCE=false) → log + allow; flip to true for hard 401/403 +
-  RequireAndVerifyClientCert. Certs: scripts/gen-mtls-certs.sh.
+- /api/v1/user/* enforces per-user ownership (ownership.go): user_id tables, plus
+  user_friendships (requester/addressee) and posts (via the event's owner); service
+  (mTLS) callers bypass. /health is always open.
+- AUTH_ENFORCE defaults to true (hard 401/403 + RequireAndVerifyClientCert); set
+  false for a log-only soft rollout. Certs: scripts/gen-mtls-certs.sh.
+- DEMO_USER_ID (demo stack only): every public request is that user, no Supabase.
+
+Shaped read endpoints (feeds.go; no user ids in output)
+
+GET /api/v1/alerts?route_id=&stop_id= — currently-active GTFS-RT alerts (replaces the
+generic alerts table read): [{alert_id, header, description, cause, effect, severity,
+url, route_ids:[…], stop_ids:[…], active_start, active_end}] (unix s or null).
+GET /api/v1/reports/summary?route_id=&minutes=60 (max 1440) →
+{route_id|null, minutes, total, by_kind:{kind:count}} over route_reports (user DB).
+GET /api/v1/reports/recent?route_id=&limit=20 (max 100) →
+[{report_id, kind, severity, route_id, trip_id, stop_id, created_at}] newest first.
+Reports are written via POST /api/v1/user/route_reports (user_id stamped).

@@ -2,13 +2,22 @@
 //
 // Every URL here comes from the environment, so no deployment detail is baked
 // into the source tree. Copy `.env.example` to `.env.local` and fill these in
-// — see the "Run it yourself" section of the repository README.
+// — see the "Run it yourself" section of the repository README. In demo mode
+// (./demo.sh app) they default to the local Docker Compose stack.
+import { DEMO_MODE } from "./demo";
+
+const DEMO_DEFAULTS = {
+  EXPO_PUBLIC_ROUTE_SERVICE_URL: "http://localhost:3100",
+  EXPO_PUBLIC_ROUTE_SAVE_URL: "http://localhost:8090",
+  EXPO_PUBLIC_MIDDLEWARE_URL: "http://localhost:8080",
+} as const;
 //
 // Expo inlines `EXPO_PUBLIC_*` at bundle time, which only works for static
 // property accesses on `process.env`. That is why each variable is spelled out
 // below instead of being read from a map.
 
-function required(name: string, value: string | undefined): string {
+function required(name: keyof typeof DEMO_DEFAULTS, value: string | undefined): string {
+  if (!value && DEMO_MODE) value = DEMO_DEFAULTS[name];
   if (!value) {
     throw new Error(
       `${name} is not set. Copy apps/mobile/.env.example to .env.local and fill it in.`,

@@ -52,7 +52,7 @@ Example:
 GET /api/v1/vehicle_positions?route_id=3&order_by=timestamp&order=DESC&limit=50
 GET /api/v1/calgary_transit_stops?status=ACTIVE&limit=200
 GET /api/v1/stop_time_updates?stop_id=6866&active=1&order_by=departure_time
-GET /api/v1/alerts
+GET /api/v1/alerts            (shaped, active-only — see feeds.go / CLAUDE.md)
 
 Response shape:
 { "table": "vehicle_positions", "count": 50, "limit": 50, "offset": 0, "data": [...] }

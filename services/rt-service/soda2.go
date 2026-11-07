@@ -23,7 +23,9 @@ func soda2FetchAll(appToken, url string) ([]map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		req.Header.Set("X-App-Token", appToken)
+		if appToken != "" { // optional: Socrata serves unauthenticated at lower rate limits
+			req.Header.Set("X-App-Token", appToken)
+		}
 		q := req.URL.Query()
 		q.Set("$limit", strconv.Itoa(soda2PageSize))
 		q.Set("$offset", strconv.Itoa(offset))

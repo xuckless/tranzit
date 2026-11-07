@@ -22,11 +22,80 @@ const BACKOFF_MS = [1000, 2000, 4000, 8000, 16000, 30000];
 let _activeWs: WebSocket | null = null;
 const _outbox: object[] = [];
 
+// Latest GPS fix (foreground watcher or background task) and whether it still
+// has to be delivered. The background location task runs outside React, so the
+// fix and the server clock offset live at module scope, shared with the hook.
+interface LocationFix {
+  lat: number;
+  lng: number;
+  speedMps: number;
+  headingDeg: number;
+  /** Device time (ms) the fix was captured. */
+  at: number;
+}
+let _lastFix: LocationFix | null = null;
+let _fixPending = false;
+let _clockOffsetS = 0;
+
 function flushOutbox(): void {
   if (!_activeWs || _activeWs.readyState !== WebSocket.OPEN) return;
   while (_outbox.length) {
     _activeWs.send(JSON.stringify(_outbox.shift()));
   }
+}
+
+function flushLocation(): void {
+  if (!_fixPending || !_lastFix) return;
+  if (!_activeWs || _activeWs.readyState !== WebSocket.OPEN) return;
+  const f = _lastFix;
+  _activeWs.send(
+    JSON.stringify({
+      type: "LOCATION",
+      lat: f.lat,
+      lng: f.lng,
+      speed_mps: f.speedMps,
+      heading_deg: f.headingDeg,
+      ts: Math.floor(f.at / 1000 + _clockOffsetS),
+    }),
+  );
+  _fixPending = false;
+}
+
+/**
+ * Record a GPS fix and send it as a LOCATION frame if the trip socket is open.
+ * If it isn't (e.g. the OS suspended it while backgrounded), the latest fix is
+ * kept and sent as soon as the socket reconnects. Used by both the foreground
+ * watcher (via the hook's sendLocation) and the background location task.
+ */
+export function submitLocation(
+  lat: number,
+  lng: number,
+  speedMps?: number,
+  headingDeg?: number,
+): void {
+  _lastFix = {
+    lat,
+    lng,
+    speedMps: speedMps != null && speedMps >= 0 ? speedMps : 0,
+    headingDeg: headingDeg != null && headingDeg >= 0 ? headingDeg : 0,
+    at: Date.now(),
+  };
+  _fixPending = true;
+  flushLocation();
+}
+
+/**
+ * Current time on the Route Save server clock (Unix seconds), from the offset
+ * learned off the last STATE frame. Use it to tick server ETAs locally between
+ * messages.
+ */
+export function serverNowS(deviceNowMs: number): number {
+  return deviceNowMs / 1000 + _clockOffsetS;
+}
+
+/** Last fix seen this trip (foreground or background), or null. */
+export function getLastLocationFix(): { lat: number; lng: number } | null {
+  return _lastFix ? { lat: _lastFix.lat, lng: _lastFix.lng } : null;
 }
 
 /**
@@ -75,6 +144,8 @@ export interface UseTripWebSocketResult {
     headingDeg?: number,
   ) => void;
   sendUnsureResponse: (stopId: string, boarded: boolean) => void;
+  /** Drop any half-dead socket and dial again now (resets backoff). */
+  reconnect: () => void;
   disconnect: () => void;
 }
 
@@ -89,7 +160,7 @@ export function useTripWebSocket(
   const wsRef = useRef<WebSocket | null>(null);
   const lastVersionRef = useRef<Map<string, number>>(new Map());
   const sessionStatesRef = useRef<Map<string, TripStateMsg>>(new Map());
-  const clockOffsetRef = useRef(0);
+  const forceReconnectRef = useRef<(() => void) | null>(null);
 
   // Reconnect / RESUME state
   const cancelledRef = useRef(false);
@@ -99,30 +170,51 @@ export function useTripWebSocket(
   // Track last known values for RESUME
   const lastSessionIdRef = useRef<string | null>(null);
   const lastStateVersionRef = useRef<number>(-1);
-  const lastLocationRef = useRef<{ lat: number; lng: number } | null>(null);
 
   useEffect(() => {
     if (!wsPath || !ROUTE_SAVE_WS) return;
 
     cancelledRef.current = false;
     retryCountRef.current = 0;
+    // Per-run liveness: cancelledRef is shared across runs (and reset above), so a
+    // connect() from a previous wsPath still awaiting its token must check this.
+    let alive = true;
+    // True while connect() awaits the token, so a foreground/retry/manual trigger
+    // in that window can't dial a second socket.
+    let connecting = false;
+    const dead = () => !alive || cancelledRef.current;
 
     function scheduleReconnect() {
-      if (cancelledRef.current) return;
+      if (dead()) return;
       const delay = BACKOFF_MS[Math.min(retryCountRef.current, BACKOFF_MS.length - 1)];
       retryCountRef.current += 1;
       retryTimerRef.current = setTimeout(() => void connect(), delay);
     }
 
     async function connect() {
-      if (cancelledRef.current) return;
+      if (dead() || connecting) return;
+      const existing = wsRef.current;
+      if (
+        existing &&
+        (existing.readyState === WebSocket.OPEN ||
+          existing.readyState === WebSocket.CONNECTING)
+      )
+        return;
 
       // Route Save verifies the Supabase JWT on the WS upgrade via ?token= — the RN
       // WebSocket can't set an Authorization header, so it rides the query string.
       // Fetched fresh per (re)connect so a long-running trip never dials with a
       // stale token.
-      const token = await getAccessToken();
-      if (cancelledRef.current) return;
+      connecting = true;
+      let token: string | null = null;
+      try {
+        token = await getAccessToken();
+      } catch {
+        token = null;
+      } finally {
+        connecting = false;
+      }
+      if (dead()) return;
       if (!token) {
         // Signed out / session not ready — back off and retry rather than dialing
         // unauthenticated (the server would reject the upgrade anyway).
@@ -138,21 +230,25 @@ export function useTripWebSocket(
       ws.onopen = () => {
         setIsConnected(true);
 
-        // Deliver any UNSURE_RESPONSE captured out-of-component (notification action).
+        // Deliver any UNSURE_RESPONSE queued while offline (in-app answer or
+        // notification action).
         flushOutbox();
 
-        // On reconnect (not first connect), send RESUME
+        // On reconnect (not first connect), send RESUME. Coordinates only when
+        // we actually have a fix — never a fake 0,0.
         if (retryCountRef.current > 0 && lastSessionIdRef.current) {
-          const loc = lastLocationRef.current;
+          const loc = _lastFix;
           ws.send(JSON.stringify({
             type: "RESUME",
             session_id: lastSessionIdRef.current,
             state_version: lastStateVersionRef.current,
-            lat: loc?.lat ?? 0,
-            lng: loc?.lng ?? 0,
+            ...(loc ? { lat: loc.lat, lng: loc.lng } : {}),
           }));
         }
         retryCountRef.current = 0;
+
+        // A fix captured while the socket was down (e.g. background) goes now.
+        flushLocation();
       };
 
       ws.onmessage = (event) => {
@@ -178,7 +274,7 @@ export function useTripWebSocket(
                 s.time_remaining_s > 0,
             );
             if (refStop) {
-              clockOffsetRef.current =
+              _clockOffsetS =
                 (refStop.eta - refStop.time_remaining_s) - Date.now() / 1000;
             }
             setTripState(mergeSessionStates(sessionStatesRef.current));
@@ -211,7 +307,7 @@ export function useTripWebSocket(
         wsRef.current = null;
         if (_activeWs === ws) _activeWs = null;
 
-        if (cancelledRef.current) return;
+        if (dead()) return;
 
         scheduleReconnect();
       };
@@ -222,8 +318,10 @@ export function useTripWebSocket(
     // The OS suspends the socket when the app backgrounds, often without delivering an onclose, so
     // no reconnect gets armed and live STATE silently stalls. On return to foreground, force a single
     // clean reconnect if the socket isn't healthy.
-    const appStateSub = AppState.addEventListener("change", (s) => {
-      if (s !== "active" || cancelledRef.current) return;
+    function forceReconnect() {
+      if (dead()) return;
+      // connect() is already awaiting a token — it will dial; don't race it.
+      if (connecting) return;
       const ws = wsRef.current;
       if (ws && ws.readyState === WebSocket.OPEN) return; // still alive — nothing to do
       // Detach the old socket so its late onclose can't double-schedule, then reconnect once
@@ -242,12 +340,22 @@ export function useTripWebSocket(
         }
       }
       wsRef.current = null;
-      if (retryCountRef.current === 0) retryCountRef.current = 1;
+      if (_activeWs === ws) _activeWs = null;
+      // Keep retryCount > 0 so onopen sends RESUME, but restart the backoff ladder.
+      retryCountRef.current = 1;
       void connect();
+    }
+    forceReconnectRef.current = forceReconnect;
+
+    const appStateSub = AppState.addEventListener("change", (s) => {
+      if (s !== "active") return;
+      forceReconnect();
     });
 
     return () => {
+      alive = false;
       cancelledRef.current = true;
+      forceReconnectRef.current = null;
       appStateSub.remove();
       if (retryTimerRef.current) {
         clearTimeout(retryTimerRef.current);
@@ -258,37 +366,33 @@ export function useTripWebSocket(
       _activeWs = null;
       lastVersionRef.current.clear();
       sessionStatesRef.current.clear();
+      lastSessionIdRef.current = null;
+      lastStateVersionRef.current = -1;
+      // A different (or no) trip next: never let the old trip's state leak into it
+      // (e.g. a stale COMPLETED re-triggering the arrival card).
+      setTripState(null);
+      setLastReroute(null);
+      setLastNotify(null);
+      setIsConnected(false);
     };
   }, [wsPath]);
 
-  const send = useCallback((payload: object) => {
-    const ws = wsRef.current;
-    if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify(payload));
-    }
-  }, []);
-
   const sendLocation = useCallback(
     (lat: number, lng: number, speedMps?: number, headingDeg?: number) => {
-      lastLocationRef.current = { lat, lng };
-      send({
-        type: "LOCATION",
-        lat,
-        lng,
-        speed_mps: speedMps ?? 0,
-        heading_deg: headingDeg ?? 0,
-        ts: Math.floor(Date.now() / 1000 + clockOffsetRef.current),
-      });
+      submitLocation(lat, lng, speedMps, headingDeg);
     },
-    [send],
+    [],
   );
 
-  const sendUnsureResponse = useCallback(
-    (stopId: string, boarded: boolean) => {
-      send({ type: "UNSURE_RESPONSE", stop_id: stopId, boarded });
-    },
-    [send],
-  );
+  // Boarding answers must not be lost when the socket is momentarily down: go
+  // through the same outbox as notification actions (flushed on reconnect).
+  const sendUnsureResponse = useCallback((stopId: string, boarded: boolean) => {
+    submitUnsureResponse(stopId, boarded);
+  }, []);
+
+  const reconnect = useCallback(() => {
+    forceReconnectRef.current?.();
+  }, []);
 
   const disconnect = useCallback(() => {
     cancelledRef.current = true;
@@ -296,8 +400,15 @@ export function useTripWebSocket(
       clearTimeout(retryTimerRef.current);
       retryTimerRef.current = null;
     }
+    const ws = wsRef.current;
     wsRef.current?.close();
     wsRef.current = null;
+    if (_activeWs === ws) _activeWs = null;
+    // Trip is over: nothing queued for it should be replayed into a later trip.
+    _outbox.length = 0;
+    _lastFix = null;
+    _fixPending = false;
+    setIsConnected(false);
   }, []);
 
   return {
@@ -307,6 +418,7 @@ export function useTripWebSocket(
     isConnected,
     sendLocation,
     sendUnsureResponse,
+    reconnect,
     disconnect,
   };
 }

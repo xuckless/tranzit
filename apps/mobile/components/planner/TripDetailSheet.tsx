@@ -18,6 +18,7 @@ import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
 import type { SaveEventInput } from "@/lib/plannerEvents";
 import { Stepper } from "./Stepper";
+import { describeRRule } from "./recurrence";
 import {
     type PlannedEvent,
     formatClock,
@@ -26,6 +27,7 @@ import {
     durationMin,
     localDayKey,
     isoForDay,
+    dayStart,
     DAY_MIN,
     SNAP_MIN,
 } from "./trip";
@@ -118,11 +120,24 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
             start,
             end,
             timezone: event.timezone,
+            recurrenceRule: event.recurrenceRule, // edits apply to the whole series
         });
         setEditing(false);
     }, [event, name, location, notes, startMin, durMin, onSave]);
 
     const endMin = startMin + durMin;
+    const repeat = describeRRule(event?.recurrenceRule);
+    const repeats = repeat.kind !== "never";
+    const repeatValue = repeats
+        ? repeat.untilKey
+            ? `${repeat.label} · until ${dayStart(
+                  repeat.untilKey,
+              ).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+              })}`
+            : repeat.label
+        : "";
 
     return (
         <BottomSheet
@@ -171,6 +186,7 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                                 <Text style={styles.subtitle}>
                                     {formatDuration(durMin)}
                                     {event.imported ? " · from calendar" : ""}
+                                    {repeats ? ` · repeats ${repeat.label.toLowerCase()}` : ""}
                                 </Text>
                             </View>
                         </View>
@@ -325,6 +341,20 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                                         label="End"
                                         value={formatClock(endMin)}
                                     />
+                                    {repeats && (
+                                        <DetailRow
+                                            styles={styles}
+                                            icon={
+                                                <Ionicons
+                                                    name="repeat"
+                                                    size={16}
+                                                    color={colors.ink3}
+                                                />
+                                            }
+                                            label="Repeats"
+                                            value={repeatValue}
+                                        />
+                                    )}
                                     {!!event.travelTime && (
                                         <DetailRow
                                             styles={styles}
@@ -397,10 +427,17 @@ export function TripDetailSheet({ event, onClose, onSave, onDelete }: Props) {
                             </View>
                         )}
 
+                        {repeats && (
+                            <Text style={styles.hint}>
+                                Applies to all repeats — editing or deleting
+                                changes the whole series.
+                            </Text>
+                        )}
                         {!editing && (
                             <Text style={styles.hint}>
-                                Tip: long-press an event on the timeline to drag
-                                it to a new time.
+                                {repeats
+                                    ? "Repeating events can't be dragged on the timeline."
+                                    : "Tip: long-press an event on the timeline to drag it to a new time."}
                             </Text>
                         )}
                     </>

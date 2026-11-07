@@ -1,0 +1,125 @@
+# Tranzit local demo stack. Driven by ../demo.sh — run `./demo.sh up` from the repo root.
+#
+# Everything runs on this machine: one PostGIS instance (GTFS + realtime data in
+# `tranzit`, user data in `tranzit_user`), the four Go services, OpenTripPlanner,
+# and rt-feed (a proxy over Calgary's live GTFS-RT feeds that records them and
+# replays the recording when the live feed is unreachable).
+#
+# No Tailscale, no mTLS, no Supabase: DEMO_USER_ID puts every service in demo
+# mode, where each request is treated as that one user.
+name: tranzit-demo
+
+x-demo-user: &demo-user
+  DEMO_USER_ID: ${DEMO_USER_ID:-00000000-0000-4000-8000-000000000001}
+
+services:
+  postgres:
+    image: postgis/postgis:17-3.5
+    container_name: tranzit-demo-postgres
+    environment:
+      POSTGRES_USER: tranzit
+      POSTGRES_PASSWORD: tranzit
+      POSTGRES_DB: tranzit
+      <<: *demo-user
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./userdb/00-init.sh:/docker-entrypoint-initdb.d/00-init.sh:ro
+      - ../infra/user-db/initdb:/schema/initdb:ro
+      - ./userdb/seed.sql:/schema/seed.sql:ro
+    ports:
+      - "127.0.0.1:${PG_PORT:-5433}:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U tranzit -d tranzit_user"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  rt-feed:
+    build: ./rt-feed
+    container_name: tranzit-demo-rt-feed
+    environment:
+      FEED_MODE: ${FEED_MODE:-auto}
+      RECORD: ${RECORD:-0}
+      REC_DIR: /recordings
+    volumes:
+      - ./recordings:/recordings
+    ports:
+      - "127.0.0.1:8780:8780"
+
+  rt-service:
+    build: ../services/rt-service
+    container_name: tranzit-demo-rt-service
+    depends_on:
+      postgres: { condition: service_healthy }
+      rt-feed: { condition: service_started }
+    environment:
+      PORT: "8765"
+      SUPABASE_DIRECT_CONNECTION_STRING: postgres://tranzit:tranzit@postgres:5432/tranzit?sslmode=disable
+      RT_VEHICLES_URL: http://rt-feed:8780/vehicles.pb
+      RT_TRIPS_URL: http://rt-feed:8780/trips.pb
+      RT_ALERTS_URL: http://rt-feed:8780/alerts.pb
+      APP_TOKEN: ${SOCRATA_APP_TOKEN:-}
+    ports:
+      - "127.0.0.1:8765:8765"
+    restart: unless-stopped
+
+  db-middleware:
+    build: ../services/db-middleware
+    container_name: tranzit-demo-db-middleware
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      PORT: "8080"
+      SUPABASE_DIRECT_CONNECTION_STRING: postgres://tranzit:tranzit@postgres:5432/tranzit?sslmode=disable
+      TRANZIT_USER_DB_CONNECTION_STRING: postgres://tranzit:tranzit@postgres:5432/tranzit_user?sslmode=disable
+      AUTH_ENFORCE: "true"
+      <<: *demo-user
+    ports:
+      - "0.0.0.0:8080:8080"
+    restart: unless-stopped
+
+  route-service:
+    build: ../services/route-service
+    container_name: tranzit-demo-route-service
+    depends_on: [db-middleware, otp]
+    environment:
+      PORT: "3100"
+      OTP_BASE_URL: http://otp:8080
+      MIDDLEWARE_BASE_URL: http://db-middleware:8080
+      GMAPS_API_KEY: ${GMAPS_API_KEY:-}
+      AUTH_ENFORCE: "true"
+      <<: *demo-user
+    ports:
+      - "0.0.0.0:3100:3100"
+    restart: unless-stopped
+
+  route-save:
+    build: ../services/route-save
+    container_name: tranzit-demo-route-save
+    depends_on: [db-middleware, route-service]
+    environment:
+      PORT: "8090"
+      MIDDLEWARE_URL: http://db-middleware:8080
+      ROUTE_SERVICE_URL: http://route-service:3100
+      LOG_STATE: "1"
+      <<: *demo-user
+    ports:
+      - "0.0.0.0:8090:8090"
+    restart: unless-stopped
+
+  otp:
+    build: ./otp
+    image: tranzit-demo-otp
+    container_name: tranzit-demo-otp
+    depends_on: [rt-feed]
+    environment:
+      REBUILD_GRAPH: ${REBUILD_GRAPH:-0}
+    volumes:
+      - otp-data:/data
+    ports:
+      - "127.0.0.1:8888:8080"
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  otp-data:

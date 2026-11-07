@@ -18,6 +18,17 @@ DELETE. Code: `internal/auth` (`JWKSVerifier`, `RequireAuth`), wired in
 `internal/api/http.go`. This is **hard-enforced** — the app already attaches the
 token. Requires `SUPABASE_URL`.
 
+## Demo mode — `DEMO_USER_ID`
+
+When `DEMO_USER_ID` is non-empty Route Save logs
+`DEMO MODE: every request is user <id>; auth disabled`, skips the JWKS verifier
+(`SUPABASE_URL` is not needed), and treats every request — with or without a bearer
+token / `?token=`, any value — as that user (`auth.DemoVerifier`), so per-trip
+ownership works as if they signed in. In the demo stack the siblings are reached over
+plain HTTP by docker service name (`MIDDLEWARE_URL=http://db-middleware:8080`,
+`ROUTE_SERVICE_URL=http://route-service:3100`, no `*_MTLS_ADDR`); they run with the
+same `DEMO_USER_ID`, so the tokenless sibling calls are accepted. Local demo only.
+
 ## Outbound — service-to-service mTLS (phase 2)
 
 Route Save's calls to its siblings present a client certificate issued by the shared
@@ -34,11 +45,10 @@ Wiring: `siblingTransport()` in `main.go` swaps the transport on the existing
 datasource / rtfeed / routeclient HTTP clients.
 
 > **Warning:** the Funnel fallback sends **no credential at all** — no client cert and
-> no JWT — so sibling calls over the public Funnel URL are anonymous. This works only
-> while the siblings run with soft auth (`AUTH_ENFORCE=false`). Before flipping
-> `AUTH_ENFORCE=true` on tranzit-route-service (or the middleware), set the
-> corresponding `*_MTLS_ADDR` here so calls go over mTLS, or those calls will start
-> failing with 401s.
+> no JWT — so sibling calls over the public Funnel URL are anonymous. The siblings now
+> default to `AUTH_ENFORCE=true`, so outside demo mode set the corresponding
+> `*_MTLS_ADDR` here (calls go over mTLS), or run the siblings with
+> `AUTH_ENFORCE=false`, or those calls fail with 401s.
 
 | Var | Purpose |
 |---|---|

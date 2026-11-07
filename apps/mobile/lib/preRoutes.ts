@@ -7,6 +7,12 @@
 // before this one starts) → the saved "Home" place → device GPS (only if permission
 // is already granted — never prompt from a background compute) → skip the compute.
 //
+// Repeating events: every entry point resolves a series to its next occurrence
+// that starts within SCHEDULE_HORIZON_MS (components/planner/recurrence.ts
+// nextInstance) — same eventId, occurrence start/end — so the arrive-by route and
+// the single leave-now reminder target that occurrence. travel_time stays one
+// value per series.
+//
 // Also home to the "Leave Later" stash (Routes → add-trip handoff) and the
 // notification-tap → live-trip starter used by app/_layout.tsx.
 
@@ -24,6 +30,7 @@ import {
 import { mirrorReadSavedPlaces } from "@/lib/db";
 import { slugCode } from "@/lib/savedPlaces";
 import { isAllDay, localDayKey, type PlannedEvent } from "@/components/planner/trip";
+import { nextInstance } from "@/components/planner/recurrence";
 import { routeStore, type StoredLocation } from "@/lib/routeStore";
 import { saveActiveTrip } from "@/lib/activeTrip";
 import { getAccessToken } from "@/lib/supabase";
@@ -37,6 +44,10 @@ const ORIGIN_CHAIN_MS = 2 * 3_600_000; // prev event counts as origin within 2h
 const SCHEDULE_HORIZON_MS = 48 * 3_600_000; // only schedule leave-nows within 48h
 const MAX_SCHEDULED = 20; // ponytail: well under iOS's 64-pending cap shared with boarding/leave-by
 const RECOMPUTE_TTL_MS = 15 * 60_000; // focus-recompute throttle per event
+
+/** A repeating event as its next occurrence within the horizon (one-offs unchanged). */
+const upcoming = (e: PlannedEvent, now = Date.now()) =>
+  nextInstance(e, now, SCHEDULE_HORIZON_MS);
 
 /** In-memory recency stamp so planner-focus recomputes don't hammer the router. */
 const lastComputed = new Map<string, number>();
@@ -108,9 +119,10 @@ async function resolveOrigin(
  */
 export async function persistPreRoute(
   user: User,
-  event: PlannedEvent,
+  series: PlannedEvent,
   itinerary: OTPItinerary,
 ): Promise<void> {
+  const event = upcoming(series);
   const travelMin = Math.max(1, Math.round(itinerary.duration_seconds / 60));
   await middlewareUpsert("cached_pre_routes", {
     route_id: preRouteId(event.eventId),
@@ -131,9 +143,12 @@ export async function persistPreRoute(
  */
 export async function computePreRoute(
   user: User,
-  event: PlannedEvent,
-  all: PlannedEvent[],
+  series: PlannedEvent,
+  allSeries: PlannedEvent[],
 ): Promise<boolean> {
+  const now = Date.now();
+  const event = upcoming(series, now);
+  const all = allSeries.map((e) => upcoming(e, now));
   try {
     // All-day events have no meaningful arrive-by time — never route or notify.
     if (
@@ -177,6 +192,7 @@ export async function recomputeUpcoming(
   const now = Date.now();
   const todayKey = localDayKey(new Date());
   const candidates = events
+    .map((e) => upcoming(e, now))
     .filter(
       (e) =>
         hasCoords(e) &&
@@ -201,8 +217,9 @@ export async function recomputeUpcoming(
  * orphans — events deleted on another device, past events, coords removed.
  * Never cancels on travelTime-null alone: that's the mid-recompute state.
  */
-async function syncSchedules(events: PlannedEvent[]): Promise<void> {
+async function syncSchedules(series: PlannedEvent[]): Promise<void> {
   const now = Date.now();
+  const events = series.map((e) => upcoming(e, now));
   const desired = events
     .filter(
       (e) =>

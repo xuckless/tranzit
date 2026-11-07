@@ -49,7 +49,9 @@ export function PlaceDetailsPanel({
           <TouchableOpacity
             onPress={onBack}
             style={styles.backBtn}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            hitSlop={12}
+            accessibilityRole="button"
+            accessibilityLabel="Back"
           >
             <Ionicons name="chevron-back" size={20} color={colors.ink3} />
           </TouchableOpacity>
@@ -71,7 +73,9 @@ export function PlaceDetailsPanel({
         </View>
         <TouchableOpacity
           onPress={onClose}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Close place details"
         >
           <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>

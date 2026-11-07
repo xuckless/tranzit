@@ -6,9 +6,9 @@ package main
 // use this path — they reach the separate mTLS listener (mtls.go) and are
 // authenticated by their client certificate at the TLS handshake. See AUTH.md.
 //
-// Rollout is soft-first: while AUTH_ENFORCE is false the token is verified and the
-// result logged, but the request is allowed through; flipping it to true turns
-// failures into 401s. Tokens are never logged.
+// AUTH_ENFORCE defaults to true (failures → 401). Set it false for a soft rollout:
+// the token is verified and the result logged, but the request is allowed through.
+// DEMO_USER_ID bypasses all of it for the local demo stack. Tokens are never logged.
 
 import (
 	"context"
@@ -70,7 +70,14 @@ func (v *jwksVerifier) Verify(_ context.Context, token string) (string, error) {
 
 // buildVerifier constructs the Supabase JWT verifier. SUPABASE_URL is required when
 // enforcing; in soft mode an empty/unreachable JWKS only disables verification.
+//
+// DEMO_USER_ID (non-empty) short-circuits all of that: no Supabase, and every
+// public request is that user (demoVerifier) — for the local demo stack only.
 func buildVerifier(enforce bool) Verifier {
+	if uid := strings.TrimSpace(envOr("DEMO_USER_ID", "")); uid != "" {
+		log.Printf("DEMO MODE: every request is user %s; auth disabled", uid)
+		return demoVerifier{uid: uid}
+	}
 	supabaseURL := envOr("SUPABASE_URL", "")
 	if supabaseURL == "" {
 		if enforce {
@@ -90,6 +97,12 @@ func buildVerifier(enforce bool) Verifier {
 	return v
 }
 
+// demoVerifier is the DEMO_USER_ID mode: every public request is the demo user,
+// whatever token (if any) it carries. Never set DEMO_USER_ID on a real deployment.
+type demoVerifier struct{ uid string }
+
+func (d demoVerifier) Verify(context.Context, string) (string, error) { return d.uid, nil }
+
 // openPaths bypass JWT auth on the public listener (health/landing + quota view).
 var openPaths = map[string]struct{}{"/": {}, "/limits": {}}
 
@@ -97,6 +110,10 @@ var openPaths = map[string]struct{}{"/": {}, "/limits": {}}
 func fiberAuth(v Verifier, enforce bool) fiber.Handler {
 	return func(c *fiber.Ctx) error {
 		if _, ok := openPaths[c.Path()]; ok {
+			return c.Next()
+		}
+		if d, ok := v.(demoVerifier); ok {
+			c.Locals("userID", d.uid) // demo mode: authenticated, token or not
 			return c.Next()
 		}
 		token := fiberBearer(c)

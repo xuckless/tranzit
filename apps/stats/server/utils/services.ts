@@ -30,48 +30,61 @@ export interface ServiceDef {
   okStatuses?: number[]
 }
 
-const FUNNEL = (host: string) => `https://${host}.tailnet-example.ts.net`
+// TRANZIT_DEMO=1 (set by ./demo.sh up --stats) probes the local Docker Compose
+// demo stack on localhost instead of the Funnel hostnames.
+const DEMO = process.env.TRANZIT_DEMO === '1'
+const DEMO_PORTS: Record<string, number> = {
+  'tranzit-route-service': 3100,
+  'tranzit-db-middleware': 8080,
+  'tranzit-route-save': 8090,
+  'tranzit-otp': 8888,
+  'tranzit-rt-service': 8765,
+}
+const FUNNEL = (host: string) =>
+  DEMO ? `http://localhost:${DEMO_PORTS[host]}` : `https://${host}.tailnet-example.ts.net`
+/** Demo containers are prefixed `tranzit-demo-` so they never collide with a real deployment. */
+const C = (name: string) => (DEMO ? name.replace(/^tranzit-/, 'tranzit-demo-') : name)
 
 export const SERVICES: ServiceDef[] = [
   {
     key: 'route-service',
     label: 'Route Service',
-    container: 'tranzit-route-service',
+    container: C('tranzit-route-service'),
     kind: 'http',
     url: `${FUNNEL('tranzit-route-service')}/limits`,
   },
   {
     key: 'db-middleware',
     label: 'DB Middleware',
-    container: 'tranzit-db-middleware',
+    container: C('tranzit-db-middleware'),
     kind: 'http',
     url: `${FUNNEL('tranzit-db-middleware')}/health`,
   },
   {
     key: 'route-save',
     label: 'Route Save',
-    container: 'tranzit-route-save',
+    container: C('tranzit-route-save'),
     kind: 'http',
     url: `${FUNNEL('tranzit-route-save')}/health`,
   },
   {
     key: 'otp',
     label: 'OpenTripPlanner',
-    container: 'tranzit-otp',
+    container: C('tranzit-otp'),
     kind: 'http',
     url: `${FUNNEL('tranzit-otp')}/`,
   },
   {
     key: 'rt-service',
     label: 'RT Service',
-    container: 'tranzit-rt-service',
+    container: C('tranzit-rt-service'),
     kind: 'http',
     url: `${FUNNEL('tranzit-rt-service')}/gtfs-rt/trip-updates`,
   },
   {
     key: 'user-db',
-    label: 'User DB (Postgres)',
-    container: 'tranzit-user-db',
+    label: DEMO ? 'Postgres (GTFS + user data)' : 'User DB (Postgres)',
+    container: DEMO ? 'tranzit-demo-postgres' : 'tranzit-user-db',
     kind: 'docker',
   },
 ]

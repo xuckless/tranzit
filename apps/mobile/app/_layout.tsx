@@ -26,6 +26,15 @@ import type { LeaveNowData } from "@/lib/leaveNowNotifications";
 import { startTripFromLeaveNow } from "@/lib/preRoutes";
 import { setupTripProgressChannel } from "@/lib/liveActivity";
 import { submitUnsureResponse } from "@/lib/tripWebSocket";
+// Registers the background-location task at startup: if the OS relaunches the app
+// headless to deliver a location batch, the task must already be defined.
+import "@/lib/backgroundLocation";
+import { LogBox } from "react-native";
+import { DEMO_MODE } from "@/lib/demo";
+
+// Demo builds are dev builds, and LogBox's yellow toasts would sit over the tab
+// bar during a showcase. Warnings still print in the Metro terminal.
+if (DEMO_MODE) LogBox.ignoreAllLogs(true);
 
 // Required so the OAuth web-browser redirect resolves back into the app.
 WebBrowser.maybeCompleteAuthSession();

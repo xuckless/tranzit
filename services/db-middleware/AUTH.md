@@ -15,17 +15,26 @@ IP but is **not** Funnel-published, so it never carries end-user traffic.
 Code: `auth.go` (JWT + request context), `mtls.go` (server TLS config), `main.go`
 (`registerRoutes`, `buildVerifier`, `startMTLSListener`), `userdb.go` (ownership).
 
-## Rollout — `AUTH_ENFORCE` (soft → hard)
+## Rollout — `AUTH_ENFORCE` (hard by default)
 
-Default is **soft** (`AUTH_ENFORCE=false`): credentials are verified and the result
-logged, but requests are allowed through (JWT failures → treated as anonymous; the
-mTLS listener uses `VerifyClientCertIfGiven`). This lets the frontend and siblings
-roll out credentials without an outage.
-
-Flip to **hard** (`AUTH_ENFORCE=true`, redeploy) once the logs are clean:
+Default is **hard** (`AUTH_ENFORCE=true`, also the code default when unset):
 - Public listener: missing/invalid JWT → `401` (except `GET /health`).
 - mTLS listener: `RequireAndVerifyClientCert` — no/invalid client cert → handshake rejected.
 - User-data ownership (below) → enforced (`401`/`403`, or scoped to the owner).
+
+Set `AUTH_ENFORCE=false` explicitly for a **soft** rollout: credentials are verified
+and the result logged, but requests are allowed through (JWT failures → treated as
+anonymous; the mTLS listener uses `VerifyClientCertIfGiven`; ownership only logs what
+it would block). Use it only while migrating callers to credentials.
+
+## Demo mode — `DEMO_USER_ID`
+
+When `DEMO_USER_ID` is non-empty the service logs
+`DEMO MODE: every request is user <id>; auth disabled` at startup, never contacts
+`SUPABASE_URL`, and treats **every** public-listener request (with or without a
+bearer token, any value — the demo app sends `Bearer demo` / `?token=demo`) as that
+user. Ownership then scopes exactly as if that user had signed in. For the local
+demo stack only — never set it on a real deployment.
 
 ## End-user JWT (public listener)
 
@@ -39,23 +48,38 @@ with a real `sub`, so they authenticate normally. `GET /health` is always open.
 
 ## Per-user ownership (`/api/v1/user/*`)
 
-The user-data tables are owned by a single user via the **`user_id`** column. End
-users may only touch their own rows; this is enforced in `userdb.go`
-(`scopeToOwner`, `enforceUpsertOwner`) over `userOwnedTables`:
+Ownership is decided by pure functions in `ownership.go` (`decideScope`,
+`decideUpsert`; tested in `ownership_test.go`) and applied by `userdb.go`
+(`scopeToOwner`, `enforceUpsertOwner`). Three shapes:
+
+**Single owner via `user_id`** (`userOwnedTables`):
 
 ```
 user_info, user_defined_default_categories, user_defined_default_themes,
 user_defined_events, cached_pre_routes, saved_addresses, user_themes,
-user_history, user_calendar
+user_history, user_calendar, user_posts, route_reports
 ```
 
 - **GET / DELETE:** the `user_id` filter is forced to the token `sub` (overriding any
   client value) when enforcing.
 - **POST upsert:** rows must carry the caller's `user_id` — absent ones are stamped,
   foreign ones rejected with `403`.
-- **Service (mTLS) callers bypass** ownership entirely (trusted first-party).
-- Inherently-shared tables (`posts`, `user_posts`, `user_friendships`) are **excluded**
-  — they have no single owner. Revisit if/when they get per-row ACLs.
+
+**`user_friendships`** (two parties, `requester_id` / `addressee_id`):
+
+- **GET / DELETE:** must carry an exact filter `requester_id=<caller>` or
+  `addressee_id=<caller>`, else `403` (no `or=` / `in.()` alternatives).
+- **POST upsert:** `requester_id` must be the caller — stamped if absent, `403` if foreign.
+
+**`posts`** (no user column; owned through `posts.event_id → user_defined_events.user_id`):
+
+- **GET:** open to everyone.
+- **DELETE:** must carry an exact `event_id=<an event the caller owns>` filter, else `403`.
+- **POST upsert:** each row's `event_id` must be an event the caller owns, and an
+  existing `post_id` must already hang off one of the caller's events (no re-parenting
+  someone else's post), else `403`.
+
+**Service (mTLS) callers bypass** ownership entirely (trusted first-party).
 
 In soft mode these only **log** what they would block, so legitimate app traffic
 (which already sends its own `user_id`) is unchanged before the flip.
@@ -85,8 +109,9 @@ it can mint a trusted service identity.
 
 | Var | Purpose |
 |---|---|
-| `SUPABASE_URL` | Supabase project URL for JWKS verification (required when enforcing) |
-| `AUTH_ENFORCE` | `false` (soft, default) / `true` (hard 401/403 + RequireAndVerifyClientCert) |
+| `SUPABASE_URL` | Supabase project URL for JWKS verification (required when enforcing, unless `DEMO_USER_ID` is set) |
+| `AUTH_ENFORCE` | `true` (hard 401/403 + RequireAndVerifyClientCert, default) / `false` (soft, log-only) |
+| `DEMO_USER_ID` | Demo only: every public request is this user; no Supabase contacted |
 | `MTLS_LISTEN_ADDR` | mTLS listener address, e.g. `:8443` (unset disables the S2S listener) |
 | `MTLS_CA_CERT` / `MTLS_CERT` / `MTLS_KEY` | CA + this service's leaf (container paths) |
 | `MTLS_ALLOWED_CLIENTS` | comma-separated client CNs allowed over mTLS |

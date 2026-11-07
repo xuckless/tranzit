@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import {
   View,
   Text,
@@ -8,7 +8,7 @@ import {
   ScrollView,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { middlewareQuery } from "@/lib/middleware";
+import { friendlyErrorMessage, middlewareQuery } from "@/lib/middleware";
 import { getStopNamesByTelerideNumbers } from "@/lib/db";
 import type { StopTimeUpdate, CalgaryTransitRoute } from "@/types/database";
 import { useTheme } from "@/contexts/ThemeContext";
@@ -68,28 +68,41 @@ export function BusDetailsPanel({
   const styles = useMemo(() => makeStyles(theme), [theme]);
   const [tripStops, setTripStops] = useState<TripStop[]>([]);
   const [routeName, setRouteName] = useState<string>("");
+  // Spinner only on first load; 30s refreshes update rows in place.
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const hasDataRef = useRef(false);
 
-  useEffect(() => {
-    let cancelled = false;
-
-    (async () => {
-      setLoading(true);
+  const load = useCallback(async () => {
+    abortRef.current?.abort();
+    const ctrl = new AbortController();
+    abortRef.current = ctrl;
+    if (!hasDataRef.current) setLoading(true);
+    try {
       const now = Math.floor(Date.now() / 1000);
 
       const [stopTimes, routeRows] = await Promise.all([
-        middlewareQuery<StopTimeUpdate>("stop_time_updates", {
-          trip_id: tripId,
-          order_by: "stop_sequence",
-          order: "ASC",
-        }),
-        middlewareQuery<CalgaryTransitRoute>("calgary_transit_routes", {
-          route_short_name: routeId,
-          limit: 1,
-        }),
+        middlewareQuery<StopTimeUpdate>(
+          "stop_time_updates",
+          {
+            trip_id: tripId,
+            order_by: "stop_sequence",
+            order: "ASC",
+          },
+          ctrl.signal,
+        ),
+        middlewareQuery<CalgaryTransitRoute>(
+          "calgary_transit_routes",
+          {
+            route_short_name: routeId,
+            limit: 1,
+          },
+          ctrl.signal,
+        ),
       ]);
 
-      if (cancelled) return;
+      if (ctrl.signal.aborted) return;
       if (routeRows[0]?.route_long_name) setRouteName(routeRows[0].route_long_name);
 
       const numericIds = stopTimes
@@ -97,7 +110,7 @@ export function BusDetailsPanel({
         .filter((n) => !isNaN(n));
 
       const nameMap = await getStopNamesByTelerideNumbers(numericIds);
-      if (cancelled) return;
+      if (ctrl.signal.aborted) return;
 
       setTripStops(
         stopTimes.map((s) => ({
@@ -109,13 +122,31 @@ export function BusDetailsPanel({
           passed: (s.arrival_time ?? 0) < now,
         })),
       );
-      setLoading(false);
-    })();
-
-    return () => { cancelled = true; };
+      setError(null);
+      hasDataRef.current = true;
+    } catch (e) {
+      if (ctrl.signal.aborted) return;
+      console.warn("[bus] trip fetch failed:", e);
+      setError(friendlyErrorMessage(e, "trip details"));
+    } finally {
+      if (!ctrl.signal.aborted) setLoading(false);
+    }
   }, [tripId, routeId]);
 
-  const isEmpty = !loading && tripStops.length === 0;
+  useEffect(() => {
+    hasDataRef.current = false;
+    setTripStops([]);
+    setRouteName("");
+    setError(null);
+    load();
+    const timer = setInterval(load, 30_000);
+    return () => {
+      clearInterval(timer);
+      abortRef.current?.abort();
+    };
+  }, [load]);
+
+  const isEmpty = !loading && !error && tripStops.length === 0;
 
   return (
     <View style={[styles.panel, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -131,18 +162,47 @@ export function BusDetailsPanel({
             ) : null}
           </View>
         </View>
-        <TouchableOpacity onPress={onClose} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+        <TouchableOpacity
+          onPress={onClose}
+          hitSlop={12}
+          accessibilityRole="button"
+          accessibilityLabel="Close bus details"
+        >
           <Ionicons name="close-circle" size={22} color={colors.ink3} />
         </TouchableOpacity>
       </View>
 
       <View style={styles.panelContent}>
-        {loading ? (
+        {loading && tripStops.length === 0 ? (
           <ActivityIndicator size="small" color={colors.primary} />
+        ) : error && tripStops.length === 0 ? (
+          <View style={styles.errorRow}>
+            <Text style={[styles.empty, { color: colors.ink2 }]}>{error}</Text>
+            <TouchableOpacity
+              onPress={load}
+              hitSlop={12}
+              accessibilityRole="button"
+              accessibilityLabel="Retry loading trip details"
+            >
+              <Text style={[styles.retryText, { color: colors.primary }]}>Retry</Text>
+            </TouchableOpacity>
+          </View>
         ) : isEmpty ? (
           <Text style={[styles.empty, { color: colors.ink3 }]}>No schedule data</Text>
         ) : (
           <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+            {error && (
+              <TouchableOpacity
+                onPress={load}
+                hitSlop={12}
+                accessibilityRole="button"
+                accessibilityLabel="Couldn't refresh trip. Retry"
+              >
+                <Text style={[styles.staleText, { color: colors.ink3 }]}>
+                  Couldn&apos;t refresh — tap to retry
+                </Text>
+              </TouchableOpacity>
+            )}
             {tripStops.map((stop) => {
               const telerideNum = parseInt(stop.stop_id, 10);
               const tappable = onStopTap && !isNaN(telerideNum);
@@ -252,6 +312,9 @@ function makeStyles(t: AppTheme) {
       paddingVertical: 8,
     },
     scroll: { flex: 1 },
+    errorRow: { alignItems: "center", gap: 6 },
+    retryText: { ...typography.bodySmallStrong },
+    staleText: { ...typography.micro, textAlign: "center", paddingVertical: 4 },
 
     stopRow: {
       flexDirection: "row",

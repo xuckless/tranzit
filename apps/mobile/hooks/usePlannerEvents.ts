@@ -15,8 +15,9 @@ import type { PlannedEvent } from "@/components/planner/trip";
 /**
  * Planned events for the signed-in user. Renders the SQLite mirror first (instant,
  * offline-safe) while `fetchEvents` refreshes from the user DB. `save` upserts (create
- * or edit), `remove` deletes optimistically and restores on failure, `importDevice`
- * pulls the device calendar in.
+ * or edit — a repeating event's whole series), `remove` deletes optimistically
+ * (offline deletes are tombstoned and replayed) and restores on a hard failure,
+ * `importDevice` pulls the device calendar in.
  */
 export function usePlannerEvents() {
   const { user } = useAuth();
@@ -84,6 +85,7 @@ export function usePlannerEvents() {
                   start: event.start,
                   end: event.end,
                   timezone: event.timezone ?? e.timezone,
+                  recurrenceRule: event.recurrenceRule ?? null,
                   travelTime: null, // invalidated until the pre-route recomputes
                   pending: true,
                 }
@@ -128,7 +130,7 @@ export function usePlannerEvents() {
   const importDevice = useCallback(async (): Promise<ImportResult> => {
     if (!user) return { granted: false, imported: 0 };
     const res = await importDeviceEvents(user);
-    if (res.imported > 0) await load();
+    if (res.imported > 0 || (res.removed ?? 0) > 0) await load();
     return res;
   }, [user, load]);
 

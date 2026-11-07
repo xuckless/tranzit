@@ -58,6 +58,7 @@ type Session struct {
 	rtArrivals chan []rtfeed.Arrival
 	rerouteOut chan rerouteResult
 	attach     chan *websocket.Conn
+	detached   chan *clientConn
 	snapshot   chan snapshotReq
 	replanPlan chan chan refreshPlan
 	replanDone chan refreshApplyReq
@@ -82,8 +83,26 @@ type Session struct {
 	tickSeen int  // tick counter for the heartbeat table
 	dirty    bool // a state change is pending a downstream STATE flush
 
-	createdAt int64 // server time the session was created (attach-grace watchdog)
-	attached  bool  // a client WebSocket has attached at least once
+	createdAt  int64       // server time the session was created (attach-grace watchdog)
+	attached   bool        // a client WebSocket has attached at least once
+	conn       *clientConn // the live client connection, nil while detached
+	detachedAt int64       // server time the last connection dropped (reattach-grace watchdog)
+}
+
+// clientConn is one attached WebSocket. Its reader and writer goroutines stop
+// when it is closed, so a reconnect can replace it without two writers draining
+// the shared send queue.
+type clientConn struct {
+	ws   *websocket.Conn
+	stop chan struct{}
+	once sync.Once
+}
+
+func (c *clientConn) close() {
+	c.once.Do(func() {
+		close(c.stop)
+		c.ws.Close()
+	})
 }
 
 func newSession(ts *trip.TripState, cfg sessionConfig, deps Deps, mgr *Manager) *Session {
@@ -102,6 +121,7 @@ func newSession(ts *trip.TripState, cfg sessionConfig, deps Deps, mgr *Manager) 
 		rtArrivals:  make(chan []rtfeed.Arrival, 4),
 		rerouteOut:  make(chan rerouteResult, 4),
 		attach:      make(chan *websocket.Conn, 1),
+		detached:    make(chan *clientConn, 2),
 		snapshot:    make(chan snapshotReq),
 		replanPlan:  make(chan chan refreshPlan),
 		replanDone:  make(chan refreshApplyReq),
@@ -150,6 +170,14 @@ func (s *Session) run() {
 				s.Close()
 				return
 			}
+			// A client that dropped (network blip, app backgrounded or killed) gets a
+			// window to reconnect and RESUME before the trip is torn down.
+			if s.attached && s.conn == nil && s.deps.Clock.Now()-s.detachedAt > config.SessionReattachGraceS {
+				log.Printf("session %s: client gone for %ds; closing",
+					shortID(s.trip.SessionID), config.SessionReattachGraceS)
+				s.Close()
+				return
+			}
 			if s.machine.OnTick() {
 				s.markDirty()
 			}
@@ -179,6 +207,14 @@ func (s *Session) run() {
 
 		case conn := <-s.attach:
 			s.onAttach(conn)
+
+		case c := <-s.detached:
+			if c == s.conn { // ignore a stale connection a reconnect already replaced
+				s.conn = nil
+				s.detachedAt = s.deps.Clock.Now()
+				log.Printf("session %s: client disconnected; holding for %ds",
+					shortID(s.trip.SessionID), config.SessionReattachGraceS)
+			}
 
 		case req := <-s.snapshot:
 			// Build the snapshot on the loop goroutine so the GET reads trip state
@@ -458,20 +494,39 @@ func (s *Session) Attach(conn *websocket.Conn) {
 }
 
 // onAttach runs on the loop goroutine: it wires up the connection and pushes the
-// first full STATE export.
-func (s *Session) onAttach(conn *websocket.Conn) {
+// first full STATE export. A new connection replaces any previous one (a client
+// reconnecting after a drop), whose goroutines are stopped first.
+func (s *Session) onAttach(ws *websocket.Conn) {
+	if s.conn != nil {
+		s.conn.close()
+	}
+	c := &clientConn{ws: ws, stop: make(chan struct{})}
+	s.conn = c
 	s.attached = true
-	go s.writeLoop(conn)
-	go s.readLoop(conn)
+	s.detachedAt = 0
+	go s.writeLoop(c)
+	go s.readLoop(c)
 	s.forcePushState()
+}
+
+// detach stops a connection's goroutines and tells the loop it is gone. The
+// session itself keeps running for SessionReattachGraceS so the client can
+// reconnect; Close (explicit DELETE, completion, or the grace expiring) ends it.
+func (s *Session) detach(c *clientConn) {
+	c.close()
+	select {
+	case s.detached <- c:
+	case <-s.done:
+	}
 }
 
 // readLoop pumps client frames into the loop. It enforces a read deadline that the
 // pong handler extends on every keepalive pong, so a silently-dropped peer (no TCP
-// FIN) fails ReadMessage within WSPongWaitS and the deferred Close fires — instead
-// of blocking here forever and leaving the session ticking.
-func (s *Session) readLoop(conn *websocket.Conn) {
-	defer s.Close()
+// FIN) fails ReadMessage within WSPongWaitS and the connection is detached —
+// instead of blocking here forever.
+func (s *Session) readLoop(c *clientConn) {
+	defer s.detach(c)
+	conn := c.ws
 	pongWait := config.WSPongWaitS * time.Second
 	conn.SetReadDeadline(time.Now().Add(pongWait))
 	conn.SetPongHandler(func(string) error {
@@ -489,6 +544,8 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 		case s.clientMsgs <- raw:
 		case <-s.done:
 			return
+		case <-c.stop:
+			return
 		}
 	}
 }
@@ -496,24 +553,28 @@ func (s *Session) readLoop(conn *websocket.Conn) {
 // writeLoop drains the send queue and emits a keepalive ping every WSPingIntervalS
 // so the peer's pong keeps readLoop's deadline alive. Write deadlines keep a stuck
 // socket from blocking the loop indefinitely.
-func (s *Session) writeLoop(conn *websocket.Conn) {
+func (s *Session) writeLoop(c *clientConn) {
+	conn := c.ws
 	ping := time.NewTicker(config.WSPingIntervalS * time.Second)
 	defer ping.Stop()
 	writeWait := config.WSPingIntervalS * time.Second
 	for {
 		select {
 		case <-s.done:
+			c.close()
+			return
+		case <-c.stop:
 			return
 		case msg := <-s.send:
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := conn.WriteMessage(websocket.TextMessage, msg); err != nil {
-				s.Close()
+				s.detach(c)
 				return
 			}
 		case <-ping.C:
 			conn.SetWriteDeadline(time.Now().Add(writeWait))
 			if err := conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(writeWait)); err != nil {
-				s.Close()
+				s.detach(c)
 				return
 			}
 		}
@@ -521,8 +582,8 @@ func (s *Session) writeLoop(conn *websocket.Conn) {
 }
 
 // Close tears the session down idempotently: cancels async work, stops the loop,
-// and removes the session from the registry. WS close or an explicit DELETE both
-// land here ("closed anytime").
+// and removes the session from the registry. An explicit DELETE, completion, or
+// the reattach grace expiring after the client's socket dropped all land here.
 func (s *Session) Close() {
 	s.close.Do(func() {
 		s.cancel()

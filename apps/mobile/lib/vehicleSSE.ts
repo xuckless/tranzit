@@ -26,6 +26,43 @@ const _indexById = new Map<string, number>();
 let _published: VehiclePosition[] = [];
 let _dirty = false;
 
+// ─── Connection status ────────────────────────────────────────────────────────
+// connecting   → opening the stream, no data yet
+// live         → stream open / data arriving
+// reconnecting → stream errored after having been live; react-native-sse retries
+// offline      → repeated failures (or never connected); still retrying
+
+export type VehicleStreamStatus = "connecting" | "live" | "reconnecting" | "offline";
+
+const OFFLINE_AFTER_ERRORS = 3;
+let _status: VehicleStreamStatus = "connecting";
+let _consecutiveErrors = 0;
+let _everLive = false;
+const _statusSubs = new Set<(s: VehicleStreamStatus) => void>();
+
+function setStatus(next: VehicleStreamStatus): void {
+  if (_status === next) return;
+  _status = next;
+  _statusSubs.forEach((fn) => fn(next));
+}
+
+function markLive(): void {
+  _consecutiveErrors = 0;
+  _everLive = true;
+  setStatus("live");
+}
+
+function markError(): void {
+  _consecutiveErrors++;
+  setStatus(
+    _consecutiveErrors >= OFFLINE_AFTER_ERRORS || !_everLive ? "offline" : "reconnecting",
+  );
+}
+
+export function getVehicleStreamStatus(): VehicleStreamStatus {
+  return _status;
+}
+
 type Setter = React.Dispatch<React.SetStateAction<VehiclePosition[]>>;
 const _subs = new Set<Setter>();
 
@@ -171,8 +208,14 @@ function openSSE(): void {
   // react-native-sse reuses these headers on auto-reconnect, so a token expiring
   // on this long-lived stream would fail to reconnect once the middleware hard-
   // enforces — acceptable while it is log-first; revisit before the flip.
+  if (_status !== "live") setStatus(_everLive ? "reconnecting" : "connecting");
   void (async () => {
-    const headers = await authHeader();
+    let headers: Record<string, string> = {};
+    try {
+      headers = await authHeader();
+    } catch (e) {
+      console.warn("[vehicleSSE] auth header failed", e);
+    }
     if (_refCount === 0 || _es) {
       _opening = false;
       return;
@@ -184,24 +227,39 @@ function openSSE(): void {
     _es = es;
     _opening = false;
 
-    es.addEventListener("error", (e) => console.warn("[vehicleSSE] error", e));
+    es.addEventListener("open", () => markLive());
+
+    es.addEventListener("error", (e) => {
+      console.warn("[vehicleSSE] error", e);
+      markError();
+    });
 
     es.addEventListener("snapshot", (e) => {
       if (!e.data) return;
-      const { data } = JSON.parse(e.data) as { count: number; data: VehiclePosition[] };
-      applySnapshot(data);
-      scheduleBroadcast();
+      try {
+        const { data } = JSON.parse(e.data) as { count: number; data: VehiclePosition[] };
+        applySnapshot(data ?? []);
+        markLive();
+        scheduleBroadcast();
+      } catch (err) {
+        console.warn("[vehicleSSE] bad snapshot", err);
+      }
     });
 
     es.addEventListener("update", (e) => {
       if (!e.data) return;
-      const { added, updated, removed } = JSON.parse(e.data) as {
-        added?: VehiclePosition[];
-        updated?: VehiclePosition[];
-        removed?: string[];
-      };
-      applyUpdate(added, updated, removed);
-      scheduleBroadcast();
+      try {
+        const { added, updated, removed } = JSON.parse(e.data) as {
+          added?: VehiclePosition[];
+          updated?: VehiclePosition[];
+          removed?: string[];
+        };
+        applyUpdate(added, updated, removed);
+        markLive();
+        scheduleBroadcast();
+      } catch (err) {
+        console.warn("[vehicleSSE] bad update", err);
+      }
     });
   })();
 }
@@ -279,6 +337,22 @@ export function useVehiclesForRoutes(routeIds: string[]): VehiclePosition[] {
   }, [key]);
 
   return vehicles;
+}
+
+/**
+ * Connection status of the shared vehicle stream. Does not itself open the
+ * stream — pair it with useVehicles()/useVehiclesForRoutes().
+ */
+export function useVehicleStreamStatus(): VehicleStreamStatus {
+  const [status, set] = useState<VehicleStreamStatus>(() => _status);
+  useEffect(() => {
+    _statusSubs.add(set);
+    set(_status);
+    return () => {
+      _statusSubs.delete(set);
+    };
+  }, []);
+  return status;
 }
 
 // ─── GeoJSON conversion helper ────────────────────────────────────────────────
