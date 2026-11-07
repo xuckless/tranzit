@@ -40,9 +40,23 @@ export async function setupTripProgressChannel(): Promise<void> {
   });
 }
 
+/**
+ * Start the trip's Live Activity (iOS) / sticky notification (Android).
+ * Idempotent: if an activity is already running it is updated in place instead
+ * of starting a second one (re-calling start on every tab return used to orphan
+ * the previous activity on the Lock Screen).
+ */
 export async function startTripActivity(input: TripActivityInput): Promise<void> {
   try {
     if (Platform.OS === "ios") {
+      if (_iosActivityId) {
+        ExpoLiveActivity.updateActivity(_iosActivityId, {
+          title: buildTitle(input),
+          subtitle: buildSubtitle(input),
+          progressBar: { progress: input.journeyFraction },
+        });
+        return;
+      }
       const id = ExpoLiveActivity.startActivity(
         {
           title: buildTitle(input),
@@ -51,6 +65,14 @@ export async function startTripActivity(input: TripActivityInput): Promise<void>
         },
         { deepLinkUrl: "tranzit://commute" },
       );
+      if (_iosActivityId && id && _iosActivityId !== id) {
+        // Defensive: never leave a previous activity running behind the new one.
+        try {
+          ExpoLiveActivity.stopActivity(_iosActivityId, { title: "Journey Complete", subtitle: "" });
+        } catch {
+          // ignore
+        }
+      }
       _iosActivityId = id ?? null;
     } else {
       await _presentAndroidNotification(input);
@@ -77,15 +99,16 @@ export async function updateTripActivity(input: TripActivityInput): Promise<void
   }
 }
 
-export async function endTripActivity(): Promise<void> {
+export async function endTripActivity(finalSubtitle = ""): Promise<void> {
   try {
     if (Platform.OS === "ios") {
       if (_iosActivityId) {
-        ExpoLiveActivity.stopActivity(_iosActivityId, {
-          title: "Journey Complete",
-          subtitle: "",
-        });
+        const id = _iosActivityId;
         _iosActivityId = null;
+        ExpoLiveActivity.stopActivity(id, {
+          title: "Journey Complete",
+          subtitle: finalSubtitle,
+        });
       }
     } else {
       await Notifications.dismissNotificationAsync(TRIP_PROGRESS_NOTIF_ID);

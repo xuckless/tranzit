@@ -34,13 +34,53 @@ export async function registerBoardingCategory(): Promise<void> {
   ]);
 }
 
+// Cached notification-permission result. Requested once when a trip starts
+// (ensureNotificationPermission) — not on every schedule call, which re-prompted
+// / re-queried the OS for each boarding question.
+let _permission: boolean | null = null;
+
+/**
+ * Ask for notification permission once (call when a trip starts) and cache the
+ * answer for later schedule calls. Returns whether notifications are allowed.
+ */
+export async function ensureNotificationPermission(): Promise<boolean> {
+  if (_permission != null) return _permission;
+  try {
+    const current = await Notifications.getPermissionsAsync();
+    if (current.granted) {
+      _permission = true;
+    } else if (current.canAskAgain) {
+      _permission = (await Notifications.requestPermissionsAsync()).granted;
+    } else {
+      _permission = false;
+    }
+  } catch {
+    _permission = false;
+  }
+  return _permission;
+}
+
+async function hasNotificationPermission(): Promise<boolean> {
+  if (_permission != null) return _permission;
+  // Not asked yet this run (e.g. trip restored after a cold start): read the
+  // current status without prompting.
+  // Only a grant is cached here, so a later ensureNotificationPermission() can
+  // still prompt.
+  try {
+    const granted = (await Notifications.getPermissionsAsync()).granted;
+    if (granted) _permission = true;
+    return granted;
+  } catch {
+    return false;
+  }
+}
+
 export async function scheduleBoarding(
   stopId: string,
   stopName: string,
   sessionId: string,
 ): Promise<void> {
-  const { granted } = await Notifications.requestPermissionsAsync();
-  if (!granted) return;
+  if (!(await hasNotificationPermission())) return;
 
   const data = { stopId, sessionId };
   const baseContent: Notifications.NotificationContentInput = {
@@ -61,8 +101,8 @@ export async function scheduleBoarding(
       identifier: idFor(stopId, 60),
       content: {
         ...baseContent,
-        title: "Still on board?",
-        body: `60 seconds remain to confirm boarding at ${stopName}.`,
+        title: "Did you make it on?",
+        body: `Reminder: let us know whether you boarded at ${stopName} so we can keep your trip on track.`,
       },
       trigger: {
         type: Notifications.SchedulableTriggerInputTypes.TIME_INTERVAL,
