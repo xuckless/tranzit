@@ -1,9 +1,8 @@
-import { useCallback, useMemo, useRef, useEffect, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import {
     View,
     Text,
     StyleSheet,
-    ScrollView,
     TouchableOpacity,
     Alert,
     Linking,
@@ -15,28 +14,47 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useTheme } from "@/contexts/ThemeContext";
 import type { AppTheme } from "@/styles/themes";
-import { TripEventCard } from "@/components/planner/TripEventCard";
 import { TripDetailSheet } from "@/components/planner/TripDetailSheet";
+import { DayTimeline } from "@/components/planner/DayTimeline";
+import { WeekView } from "@/components/planner/WeekView";
+import { MonthView } from "@/components/planner/MonthView";
 import { usePlannerEvents } from "@/hooks/usePlannerEvents";
 import type { SaveEventInput } from "@/lib/plannerEvents";
 import {
-    eventOnDay,
-    isAllDay,
+    isRepeating,
+    occurrencesInRange,
+} from "@/components/planner/recurrence";
+import {
+    addDays,
+    addMonths,
+    dayStart,
     localDayKey,
-    minutesOfDay,
+    monthGridDays,
     shiftEvent,
-    formatHourLabel,
-    HOUR_HEIGHT,
-    GUTTER_WIDTH,
-    TOTAL_HEIGHT,
-    type PlannedEvent,
+    startOfWeek,
 } from "@/components/planner/trip";
 
-const addDays = (d: Date, n: number): Date => {
-    const next = new Date(d);
-    next.setDate(next.getDate() + n);
-    return next;
-};
+type PlannerView = "day" | "week" | "month";
+
+const VIEWS: { key: PlannerView; label: string }[] = [
+    { key: "day", label: "Day" },
+    { key: "week", label: "Week" },
+    { key: "month", label: "Month" },
+];
+
+/** The [start, end) window a view shows around the anchor date. */
+function viewRange(view: PlannerView, anchor: Date): [Date, Date] {
+    if (view === "day") {
+        const s = dayStart(localDayKey(anchor));
+        return [s, addDays(s, 1)];
+    }
+    if (view === "week") {
+        const s = startOfWeek(anchor);
+        return [s, addDays(s, 7)];
+    }
+    const days = monthGridDays(anchor);
+    return [days[0], addDays(days[41], 1)];
+}
 
 export default function PlannerScreen() {
     const router = useRouter();
@@ -44,40 +62,83 @@ export default function PlannerScreen() {
     const { theme } = useTheme();
     const { colors } = theme;
     const styles = useMemo(() => makeStyles(theme), [theme]);
-    const scrollRef = useRef<ScrollView>(null);
 
     const { data, save, remove, importDevice, refresh } = usePlannerEvents();
 
+    const [view, setView] = useState<PlannerView>("day");
     const [selectedDate, setSelectedDate] = useState(() => new Date());
     const [selectedId, setSelectedId] = useState<string | null>(null);
     const [showDatePicker, setShowDatePicker] = useState(false);
 
     const dayKey = localDayKey(selectedDate);
-    // All-day events render as plaques pinned above the timeline; only timed
-    // events go onto the hour grid (cards + travel lead-ins).
-    const { allDayEvents, timedEvents } = useMemo(() => {
-        const allDayEvents: PlannedEvent[] = [];
-        const timedEvents: PlannedEvent[] = [];
-        for (const e of data) {
-            if (!eventOnDay(e, dayKey)) continue;
-            (isAllDay(e) ? allDayEvents : timedEvents).push(e);
-        }
-        return { allDayEvents, timedEvents };
-    }, [data, dayKey]);
+    const todayKey = localDayKey(new Date());
+    const isToday = dayKey === todayKey;
+
+    // Repeats are expanded per visible window; multi-day items are clipped per
+    // day inside the views.
+    const rangeStartMs = viewRange(view, selectedDate)[0].getTime();
+    const rangeEndMs = viewRange(view, selectedDate)[1].getTime();
+    const occurrences = useMemo(
+        () =>
+            occurrencesInRange(
+                data,
+                new Date(rangeStartMs),
+                new Date(rangeEndMs),
+            ),
+        [data, rangeStartMs, rangeEndMs],
+    );
+    const weekStart = useMemo(
+        () => new Date(rangeStartMs),
+        [rangeStartMs],
+    );
+
     const selectedEvent = useMemo(
         () => data.find((e) => e.eventId === selectedId) ?? null,
         [data, selectedId],
     );
 
-    const isToday = dayKey === localDayKey(new Date());
-    const now = useMemo(() => new Date(), []);
-    const currentTimeTop =
-        (now.getHours() + now.getMinutes() / 60) * HOUR_HEIGHT;
-    const dateLabel = selectedDate.toLocaleDateString(undefined, {
-        weekday: "short",
-        month: "short",
-        day: "numeric",
-    });
+    const dateLabel = useMemo(() => {
+        if (view === "month")
+            return selectedDate.toLocaleDateString(undefined, {
+                month: "long",
+                year: "numeric",
+            });
+        if (view === "week") {
+            const s = new Date(rangeStartMs);
+            const e = addDays(s, 6);
+            const fmt = (d: Date) =>
+                d.toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                });
+            return `${fmt(s)} – ${fmt(e)}`;
+        }
+        return (
+            (isToday ? "Today · " : "") +
+            selectedDate.toLocaleDateString(undefined, {
+                weekday: "short",
+                month: "short",
+                day: "numeric",
+            })
+        );
+    }, [view, selectedDate, rangeStartMs, isToday]);
+
+    const step = useCallback(
+        (dir: 1 | -1) =>
+            setSelectedDate((d) =>
+                view === "day"
+                    ? addDays(d, dir)
+                    : view === "week"
+                      ? addDays(d, 7 * dir)
+                      : addMonths(d, dir),
+            ),
+        [view],
+    );
+
+    const openDay = useCallback((d: Date) => {
+        setSelectedDate(d);
+        setView("day");
+    }, []);
 
     // Refresh from the mirror/user DB whenever the tab regains focus (e.g. after
     // creating an event on the Add screen).
@@ -87,24 +148,13 @@ export default function PlannerScreen() {
         }, [refresh]),
     );
 
-    // Open the timeline near the morning commute rather than at midnight.
-    useEffect(() => {
-        const id = setTimeout(() => {
-            scrollRef.current?.scrollTo({
-                y: 8 * HOUR_HEIGHT - 20,
-                animated: false,
-            });
-        }, 0);
-        return () => clearTimeout(id);
-    }, []);
-
     const handleSelect = useCallback((id: string) => setSelectedId(id), []);
 
     const handleDrag = useCallback(
         (id: string, deltaMin: number) => {
             if (deltaMin === 0) return;
             const ev = data.find((e) => e.eventId === id);
-            if (!ev) return;
+            if (!ev || isRepeating(ev)) return; // repeats aren't draggable
             const shifted = shiftEvent(ev, deltaMin);
             if (shifted === ev) return;
             save({
@@ -118,6 +168,7 @@ export default function PlannerScreen() {
                 start: shifted.start,
                 end: shifted.end,
                 timezone: ev.timezone,
+                recurrenceRule: ev.recurrenceRule,
             });
         },
         [data, save],
@@ -169,11 +220,19 @@ export default function PlannerScreen() {
                     return;
             }
         }
+        const removed = res.removed ?? 0;
+        const parts: string[] = [];
+        if (res.imported > 0)
+            parts.push(
+                `Imported ${res.imported} event${res.imported === 1 ? "" : "s"}.`,
+            );
+        if (removed > 0)
+            parts.push(
+                `Removed ${removed} event${removed === 1 ? "" : "s"} no longer on your calendar.`,
+            );
         Alert.alert(
             "Calendar import",
-            res.imported > 0
-                ? `Imported ${res.imported} event${res.imported === 1 ? "" : "s"}.`
-                : "No calendar events found in range.",
+            parts.join(" ") || "No calendar events found in range.",
         );
     }, [importDevice]);
 
@@ -185,7 +244,7 @@ export default function PlannerScreen() {
                     <TouchableOpacity
                         style={styles.navBtn}
                         activeOpacity={0.85}
-                        onPress={() => setSelectedDate((d) => addDays(d, -1))}
+                        onPress={() => step(-1)}
                     >
                         <Ionicons
                             name="chevron-back"
@@ -198,8 +257,7 @@ export default function PlannerScreen() {
                         style={styles.dateBtn}
                         onPress={() => setShowDatePicker((v) => !v)}
                     >
-                        <Text style={styles.dateLabel}>
-                            {isToday ? "Today · " : ""}
+                        <Text style={styles.dateLabel} numberOfLines={1}>
                             {dateLabel}
                         </Text>
                         <Ionicons
@@ -211,7 +269,7 @@ export default function PlannerScreen() {
                     <TouchableOpacity
                         style={styles.navBtn}
                         activeOpacity={0.85}
-                        onPress={() => setSelectedDate((d) => addDays(d, 1))}
+                        onPress={() => step(1)}
                     >
                         <Ionicons
                             name="chevron-forward"
@@ -248,6 +306,42 @@ export default function PlannerScreen() {
                 </View>
             </View>
 
+            {/* Day / Week / Month + Today */}
+            <View style={styles.viewBar}>
+                <View style={styles.segmented}>
+                    {VIEWS.map((v) => {
+                        const active = v.key === view;
+                        return (
+                            <TouchableOpacity
+                                key={v.key}
+                                style={[
+                                    styles.segment,
+                                    active && styles.segmentActive,
+                                ]}
+                                activeOpacity={0.85}
+                                onPress={() => setView(v.key)}
+                            >
+                                <Text
+                                    style={[
+                                        styles.segmentText,
+                                        active && styles.segmentTextActive,
+                                    ]}
+                                >
+                                    {v.label}
+                                </Text>
+                            </TouchableOpacity>
+                        );
+                    })}
+                </View>
+                <TouchableOpacity
+                    style={styles.todayBtn}
+                    activeOpacity={0.85}
+                    onPress={() => setSelectedDate(new Date())}
+                >
+                    <Text style={styles.todayText}>Today</Text>
+                </TouchableOpacity>
+            </View>
+
             {/* Native date picker — dialog on Android, inline calendar on iOS */}
             {showDatePicker && (
                 <View style={styles.datePickerWrap}>
@@ -264,123 +358,36 @@ export default function PlannerScreen() {
                 </View>
             )}
 
-            {/* All-day plaques — pinned above the scrolling timeline (iOS-Calendar style) */}
-            {allDayEvents.length > 0 && (
-                <View style={styles.allDayStrip}>
-                    <Text style={styles.allDayGutterLabel}>all-day</Text>
-                    {/* ponytail: strip isn't scrollable; if many all-day events
-                        shrink the timeline, wrap this in a ScrollView maxHeight ~96 */}
-                    <View style={styles.allDayPlaques}>
-                        {allDayEvents.map((event) => (
-                            <TouchableOpacity
-                                key={event.eventId}
-                                style={styles.allDayPlaque}
-                                activeOpacity={0.85}
-                                onPress={() => handleSelect(event.eventId)}
-                            >
-                                <Text
-                                    style={styles.allDayName}
-                                    numberOfLines={1}
-                                >
-                                    {event.name}
-                                </Text>
-                            </TouchableOpacity>
-                        ))}
-                    </View>
-                </View>
+            {view === "day" && (
+                <DayTimeline
+                    dayKey={dayKey}
+                    occurrences={occurrences}
+                    isToday={isToday}
+                    bottomInset={insets.bottom}
+                    onSelect={handleSelect}
+                    onDrag={handleDrag}
+                    onSwipe={step}
+                />
             )}
-
-            <ScrollView
-                ref={scrollRef}
-                contentContainerStyle={{
-                    height: TOTAL_HEIGHT,
-                    paddingBottom: insets.bottom,
-                }}
-                showsVerticalScrollIndicator={false}
-            >
-                <View style={styles.grid}>
-                    {/* Hour lines + labels */}
-                    {Array.from({ length: 24 }, (_, i) => (
-                        <View key={i}>
-                            <View
-                                style={[
-                                    styles.hourLine,
-                                    { top: i * HOUR_HEIGHT },
-                                ]}
-                            />
-                            {i !== 0 && (
-                                <Text
-                                    style={[
-                                        styles.hourLabel,
-                                        { top: i * HOUR_HEIGHT - 8 },
-                                    ]}
-                                >
-                                    {formatHourLabel(i)}
-                                </Text>
-                            )}
-                        </View>
-                    ))}
-
-                    {/* Faded travel lead-ins — the pre-routed window before each event */}
-                    {timedEvents.map((event) => {
-                        if (!event.travelTime) return null;
-                        const startMin = minutesOfDay(event.start);
-                        const top = Math.max(
-                            0,
-                            ((startMin - event.travelTime) / 60) * HOUR_HEIGHT,
-                        );
-                        const height = (startMin / 60) * HOUR_HEIGHT - top;
-                        if (height <= 0) return null;
-                        return (
-                            <View
-                                key={`${event.eventId}-lead`}
-                                pointerEvents="none"
-                                style={[
-                                    styles.travelLeadIn,
-                                    {
-                                        top,
-                                        height,
-                                        right: theme.spacing.screen,
-                                    },
-                                ]}
-                            >
-                                {height >= 22 && (
-                                    <Text
-                                        style={styles.travelLeadInText}
-                                        numberOfLines={1}
-                                    >
-                                        ⊙ {event.travelTime} min travel
-                                    </Text>
-                                )}
-                            </View>
-                        );
-                    })}
-
-                    {/* Event blocks — tap to open detail, long-press + drag to move */}
-                    {timedEvents.map((event) => (
-                        <TripEventCard
-                            key={event.eventId}
-                            event={event}
-                            rightInset={theme.spacing.screen}
-                            onPress={handleSelect}
-                            onDrag={handleDrag}
-                        />
-                    ))}
-
-                    {/* Current-time indicator (only on today) */}
-                    {isToday && (
-                        <View
-                            style={[
-                                styles.currentLine,
-                                { top: currentTimeTop },
-                            ]}
-                            pointerEvents="none"
-                        >
-                            <View style={styles.currentDot} />
-                        </View>
-                    )}
-                </View>
-            </ScrollView>
+            {view === "week" && (
+                <WeekView
+                    weekStart={weekStart}
+                    occurrences={occurrences}
+                    selectedKey={dayKey}
+                    bottomInset={insets.bottom}
+                    onSelectEvent={handleSelect}
+                    onSelectDay={openDay}
+                />
+            )}
+            {view === "month" && (
+                <MonthView
+                    anchor={selectedDate}
+                    occurrences={occurrences}
+                    selectedKey={dayKey}
+                    bottomInset={insets.bottom}
+                    onSelectDay={openDay}
+                />
+            )}
 
             <TripDetailSheet
                 event={selectedEvent}
@@ -450,27 +457,6 @@ function makeStyles(t: AppTheme) {
             ...shadow.button,
         },
 
-        // Grid
-        grid: {
-            position: "relative",
-            height: TOTAL_HEIGHT,
-        },
-        hourLine: {
-            position: "absolute",
-            left: GUTTER_WIDTH,
-            right: 0,
-            height: StyleSheet.hairlineWidth,
-            backgroundColor: colors.divider,
-        },
-        hourLabel: {
-            position: "absolute",
-            left: 0,
-            width: GUTTER_WIDTH - 10,
-            textAlign: "right",
-            ...typography.caption,
-            color: colors.ink3,
-        },
-
         dateBtn: {
             flexDirection: "row",
             alignItems: "center",
@@ -484,80 +470,51 @@ function makeStyles(t: AppTheme) {
             alignItems: "center",
         },
 
-        // All-day plaque strip pinned between the toolbar and the timeline
-        allDayStrip: {
+        // View switcher row
+        viewBar: {
             flexDirection: "row",
-            alignItems: "flex-start",
-            paddingVertical: 6,
-            paddingRight: spacing.screen,
+            alignItems: "center",
+            gap: spacing.element,
+            paddingHorizontal: spacing.screen,
+            paddingVertical: spacing.xs + 2,
             backgroundColor: colors.surface,
             borderBottomWidth: 1,
             borderBottomColor: colors.divider,
         },
-        allDayGutterLabel: {
-            width: GUTTER_WIDTH - 10,
-            textAlign: "right",
-            paddingTop: 5,
-            ...typography.caption,
-            color: colors.ink3,
-        },
-        // 18 = (GUTTER_WIDTH + 8) − label width, so plaques align with event cards
-        allDayPlaques: {
+        segmented: {
             flex: 1,
-            marginLeft: 18,
-            gap: 4,
+            flexDirection: "row",
+            backgroundColor: colors.surface2,
+            borderRadius: radii.pill,
+            padding: 2,
         },
-        allDayPlaque: {
-            borderRadius: radii.element,
-            borderWidth: 1,
-            borderColor: colors.primary + "44",
-            borderLeftWidth: 4,
-            borderLeftColor: colors.primary,
-            backgroundColor: colors.primary + "14",
-            paddingHorizontal: 10,
-            paddingVertical: 5,
+        segment: {
+            flex: 1,
+            alignItems: "center",
+            paddingVertical: 6,
+            borderRadius: radii.pill,
         },
-        allDayName: {
+        segmentActive: {
+            backgroundColor: colors.card,
+            ...shadow.soft,
+        },
+        segmentText: {
             ...typography.captionStrong,
+            color: colors.ink2,
+        },
+        segmentTextActive: {
             color: colors.ink,
         },
-
-        // Faded pre-routed travel window rendered above its event card
-        travelLeadIn: {
-            position: "absolute",
-            left: GUTTER_WIDTH + 8,
+        todayBtn: {
+            paddingHorizontal: spacing.card,
+            paddingVertical: 7,
+            borderRadius: radii.pill,
             borderWidth: 1,
-            borderStyle: "dashed",
-            borderColor: colors.primary + "55",
-            backgroundColor: colors.primary + "0D",
-            borderTopLeftRadius: radii.element,
-            borderTopRightRadius: radii.element,
-            opacity: 0.7,
-            justifyContent: "flex-start",
-            paddingHorizontal: 10,
-            paddingTop: 3,
+            borderColor: colors.primary,
         },
-        travelLeadInText: {
-            ...typography.caption,
-            color: colors.ink3,
-        },
-
-        // Current time
-        currentLine: {
-            position: "absolute",
-            left: GUTTER_WIDTH,
-            right: 0,
-            height: 2,
-            backgroundColor: colors.error,
-        },
-        currentDot: {
-            position: "absolute",
-            left: -4,
-            top: -4,
-            width: 10,
-            height: 10,
-            borderRadius: 5,
-            backgroundColor: colors.error,
+        todayText: {
+            ...typography.captionStrong,
+            color: colors.primary,
         },
     });
 }

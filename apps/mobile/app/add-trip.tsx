@@ -24,6 +24,12 @@ import { TranzitApiService } from "@/services/TranzitApiService";
 import type { SearchSuggestion } from "@/types/places";
 import { Stepper } from "@/components/planner/Stepper";
 import {
+    buildRRule,
+    REPEAT_OPTIONS,
+    type RepeatKind,
+} from "@/components/planner/recurrence";
+import {
+    dayStart,
     formatClock,
     formatDuration,
     isoForDay,
@@ -82,6 +88,10 @@ export default function AddTripScreen() {
     const [notes, setNotes] = useState("");
     const [durMin, setDurMin] = useState(60);
     const [saving, setSaving] = useState(false);
+    // Repeat → stored as an RRULE in recurrence_rule (components/planner/recurrence.ts).
+    const [repeat, setRepeat] = useState<RepeatKind>("never");
+    const [untilKey, setUntilKey] = useState<string | null>(null);
+    const [showUntilPicker, setShowUntilPicker] = useState(false);
 
     const [startMin, setStartMin] = useState(() => {
         const now = new Date();
@@ -148,6 +158,7 @@ export default function AddTripScreen() {
                         notes: notes.trim() || null,
                         start,
                         end,
+                        recurrenceRule: buildRRule(repeat, untilKey),
                     },
                 });
                 // "Leave Later" flow: the route the user already picked becomes the
@@ -290,6 +301,107 @@ export default function AddTripScreen() {
                     />
                 </View>
 
+                {/* Repeat — Never / Daily / Weekdays / Weekly / Monthly, optional end date */}
+                <View style={styles.fieldBlock}>
+                    <Text style={styles.fieldLabel}>Repeat</Text>
+                    <View style={styles.chipRow}>
+                        {REPEAT_OPTIONS.map((o) => {
+                            const active = o.kind === repeat;
+                            return (
+                                <TouchableOpacity
+                                    key={o.kind}
+                                    style={[
+                                        styles.chip,
+                                        active && styles.chipActive,
+                                    ]}
+                                    activeOpacity={0.85}
+                                    onPress={() => {
+                                        setRepeat(o.kind);
+                                        if (o.kind === "never") {
+                                            setUntilKey(null);
+                                            setShowUntilPicker(false);
+                                        }
+                                    }}
+                                >
+                                    <Text
+                                        style={[
+                                            styles.chipText,
+                                            active && styles.chipTextActive,
+                                        ]}
+                                    >
+                                        {o.label}
+                                    </Text>
+                                </TouchableOpacity>
+                            );
+                        })}
+                    </View>
+                    {repeat !== "never" && (
+                        <>
+                            <View style={styles.inputRow}>
+                                <Ionicons
+                                    name="flag-outline"
+                                    size={16}
+                                    color={colors.ink3}
+                                    style={styles.rowIcon}
+                                />
+                                <TouchableOpacity
+                                    style={{ flex: 1 }}
+                                    onPress={() =>
+                                        setShowUntilPicker((v) => !v)
+                                    }
+                                    activeOpacity={0.85}
+                                >
+                                    <Text style={styles.input}>
+                                        {untilKey
+                                            ? `Ends ${dayStart(
+                                                  untilKey,
+                                              ).toLocaleDateString(undefined, {
+                                                  weekday: "short",
+                                                  month: "short",
+                                                  day: "numeric",
+                                                  year: "numeric",
+                                              })}`
+                                            : "Never ends — tap to set an end date"}
+                                    </Text>
+                                </TouchableOpacity>
+                                {!!untilKey && (
+                                    <TouchableOpacity
+                                        hitSlop={8}
+                                        onPress={() => {
+                                            setUntilKey(null);
+                                            setShowUntilPicker(false);
+                                        }}
+                                    >
+                                        <Ionicons
+                                            name="close-circle"
+                                            size={18}
+                                            color={colors.ink3}
+                                        />
+                                    </TouchableOpacity>
+                                )}
+                            </View>
+                            {showUntilPicker && (
+                                <DateTimePicker
+                                    value={dayStart(untilKey ?? dayKey)}
+                                    mode="date"
+                                    minimumDate={dayStart(dayKey)}
+                                    display={
+                                        Platform.OS === "ios"
+                                            ? "inline"
+                                            : "default"
+                                    }
+                                    onChange={(event, date) => {
+                                        if (Platform.OS === "android")
+                                            setShowUntilPicker(false);
+                                        if (event.type === "set" && date)
+                                            setUntilKey(localDayKey(date));
+                                    }}
+                                />
+                            )}
+                        </>
+                    )}
+                </View>
+
                 {/* Notes */}
                 <View style={styles.fieldBlock}>
                     <Text style={styles.fieldLabel}>Notes</Text>
@@ -413,6 +525,31 @@ function makeStyles(t: AppTheme) {
             paddingHorizontal: 12,
             minHeight: 72,
             textAlignVertical: "top",
+        },
+
+        chipRow: {
+            flexDirection: "row",
+            flexWrap: "wrap",
+            gap: spacing.element,
+        },
+        chip: {
+            paddingHorizontal: 12,
+            paddingVertical: 7,
+            borderRadius: radii.pill,
+            borderWidth: 1,
+            borderColor: colors.border,
+            backgroundColor: colors.surface2,
+        },
+        chipActive: {
+            borderColor: colors.primary,
+            backgroundColor: colors.primary,
+        },
+        chipText: {
+            ...typography.captionStrong,
+            color: colors.ink2,
+        },
+        chipTextActive: {
+            color: colors.onPrimary,
         },
 
         steppers: {
